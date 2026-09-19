@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "serve": "python -m http.server 8000"
+  }
+}

@@ -1,0 +1,39 @@
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 临时文件
+*.tmp
+*.bak
+
+# 历史备份：宪法 v1.2 原文（含 U+200B），保留备查，确认新版无误后可手动删除（DECISIONS.md D007）
+AGENTS.md.orig-*
+
+# 注意：assets/（Step 16 音频）必须入库，禁止加入本忽略清单
+
+# 分块编写的中间产物（browser-game-dev 约定：移入 _build/ 保留，不删除）
+_build/
+
+# Capacitor（Step 18）：android/ 与 ios/ 原生源码需要入库，仅忽略缓存和构建产物
+.capacitor/
+android/.gradle/
+android/build/
+android/app/build/
+ios/App/Pods/
+ios/DerivedData/

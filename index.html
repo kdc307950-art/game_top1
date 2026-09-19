@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- AGENTS.md 5.1：禁止滚动与缩放，适配刘海屏 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#12101c" />
+    <link rel="icon" href="data:," />
+    <title>消消乐</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- 只放结构：AGENTS.md 2.3。棋盘绘制全部在 app.js -->
+    <canvas id="board" width="0" height="0"></canvas>
+
+    <!-- 本项目源码为 ES Module，必须经 http(s) 打开，见 ROADMAP.md 第 0.9 条 -->
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
