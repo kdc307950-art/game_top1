@@ -5,7 +5,7 @@
 ## 当前阶段
 
 第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）。
-当前进度：Step 0 项目骨架已完成，下一步为 Step 1 棋盘渲染，详见 `PROGRESS.md`。
+当前进度：Step 1 棋盘渲染已完成（8×8 棋盘可见、按 devicePixelRatio 清晰、页面不可滚动缩放），下一步为 Step 2 触摸交换 + 匹配检测，详见 `PROGRESS.md`。
 
 ## 快速开始
 

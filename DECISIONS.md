@@ -6,6 +6,22 @@
 
 ---
 
+## D013：Step 1 的三处取舍（渲染常量归属、占位颜色、旧 meta 标签）
+
+- 日期：2026-09-19
+- 背景：Step 1（棋盘渲染）遇到三个必须先定的口子：
+  1. ROADMAP Step 1 的范围只允许改 `index.html` / `styles.css` / `app.js`，而宪法 2.3 与 9 节规定 `config.js` 是唯一存放可调数值的文件 —— 调色板与 DPR 上限该放哪；
+  2. Step 1 要求「每格显示一个随机颜色」，但宪法 9 节禁止在 4.1 的 `cell[][]` 之外另立棋盘数据结构，而 `board.js` 属逻辑模块、本 Step 禁止修改；
+  3. Chrome 对 Step 0 写入的 `apple-mobile-web-app-capable` 发出弃用警告，与 Step 0/1 的「控制台无 warning」验收相冲突。
+- 决策：
+  1. 渲染常量（`MAX_DPR`、`BOARD_MARGIN`、`MIN/MAX_BOARD_PX`、圆角与半径比例、`BASE_COLORS` 调色板）暂留在 `app.js`，并在代码中显式注释「只影响观感、不参与游戏规则」。本 Step 不动 `config.js`；日后若集中管理，必须同时更新宪法附录 B 并保持两边一致。
+  2. 用 `Uint8Array` 承载「占位颜色索引」作为绘制输入，代码注释显式声明它**不是**棋盘状态，`board.js` 的 `cell[][]` 由 Step 2/3 提供后删除该数组。
+  3. `index.html` 补 `<meta name="mobile-web-app-capable" content="yes">`（保留 apple 版供 iOS 使用）。
+- 影响：`app.js`、`index.html`。逻辑模块（含 `config.js`）零改动。
+- 替代方案：把调色板写进 `config.js`（否决：超出 Step 1 范围，且立即触发附录 B 同步义务，属跨 Step 混合修改）；调用 `board.js` 的 `createBoard` 生成显示棋盘（否决：逻辑模块本 Step 禁止修改，且等于在 `app.js` 内实现棋盘规则）；删掉 apple 版 meta 只留新版（否决：iOS 独占 Web App 模式仍依赖 apple 版）。
+
+---
+
 ## D012：Step 0 收口时统一首次提交、package.json 与原生目录策略
 
 - 日期：2026-09-19

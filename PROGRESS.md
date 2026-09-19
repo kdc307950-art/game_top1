@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-09-19（Step 1：棋盘渲染）
+
+### 完成项
+
+- `app.js`：实现 8×8 棋盘渲染 —— 视口可用尺寸计算（扣除 `env(safe-area-inset-*)` 与两侧留白）、正方形边长钳制（220–720px）、按 `devicePixelRatio` 设置后备缓冲（上限 3×）、圆角棋盘底 + 每格一次径向渐变糖果。颜色从 `CONFIG.COLOR_COUNT` 随机取。
+- `app.js`：视口守卫（`gesturestart` / `gesturechange` / `touchmove` 阻止默认行为），落实宪法 5.1「禁止滚动与缩放」，不涉及任何游戏交互。
+- `app.js`：新增 `log(level, msg)`（宪法 6 节），启动打印一行 info 便于手动验证。
+- `styles.css`：`#board` 兜底尺寸（`min(100%, 100vh − 安全区)`、`aspect-ratio: 1/1`、`max-width: 720px`），并抑制长按选择与 callout。
+- `index.html`：补 `<meta name="mobile-web-app-capable">`，消除 Chrome 对 apple 版旧标签的弃用警告（见 D013）。
+- **逻辑模块零改动**：`config.js`、`game.js`、`board.js`、`match.js`、`special.js`、`score.js`、`obstacles.js`、`level.js` 与 `tests/` 全部未修改。
+
+### 验证方式
+
+- `node --check app.js` → 退出码 0；`node tests/run-all.js` → 8 个测试文件、0 用例、`PASS`、退出码 0。
+- 绘制预算实测：单帧 `fill` + `arc` 合计 **129 次** < 200（宪法 15 节）；`shadowBlur` 在 `app.js` 中出现 **0** 次（`REFERENCES.md` §3.5 红线第 1 条）。
+- **本会话无视觉工具**（`read_image` 视觉引擎失败、`modlens` 未配置 provider），因此不使用截图做结论，改用 **Chrome headless + DevTools Protocol 在真实页面取证**。4 种视口全部通过：
+  | 视口 | CSS 边长 | 后备缓冲 | 结果 |
+  |---|---|---|---|
+  | 390×844 DPR3（竖屏手机） | 358 | 1074×1074 | 9/9 通过 |
+  | 844×390 DPR3（横屏） | 358 | 1074×1074 | 9/9 通过 |
+  | 320×480 DPR2（小屏） | 288 | 576×576 | 9/9 通过 |
+  | 1440×900 DPR1（桌面） | 720 | 720×720 | 9/9 通过 |
+  逐项断言：棋盘为正方形、完整落在视口内、后备缓冲 = CSS 边长 × DPR、**64 个格子中心 hue 分类命中全部 6 种颜色**（最大分类偏差 < 8°）、无横向滚动、无纵向滚动、`body { overflow: hidden }`、`canvas { touch-action: none }`。
+- 二次导航（不做任何 `getImageData` 回读）确认控制台仅 2 条 info（每次加载 1 条），**无 error / warning / exception**。首轮曾出现的 `apple-mobile-web-app-capable` 弃用警告已由 `mobile-web-app-capable` 修复；`getImageData willReadFrequently` 警告来自验证脚本自身，非 `app.js`。
+- `python -m http.server 8000` 下 `/`、`/index.html`、`/styles.css`、`/app.js`、`/config.js` 均 200，`app.js` / `config.js` 以 `text/javascript` 返回（ESM 可加载）。
+- 横竖屏之间的 64 格颜色布局**保持不变**，符合「颜色只在初始化时随机生成、resize 仅重排」的预期设计。
+
+### 遗留问题
+
+- **视觉观感未经人眼确认**：`app.js` 的配色、圆角、间距是否舒适，需用户在真机 / 桌面浏览器打开 `http://localhost:8000/` 后判断（headless 截图已生成于 `%TEMP%\xxl-step1-dpr*.png`，但本会话无法读取图像内容）。
+- 渲染常量暂留在 `app.js` 而非 `config.js`，取舍见 **D013**。
+- 色盲友好的形状/图案属 Step 5，本轮未做；占位颜色索引是临时数据，Step 2 接入 `board.js` 后必须删除。
+- 未做真机触摸与滚动实测（触摸交互属 Step 2）。
+
+### 下一步
+
+- 进入 Step 2（触摸交换 + 匹配检测）：只允许改 `app.js`、`board.js`、`match.js`、`config.js`、`tests/board.test.js`、`tests/match.test.js`；开工前必须按 `REFERENCES.md` §2.1 Step 2 的核实状态重读 AlexKutepov 源码（上一轮未复核其文件级细节）。
+
+---
+
 ## 2026-09-19（Step 0 收口与 Git 初始化）
 
 ### 完成项
