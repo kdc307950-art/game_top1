@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-09-19（Step 2：触摸交换 + 匹配检测）
+
+### 前置：参考项目源码核实（`REFERENCES.md` §2.1 Step 2 强制要求）
+
+- 用 GitHub API + raw 源码实读两个仓库（`rola2005-klc/game2` 7 个文件、`AlexKutepov/Match3-algorithm-TS-Cocos-creator` 的 `MatchDetector.ts` 等）。上一轮遗留的「AlexKutepov 文件级细节未复核」**已解除**。
+- 两仓库均**无 LICENSE**，按 `REFERENCES.md` §5 只借鉴思路、不复制代码；本项目按 4.1 的 `cell[][]` 与 4.2 的签名重新实现。
+- 发现并记录一处规则冲突：参考实现让条纹方向垂直于匹配方向，与宪法 3.2 相反 → **以宪法为准**（D014 第 1 条）。`REFERENCES.md` 的措辞更新属「Agent 提议、用户批准」，本轮**未擅自改动**该文件。
+
+### 完成项
+
+- `match.js`（212 行）：`findMatches`（逐段扫描，只在段起点产出，天然去重）、`findAllMatchGroups`（并查集合并共享格子的段，L/T 归为一组）、`detectMatchShape`（直线 → line3/4/5；行列交叉 → L/T；非法形状 → null，且要求两条臂都 ≥3 格）。
+- `board.js`（207 行）：`createBoard`（无初始三连 + 保证存在可行交换，重试上限复用 `shuffleMaxTries`）、`swapCells`、`cloneBoard`、`isCellMovable`、`hasPossibleMove`（判定要求匹配涉及被交换的格子）。`applyGravity`/`refillBoard`（Step 3）与 `shuffleBoard`（Step 6）按步骤划分**未实现**，已在文件头登记归属。
+- `app.js`（401 行）：棋盘改为 `board.js` 的真实 `cell[][]`，**删除了 D013 中承诺删除的占位颜色索引**；新增 touchstart/touchend 滑动交换（阈值取自 `CONFIG.ANIMATION_CONFIG.swipeThreshold`）、主轴方向锁定、点击两次交换的后备交互、无效交换回退、匹配高亮环，并为桌面验证提供同一入口的鼠标事件（含触摸后 600ms 兼容鼠标事件抑制）。
+- `tests/board.test.js`（192 行）与 `tests/match.test.js`（154 行）：从 0 用例扩到 **29 个用例 / 509 次断言**。
+- **范围零越界**：`config.js`、`game.js`、`special.js`、`score.js`、`obstacles.js`、`level.js` 与其余测试文件均未改动（`git diff --name-only` 对上述文件输出为空）。
+
+### 验证方式
+
+- `node tests/board.test.js` → 14 用例 / 461 断言 PASS；`node tests/match.test.js` → 15 用例 / 48 断言 PASS；`node tests/run-all.js` → 29 用例 / 509 断言 / 0 加载错误 / PASS，退出码 0。
+- 覆盖到的关键断言：横/纵 3、4、5、6 连的形状与方向；L 型、T 型、十字形的合并与判定；两处独立匹配不被误并；`detectMatchShape` 对 4 格伪 L 返回 null；`createBoard` 连开 20 盘均无初始三连且都有可行交换；`cell.id` 唯一；obstacles 的 species/层数裁剪；`swapCells` 越界抛错；`cloneBoard` 深拷贝；`isCellMovable` 的冰块（可移动）/藤蔓（不可移动）/空格三分支；死局棋盘 `hasPossibleMove === false`（夹具颜色 `(r+2c)%3`，同时断言夹具自身无匹配）；「只差一次交换」棋盘 `=== true` 且交换后正好识别出 3 连；无效交换换回后与快照逐格一致。
+- **真实浏览器验证**（`_build/verify-step2.mjs`，Chrome headless + DevTools Protocol，390×844 DPR3）：10 个阶段 **29 项全部 PASS**。其中关键项：
+  - 由**画布像素**反推 8×8 色类网格（hue 分类，最大偏差 < 8°），据此挑出「会 / 不会」产生三连的相邻对，再用 **CDP 触摸事件**沿真实交互路径滑动 —— 避免了「直接调用内部函数」这种无效验证。
+  - 无效交换：日志为「交换无效，已回退」，且回退后**画布像素哈希与交换前完全一致**（逐字节级等价，而不只是「看起来没变」）。
+  - 有效交换：日志为「交换有效」并报告形状，画布出现匹配高亮环，交换后棋盘确实含三连。
+  - 斜向滑动：横向为主 → 判为 `(4,4)↔(4,5)`；纵向为主 → 判为 `(2,2)↔(3,2)`，验证 5.3 的方向锁定。
+  - 点击两次交换：第一次点击出现选中环且不交换，第二次点相邻格触发交换且坐标正是 `(3,3)↔(3,4)`。
+  - 越界滑动：日志显式提示「滑动超出棋盘边界，忽略」，不产生交换、不改变画布像素。
+  - 鼠标滑动（桌面端路径）同样触发交换；无横纵向滚动、`overflow: hidden`、`touch-action: none`、后备缓冲 = CSS 边长 × DPR。
+  - 全流程结束后控制台**无 error / warning / exception**（唯一噪声是本脚本 `getImageData` 触发的 `willReadFrequently` 提示，非 `app.js` 产生）。
+- 首轮验证脚本自身有两处缺陷，已**自查并修正后重跑**：阶段 7 传入了零位移终点（实际测的是「点击」而非「越界滑动」）；阶段 6 只断言「某个轴」而未断言具体方向。修正后新增 3 项断言。
+
+### 遗留问题
+
+- **`app.js` 401 行，超出宪法 6 节「模块不超过 300 行」的目标**。拆文件会新增 2.2 节目录未登记的文件、属改宪法（需批准），因此本轮保持单文件并在 **D014 第 9 条**登记偏差；建议 Step 5 前获批拆分渲染/输入。
+- **D014 第 6 条的配置键复用**：`createBoard` 读 `ANIMATION_CONFIG.shuffleMaxTries` 作为生成重试上限。若希望改为独立键，需先改宪法附录 B。
+- Step 2 无消除（属 Step 3），因此**有效交换后棋盘会残留已识别的匹配**，此时再滑动可能出现「已存在的匹配被当成新匹配」的现象 —— 这是步骤划分下的预期状态，Step 3 接入消除后消失。本轮浏览器验证通过「每次测试前重新加载」规避了该干扰。
+- **步数系统尚不存在**（属 Step 4），所以验收项「无效交换不扣步数」本步只能以「无计数器」的方式成立，缺少可分步验证的对象。
+- 视觉观感与人眼手感仍待你在真机/桌面确认（本会话无视觉工具，结论均来自程序化断言）。
+- 未做真机（iOS/Android）触摸实测；`touchend` 的合成鼠标事件抑制用的是 600ms 时间窗，真机上若有异常可再调。
+
+### 下一步
+
+- 进入 Step 3（消除、下落、填充、级联）：允许改 `board.js`、`match.js`、`app.js`、`config.js` 与 `tests/board.test.js`、`tests/match.test.js`、`tests/integration.test.js`；届时 `app.js` 的 `attemptSwap` 需要接上 `applyGravity` / `refillBoard`，并删除「有效交换后残留匹配」的临时状态。
+
+---
+
 ## 2026-09-19（Step 1：棋盘渲染）
 
 ### 完成项
