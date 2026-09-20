@@ -1,10 +1,12 @@
 // tests/special.test.js — special.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 7。
 //
 // 范围：Step 7 只做条纹糖果（4 连直线生成、被消除时激活消整行/整列）。
-// 包装糖果（Step 8）、魔力鸟（Step 9）、组合效果（Step 10）不在本文件覆盖范围。
+// Step 8 的包装糖果与 Step 9 的魔力鸟都在本文件覆盖；组合效果（Step 10）不在覆盖范围。
 //
 // 夹具约定（宪法 4.1）：棋盘一律经 createBoard 构造后再覆盖 color。
 // 断言只针对**第 1 层**（levels[0]）：它完全由夹具决定，与补充新格子的随机源无关。
+// Step 9 起：魔力鸟的目标颜色来自「被交换的那颗普通糖果」，故其清除集合由 game.trySwap 交给
+// board.resolveCascades 的 initialClear，本文件只测 getMagicTargets 与匹配层的排除。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, summarize } from './assert.js';
 import { CELL_TYPE, CONFIG, DIRECTION, MATCH_SHAPE } from '../config.js';
@@ -12,6 +14,7 @@ import { cloneBoard, createBoard, resolveCascades } from '../board.js';
 import {
   activateSpecial,
   createSpecial,
+  getMagicTargets,
   getSpecialAffectedCells
 } from '../special.js';
 import { matchShapeToSpecial } from '../match.js';
@@ -63,7 +66,7 @@ test('matchShapeToSpecial：4 连 → 条纹、L/T 型 → 包装（Step 8）；
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE4, DIRECTION.H), CELL_TYPE.STRIPED, '横向 4 连');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE4, DIRECTION.V), CELL_TYPE.STRIPED, '纵向 4 连');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE3, DIRECTION.H), null, '3 连不产生特殊元素');
-  assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE5, DIRECTION.H), null, '5 连直线属 Step 9（魔力鸟）');
+  assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE5, DIRECTION.H), CELL_TYPE.MAGIC, '5 连直线 → 魔力鸟（3.2）');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.L, null), CELL_TYPE.WRAPPED, 'L 型 → 包装糖果（3.2）');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.T, null), CELL_TYPE.WRAPPED, 'T 型 → 包装糖果（3.2）');
 });
@@ -82,7 +85,7 @@ test('getSpecialAffectedCells：横向条纹波及整行，纵向条纹波及整
   assertEqual(getSpecialAffectedCells(board, 0, 0, CELL_TYPE.STRIPED, DIRECTION.H).length, SIZE, '首行');
   assertEqual(getSpecialAffectedCells(board, 7, 7, CELL_TYPE.STRIPED, DIRECTION.V).length, SIZE, '末列');
 
-  // 非条纹类型：普通格「波及」的就是它自己（魔力鸟属 Step 9）
+  // 普通格「波及」的就是它自己；魔力鸟的波及依赖「目标颜色」，本签名只返回它自己（见 D025）
   assertDeepEqual(getSpecialAffectedCells(board, 2, 2, CELL_TYPE.NORMAL, null), [{ r: 2, c: 2 }], '普通格');
 });
 
@@ -120,7 +123,7 @@ test('createSpecial：4 连在靠近中间的落点生成条纹糖果，方向 =
   assertEqual(typeAt(board, 4, 1), CELL_TYPE.NORMAL, '同组其他格子不受影响');
 });
 
-test('createSpecial：纵向 4 连生成纵向条纹；非 4 连形状不生成', () => {
+test('createSpecial：纵向 4 连 → 纵向条纹；3 连不生成；5 连直线 → 正中一格的魔力鸟', () => {
   const board = fixture();
   const vertical = { cells: [1, 2, 3, 4].map((r) => ({ r, c: 6 })), shape: MATCH_SHAPE.LINE4, direction: DIRECTION.V };
   assertDeepEqual(createSpecial(board, vertical), { r: 2, c: 6 }, '落点');
@@ -129,7 +132,10 @@ test('createSpecial：纵向 4 连生成纵向条纹；非 4 连形状不生成'
   const line3 = { cells: [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 0, c: 2 }], shape: MATCH_SHAPE.LINE3, direction: DIRECTION.H };
   assertEqual(createSpecial(board, line3), null, '3 连不生成');
   assertEqual(createSpecial(board, { cells: [], shape: MATCH_SHAPE.LINE4, direction: DIRECTION.H }), null, '空组');
-  assertEqual(createSpecial(board, { cells: [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 0, c: 2 }, { r: 0, c: 3 }], shape: MATCH_SHAPE.LINE5, direction: DIRECTION.H }), null, '5 连直线属 Step 9');
+  const line5 = { cells: [0, 1, 2, 3, 4].map((c) => ({ r: 6, c })), shape: MATCH_SHAPE.LINE5, direction: DIRECTION.H };
+  assertDeepEqual(createSpecial(board, line5), { r: 6, c: 2 }, '5 连直线的魔力鸟落在正中一格');
+  assertEqual(typeAt(board, 6, 2), CELL_TYPE.MAGIC, '类型为魔力鸟');
+  assertEqual(board[6][2].direction, null, '魔力鸟没有方向（4.1）');
 });
 
 test('createSpecial：落点已是特殊元素时不覆盖（让它按 4.3.8 正常激活）', () => {
@@ -363,6 +369,87 @@ test('resolveCascades：复杂交叉簇（形状无法判定）不生成条纹�
   assertEqual(result.levels[0].groups[0].shape, null, '形状无法判定为单个 line/L/T');
   assertEqual(stripedAt(board).length, 0, '不应生成条纹');
   assertEqual(result.levels[0].cleared.length, 9, '该簇 9 格全部消除');
+});
+
+// ---------------------------------------------------------------- Step 9：魔力鸟
+
+test('getMagicTargets：返回全屏同色坐标（不含魔力鸟自身，也不含其它颜色）', () => {
+  const board = fixture((b) => {
+    b[2][3].color = 4;
+    b[5][1].color = 4;
+    b[0][7].color = 4;
+    b[4][4].type = CELL_TYPE.MAGIC; // 魔力鸟自身颜色为 2（≠ 4）：按颜色筛选时不应出现
+    b[4][4].color = 2;
+  });
+
+  const targets = getMagicTargets(board, 4);
+  // 夹具是 0/1 棋盘格：颜色 4 只可能出现在我们显式设置的格子上
+  assertDeepEqual(
+    targets,
+    [{ r: 0, c: 7 }, { r: 2, c: 3 }, { r: 5, c: 1 }],
+    '按行列顺序返回全部颜色为 4 的格子（与格子类型无关，魔力鸟自身由调用方另加）'
+  );
+  assertEqual(getMagicTargets(board, 9).length, 0, '没有该颜色时返回空');
+  assertEqual(getMagicTargets(board, null).length, 0, 'null 颜色返回空（防御性）');
+});
+
+test('getSpecialAffectedCells：魔力鸟只返回它自己（目标颜色由调用方给出，见 D025）', () => {
+  const board = fixture();
+  assertDeepEqual(getSpecialAffectedCells(board, 3, 3, CELL_TYPE.MAGIC, null), [{ r: 3, c: 3 }], '只有自身');
+});
+
+test('resolveCascades：5 连直线消除 4 格、在正中留下 1 颗魔力鸟', () => {
+  const board = fixture((b) => {
+    for (const c of [1, 2, 3, 4, 5]) b[4][c].color = 3;
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, { rng: cycleRng(STEADY_COLORS) });
+  const first = result.levels[0];
+
+  assertEqual(first.groups[0].shape, MATCH_SHAPE.LINE5, '被识别为 line5');
+  assertEqual(first.cleared.length, 4, '5 连只消除 4 格（正中那一格留下来）');
+  assertEqual(first.board.flat().filter((cell) => cell.type === CELL_TYPE.MAGIC).length, 1, '棋盘上留下 1 颗魔力鸟');
+});
+
+test('resolveCascades：initialClear 让第一层先清除给定坐标（魔力鸟交换用）', () => {
+  const board = fixture((b) => {
+    // 全盘 0/1 棋盘格（无匹配），只把 3 颗格子标成颜色 4，模拟「全屏同色」的目标
+    b[1][2].color = 4;
+    b[3][5].color = 4;
+    b[6][0].color = 4;
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, {
+    rng: cycleRng(STEADY_COLORS),
+    initialClear: [{ r: 1, c: 2 }, { r: 3, c: 5 }, { r: 6, c: 0 }, { r: 0, c: 0 }]
+  });
+  const first = result.levels[0];
+
+  assertEqual(first.groups.length, 0, '该层没有任何匹配组');
+  assertEqual(first.cleared.length, 4, '恰好清除 initialClear 指定的 4 格');
+  assertDeepEqual(
+    first.cleared.map((cell) => cell.color).sort(),
+    [0, 4, 4, 4],
+    '被清除的格子就是那些颜色为 4 的格子 + 指定的一格颜色 0'
+  );
+  assertTrue(result.levels.length >= 1, '至少结算 1 层（后续是否级联由补充的新格子决定）');
+  assertFalse(result.capped, '不该触发级联上限');
+});
+
+test('resolveCascades：initialClear 与同层匹配组一起生效（互不覆盖）', () => {
+  const board = fixture((b) => {
+    for (const c of [1, 2, 3]) b[6][c].color = 3; // 第 6 行 3 连
+    b[0][0].color = 4; // 另一个颜色，靠 initialClear 清掉
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, {
+    rng: cycleRng(STEADY_COLORS),
+    initialClear: [{ r: 0, c: 0 }]
+  });
+  const first = result.levels[0];
+
+  assertEqual(first.groups.length, 1, '该层有 1 个匹配组');
+  assertEqual(first.cleared.length, 4, '3 连（3 格）+ initialClear（1 格）');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

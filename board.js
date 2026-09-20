@@ -150,9 +150,13 @@ export function refillBoard(board, colorCount, rng = Math.random) {
  * }
  * 层数上限取棋盘格数：任何真实级联都远达不到（每层至少消除 3 格），因此它是一个
  * 宽松但确定的终止保证；4.2 未定义该上限，故不新增配置键（见 D015）。
+ *
+ * v1.11 追加 `options.initialClear`：第一层先把这些坐标并进消除集合（3.2 的魔力鸟交换用），
+ * 之后照常走「生成特效 → 下落 → 填充 → 级联」。缺省时不改变任何既有行为。
  */
 export function resolveCascades(board, colorCount, options = {}) {
   const rng = typeof options.rng === 'function' ? options.rng : Math.random;
+  const initialKeys = keysOf(options.initialClear);
   const rows = board.length;
   const cols = rows > 0 ? board[0].length : 0;
   const maxLevels = Math.max(1, rows * cols);
@@ -163,9 +167,10 @@ export function resolveCascades(board, colorCount, options = {}) {
 
   for (let level = 1; level <= maxLevels; level += 1) {
     const groups = findAllMatchGroups(board);
-    if (groups.length === 0) break;
+    const forced = level === 1 ? initialKeys : null;
+    if (groups.length === 0 && (!forced || forced.size === 0)) break;
 
-    // 3.2：先按形状在落点生成特殊元素（Step 7 只生成条纹糖果）。
+    // 3.2：先按形状在落点生成特殊元素（条纹 / 包装 / 魔力鸟各由 matchShapeToSpecial 决定）。
     // 这些格子**本层不参与消除**——这正是「4 连留下一颗条纹糖果」的实现方式。
     const spawnKeys = new Set();
     for (const group of groups) {
@@ -174,7 +179,12 @@ export function resolveCascades(board, colorCount, options = {}) {
     }
 
     // 4.3.8：特殊元素在消除时优先激活其效果（可链式），再进入下落与级联
-    const removed = clearCells(board, collectClearKeys(board, groups, spawnKeys));
+    const keys = collectClearKeys(board, groups, spawnKeys);
+    if (forced) {
+      // 外部指定要清除的格子（魔力鸟交换）；本层新生成的特效同样不被它消掉
+      for (const key of forced) if (!spawnKeys.has(key)) keys.add(key);
+    }
+    const removed = clearCells(board, keys);
     const moves = applyGravity(board);
     const created = refillBoard(board, colorCount, rng);
 
@@ -184,6 +194,17 @@ export function resolveCascades(board, colorCount, options = {}) {
   }
 
   return { cascades: levels.length, levels, cleared, spawned, capped: levels.length >= maxLevels };
+}
+
+/** 把 Pos[] 转成 `"r,c"` 键集；忽略非法项（越界或非整数坐标）。 */
+function keysOf(positions) {
+  const keys = new Set();
+  if (!Array.isArray(positions)) return keys;
+  for (const pos of positions) {
+    if (!pos || !Number.isInteger(pos.r) || !Number.isInteger(pos.c)) continue;
+    keys.add(posKey(pos.r, pos.c));
+  }
+  return keys;
 }
 
 /**

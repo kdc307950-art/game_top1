@@ -4,8 +4,12 @@
 //
 // 【Step 7】条纹糖果：4 连直线生成，激活消除一整行或一整列（方向 = 匹配方向，D014 第 1 条）。
 // 【Step 8】包装糖果：L/T 型 5 连生成，激活消除周围 3×3 共 9 格（3.2 / 附录 A），贴边时按棋盘裁剪。
-// 【Step 9】魔力鸟（5 连直线 → 全屏同色）；【Step 10】resolveSpecialCombo（相邻特效交换的组合效果）。
-//   这两步明确禁止在本步实现，故不留空壳函数 —— 空壳会被误读成「已实现」。
+// 【Step 9】魔力鸟：5 连直线生成，**与任意普通色块交换时**清除全屏该颜色（3.2 / D025）。
+//   它的目标颜色来自被交换的那颗普通糖果，故不在 getSpecialAffectedCells 里表达 ——
+//   那条 4.2 签名没有「目标颜色」参数；改用专门的 getMagicTargets(board, color)，
+//   由 game.trySwap 计算 initialClear 交给 board.resolveCascades（v1.11 登记的两条纯追加）。
+//   被其它特效波及时（例如被条纹扫到）不额外触发全屏清除，只按普通格子被消除（保守口径，见 D025）。
+// 【Step 10】resolveSpecialCombo（相邻特效交换的组合效果）仍留待下一步，故不建空壳函数。
 
 import { CELL_TYPE, DIRECTION } from './config.js';
 import { matchShapeToSpecial } from './match.js';
@@ -18,7 +22,25 @@ export function getSpecialAffectedCells(board, r, c, type, direction) {
   if (!isInside(board, r, c)) return []; // 越界中心没有任何可波及的格子（防御性）
   if (type === CELL_TYPE.STRIPED) return stripedCells(board, r, c, direction);
   if (type === CELL_TYPE.WRAPPED) return wrappedCells(board, r, c);
-  return [{ r, c }]; // 普通格「波及」的就是自己；魔力鸟属 Step 9
+  // 魔力鸟的波及范围取决于「被交换的那颗普通糖果的颜色」，本签名表达不了 → 只有它自己（见 D025）
+  return [{ r, c }];
+}
+
+/**
+ * 4.2（v1.11 追加）：getMagicTargets(board, color) —— 全屏与该颜色相同的格子坐标。
+ * 供 3.2 的魔力鸟交换使用：调用方把「这些格子 + 魔力鸟自身」一起交给 board.resolveCascades。
+ * **只按颜色筛选，与格子类型无关**（冰块下的动物也算目标，3.4 允许消除其上动物）——
+ * 因此魔力鸟自身可能因为颜色巧合而落进结果，调用方要去重（Set）；它的颜色与目标色不同时由调用方另外补上。
+ */
+export function getMagicTargets(board, color) {
+  const targets = [];
+  if (!Array.isArray(board) || color === null || color === undefined) return targets;
+  board.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (cell && cell.color === color) targets.push({ r, c });
+    });
+  });
+  return targets;
 }
 
 /**
@@ -32,7 +54,7 @@ export function getSpecialAffectedCells(board, r, c, type, direction) {
  */
 export function createSpecial(board, matchGroup) {
   if (!matchGroup || !Array.isArray(matchGroup.cells) || matchGroup.cells.length === 0) return null;
-  // 形状 → 类型由 match.js 的 4.2 契约函数决定（Step 9 会在那里补魔力鸟）
+  // 形状 → 类型由 match.js 的 4.2 契约函数决定（4 连→条纹 / L,T→包装 / 5 连直线→魔力鸟）
   const type = matchShapeToSpecial(matchGroup.shape, matchGroup.direction);
   if (type === null) return null;
 

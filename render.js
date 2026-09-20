@@ -185,13 +185,14 @@ function drawCandies(ctx, cache, scene, field) {
   }
 }
 
-/** 按格子的 color/type/direction 选精灵：条纹与包装糖果各用自己的精灵（Step 7/8；魔力鸟在 Step 9）。 */
+/** 按格子的 color/type/direction 选精灵：三种特殊元素各用自己的精灵（Step 7/8/9）。 */
 function spriteFor(cache, item) {
   const set = cache.sprites[item.color % cache.sprites.length];
   if (item.type === CELL_TYPE.STRIPED) {
     return item.direction === DIRECTION.V ? set.stripedV : set.stripedH;
   }
   if (item.type === CELL_TYPE.WRAPPED) return set.wrapped;
+  if (item.type === CELL_TYPE.MAGIC) return set.magic;
   return set.normal;
 }
 

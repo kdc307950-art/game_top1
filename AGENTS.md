@@ -1,9 +1,19 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.10
+> 版本：v1.11
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.10 → v1.11 关键变更）
+
+本次修订经**用户明确批准**，为 Step 9（魔力鸟）补齐规则口径与两条纯追加的契约。不改变任何既有玩法行为与数值。
+
+1. **3.2 补全魔力鸟口径**：与任意普通色块对调时清除全屏该颜色（含被交换格与魔力鸟自身），**该交换消耗 1 步**，且**不能与空格或纯障碍交换**；魔力鸟保留生成时的颜色用于渲染，但**不参与普通同色匹配**；被其它特效波及时不额外触发全屏清除（保守口径，见 `DECISIONS.md` D025）。
+2. **4.3 新增第 14 条**：魔力鸟不参与同色匹配的匹配层要求（条纹与包装糖果仍参与，并在被消除时按 4.3.8 优先激活）。
+3. **4.2 三条纯追加**：`special.getMagicTargets(board, color)`（返回全屏该颜色的坐标）；`board.resolveCascades` 新增可选 `options.initialClear`（第一层先清除给定坐标，再进入正常级联）；`game.resolveBoard` 新增可选 `options.initialClear` 透传。三者的默认行为与既有调用完全一致。
 
 ---
 
@@ -308,7 +318,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 
 **包装糖果（爆炸特效）**：五个同色糖果排成 T 型或 L 型（5 连非直线）生成，消除周围 3×3 共 9 格范围。
 
-**魔力鸟**：五个同色糖果连成一条直线（5 连直线）生成。魔力鸟与任意普通色块对调，可消除全屏该颜色所有色块。
+**魔力鸟**：五个同色糖果连成一条直线（5 连直线）生成。魔力鸟与任意普通色块对调，可消除全屏该颜色所有色块（含被交换的那一格与魔力鸟自身），该交换消耗 1 步；**不能与空格或纯障碍交换**。魔力鸟保留生成时的颜色用于渲染，但**不参与普通同色匹配**（4.3.14），只能通过交换触发；被其它特效波及时不额外触发全屏清除（保守口径，理由见 `DECISIONS.md` D025）。
 
 生成优先级（当一次消除可同时满足多种形状时）：魔力鸟 > 包装糖果 > 条纹糖果。
 
@@ -435,7 +445,7 @@ board = cell[][]  // board[row][col]
 
 - `createGame(levelConfig: LevelConfig, options?: { rng?: () => number }): GameState`
 - `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`
-- `resolveBoard(state: GameState): ResolveResult`（消除 → 下落 → 填充 → 级联，返回轨迹供动画使用）
+- `resolveBoard(state: GameState, options?: { initialClear?: Pos[] }): ResolveResult`（消除 → 下落 → 填充 → 级联，返回轨迹供动画使用；`options.initialClear` 透传给 `board.resolveCascades`，供 3.2 的魔力鸟交换使用）
 - `getState(state: GameState): GameSnapshot`（返回**深拷贝并冻结**的不可变快照，供 UI 读取）
 
 结构定义（v1.4 补齐；此前只登记了函数名）：
@@ -488,7 +498,7 @@ GameSnapshot = {
 - `applyGravity(board: Board): MoveRecord[]`（原地压缩并返回下落轨迹，供动画使用）
   - `MoveRecord = { id: number, from: Pos, to: Pos, color: number }`（只记录真正发生位移的格子；`id` 对应 4.1 的 `cell.id`，供动画追踪）
 - `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子）
-- `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
+- `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number, initialClear?: Pos[] }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`options.initialClear` 让第一层先清除给定坐标（3.2 的魔力鸟交换用），之后照常级联；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
 - `cloneBoard(board: Board): Board`（深拷贝，供测试与回退使用）
 
 **shuffle.js**（v1.6 从 board.js 拆出，逻辑与签名不变）
@@ -512,6 +522,7 @@ GameSnapshot = {
 - `activateSpecial(board: Board, r: number, c: number): Pos[]`
 - `resolveSpecialCombo(board: Board, a: Pos, b: Pos): Pos[]`
 - `getSpecialAffectedCells(board: Board, r: number, c: number, type: string, direction: string | null): Pos[]`
+- `getMagicTargets(board: Board, color: number): Pos[]`（3.2：返回全屏与该颜色相同的格子坐标，供魔力鸟交换使用；不含魔力鸟自身，自身由调用方加入清除集合）
 
 **score.js**
 
@@ -550,6 +561,7 @@ GameSnapshot = {
 11. 藤蔓中的动物不能被交换，但可以被相邻消除波及。
 12. 所有核心逻辑必须是纯函数或可测试函数。
 13. 一次消除同时满足多种特殊形状时，按 3.2 优先级生成一种特殊元素，不重复生成。
+14. 魔力鸟不参与普通同色匹配（3.2）：匹配扫描必须把它当作不可匹配（保留颜色仅供渲染）；条纹与包装糖果仍参与同色匹配，并在被消除时按 4.3.8 优先激活。
 
 ### 4.4 关卡数据结构契约
 
@@ -816,6 +828,7 @@ node tests/integration.test.js
 | v1.8 | 2026-09-20 | Agent  | 经用户批准，在 Step 8 前新增 Bug Audit Gate、L0-L6 证据与“核心可玩 → 移动可玩 → 功能冻结 → 包装候选 → 平台验证 → 发布候选”门槛；明确 Capacitor 仅为 Step 18 的受控依赖例外，并拆分 18.1-18.7 的原生交付、签名、合规、回归与回滚要求 | 0.1-0.3、2.1、8.1-8.4、10-12、16-17、Step 18 相关交叉引用 |
 | v1.9 | 2026-09-20 | Agent  | 收尾扩展前 Bug Audit：修正第 9 节与第 17 节的旧门禁引用；明确结束日志按步数用尽/死局重排失败区分；明确极窄视口棋盘尺寸服从可用空间，避免最小尺寸造成溢出 | 8.4、9、17、`app.js`、`render.js` |
 | v1.10 | 2026-09-20 | Agent（用户批准） | 登记「路线图先行」的既成事实（ROADMAP v1.10 已先行引入 0.1-0.8），使两文件头部版本一致并关闭 P3-1；`candy.js` 职责补全为「条纹 / 包装 / 魔力鸟特效」（Step 8 起它还要画包装，Step 9 起为魔力鸟）；一致性脚本恢复「头部版本必须相等」的严格判定 | 2.2、2.3、11、`_build/consistency_check.py` |
+| v1.11 | 2026-09-20 | Agent（用户批准） | Step 9 魔力鸟的规则口径与契约：3.2 补「清全屏该色（含被交换格与自身）、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被其它特效波及时不额外触发」；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）；ROADMAP 头部同步升到 v1.11 | 3.2、4.2、4.3、11、`ROADMAP.md` |
 
 ---
 

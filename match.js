@@ -8,8 +8,9 @@
 //     不需要额外 Set，扫描仍然是 O(rows × cols)。
 //
 // 4.2 的 `matchShapeToSpecial` 把形状映射到特殊元素类型（条纹/包装/魔力鸟）。
-// 【Step 7】4 连直线 → 条纹；【Step 8】L/T 型 → 包装糖果；「魔力鸟（5 连直线）」属 Step 9，
-// 本步明确禁止实现，故 line5 仍返回 null。
+// 【Step 7】4 连直线 → 条纹；【Step 8】L/T 型 → 包装糖果；【Step 9】5 连直线 → 魔力鸟。
+// 4.3.14（v1.11）：魔力鸟保留颜色用于渲染，但**不参与同色匹配** —— 匹配扫描必须把它当作不可匹配，
+// 它只能通过与普通色块交换来触发（3.2）。条纹与包装糖果仍然参与同色匹配。
 
 import { CELL_TYPE, DIRECTION, MATCH_SHAPE } from './config.js';
 
@@ -118,13 +119,13 @@ export function findAllMatchGroups(board) {
  *   「横向四连生成横向条纹（消除整行），纵向四连生成纵向条纹（消除整列）」，
  *   即**条纹方向 = 匹配方向**（与参考实现相反，见 D014 第 1 条），所以 `direction` 原样沿用。
  *   L/T 型 → 包装糖果（Step 8，3.2「五个同色糖果排成 T 型或 L 型」）。
- *   line5（魔力鸟）属 Step 9，本步禁止实现，返回 null。
- * 一次消除同时满足多种形状时按 3.2 的优先级只生成一种，优先级在 game.multiplierForLevel 与
- * board.resolveCascades 的逐组处理中体现（同一层多组各生成各的，互不覆盖）。
+ *   5 连直线 → 魔力鸟（Step 9，3.2）。
+ * 一次消除同时满足多种形状时按 3.2 的优先级只生成一种；同一层多组各自生成，互不覆盖。
  */
 export function matchShapeToSpecial(shape, direction) {
   if (shape === MATCH_SHAPE.LINE4) return CELL_TYPE.STRIPED;
   if (shape === MATCH_SHAPE.L || shape === MATCH_SHAPE.T) return CELL_TYPE.WRAPPED;
+  if (shape === MATCH_SHAPE.LINE5) return CELL_TYPE.MAGIC;
   return null;
 }
 
@@ -193,12 +194,13 @@ function directionOf(cells) {
   return null;
 }
 
-/** 读取可匹配颜色；空格、纯障碍、越界一律视为不可匹配（返回 null）。 */
+/** 读取可匹配颜色；空格、纯障碍、越界与**魔力鸟**一律视为不可匹配（返回 null，见 4.3.14）。 */
 function colorAt(board, r, c) {
   const row = board[r];
   if (!row) return null;
   const cell = row[c];
   if (!cell) return null;
+  if (cell.type === CELL_TYPE.MAGIC) return null; // 3.2 / 4.3.14：魔力鸟只通过交换触发
   return cell.color === undefined ? null : cell.color;
 }
 

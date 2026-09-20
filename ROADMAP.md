@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.10
+> 版本：v1.11
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -944,7 +944,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [x] Step 7：条纹糖果（4 连生成 + 激活消整行/列，含 `candy.js` 外观拆分，见 DECISIONS D020）
 - [x] Gate 0.1：Step 7 完成后的 Bug Audit —— **2026-09-20 通过**（L1 自动回归 89 用例/803 断言/exit 0；L2 浏览器冒烟 49 项；L3 窄屏触摸模拟；P0/P1=0，P3 已登记，详见 `PROGRESS.md` 同日审计记录与 DECISIONS D022）
 - [x] Step 8：包装糖果（L/T 型 5 连 → 消周围 3×3，2.0 倍；落点=交叉点、边界裁剪、24 张精灵，见 DECISIONS D023）
-- [ ] Step 9：魔力鸟
+- [x] Step 9：魔力鸟（5 连直线 → magic；与普通色块交换清全屏同色、消耗 1 步、不能与空格交换；4.3.14 匹配层排除；契约见 D025）
 - [ ] Step 10：特殊元素组合
 - [ ] Step 11：冰块与雪块
 - [ ] Step 12：关卡目标与三星评分

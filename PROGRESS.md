@@ -5,6 +5,60 @@
 
 ---
 
+## 2026-09-20（Step 9：魔力鸟 —— 完成并验证）
+
+### 完成项
+
+- **宪法 v1.11（用户批准）**：3.2 补魔力鸟口径（清全屏该色含自身、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被波及时不额外触发）；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 透传）。ROADMAP 头部同步 v1.11。
+- **`match.js`**：`line5` → `magic`；`colorAt` 把魔力鸟视为不可匹配（4.3.14）。条纹/包装糖果不受影响。
+- **`special.js`**（79 行纯代码）：`getMagicTargets(board, color)`（全屏同色坐标，只按颜色筛选）；`getSpecialAffectedCells` 对魔力鸟只返回自身（保守口径，见 D025）。
+- **`board.js`**：`resolveCascades` 新增 `options.initialClear`（第一层并入消除集合，缺省行为不变）；新增 `keysOf` 校验非法坐标。
+- **`game.js`**：`resolveBoard(state, { initialClear })` 透传；`trySwap` 新增 `magicClearTargets`（魔力鸟 + 普通色块 → 全屏该色 + 自身；与空格/特效则返回 null 走原路径）；交换不形成匹配时也判为有效并照常扣 1 步。
+- **`candy.js` / `render.js`**：`paintMagicCandy`（暗色球体 + 六段彩虹环 + 白色中心）；精灵图集 4 种/色 → **5 种/色（30 张）**；`spriteFor` 增加魔力鸟分支。
+- **未改动**：`config.js`、`shuffle.js`、`hud.js`、`timeline.js`、`input.js`、`app.js`（日志「触发特效 N」已能覆盖魔力鸟）。
+
+### 验证方式（可复现）
+
+- `node tests/run-all.js` → **112 用例 / 883 断言 / 0 失败 / 0 加载错误 / exit 0**（Step 8 时 98/840）。新增：`tests/special.test.js` 6 例（getMagicTargets、魔力鸟波及、5 连生成、initialClear × 2）、`tests/match.test.js` 4 例（匹配层排除）、`tests/game.test.js` 5 例（交换成功/空格拒绝/特效+特效不触发/5 连 2.5 倍/initialClear 透传）。
+- **浏览器 `_build/verify-step9.mjs` → 30/30 PASS**（`_build/verify-step9.log` 留证）：图集 30 张；魔力鸟精灵中心近白 241/241 px、环上命中 6 种参考色相、环内亮度 35.6（暗体 + 彩环）；真实 renderer 里只有魔力鸟格同时具备白心（22 px）与多色相环（6 种），普通/条纹/包装格都没有；真实 `trySwap`：5 连生成魔力鸟（正中一格、本层只消 4 格、2.5 倍 40→100）、魔力鸟 + 普通色块交换有效（清 5 格 = 4 颗同色 + 自身、扣 1 步、2.5 倍 50→125、结算后盘上无魔力鸟）、与空格交换无效不扣步、匹配层排除前后 1 组 → 0 组；20 次真实滑动无异常。
+- **既有套件回归**：`verify-step5` 32/32、`verify-step6` 30/30、`verify-step7` 44/44、`verify-step8` 34/34、Gate 0.1 的 `audit-gate-step8` 49/49 —— 全部通过（图集数量断言按 5 种/色更新）。
+
+### 缺陷与脚本问题（产品缺陷 0）
+
+- **`verify-step6` 与 `audit-gate-step8` 的整局循环一度失败 6 项**：根因是这两个脚本的棋盘模型仍把魔力鸟当作可匹配格（它们从像素推断色相，不知道 4.3.14 的排除规则），于是把游戏「正确拒绝」的交换当成应当有效，整局循环因此提前耗尽。
+- 修法：给这两个脚本补上「魔力鸟识别（白心 + 多色相环）+ 匹配排除（模拟交换时把魔力鸟置为不可匹配）+ 优先走魔力鸟交换」，修完后分别 30/30 与 49/49 全绿。**产品代码一行未改** —— 与 D022 的原则一致：脚本模型落后时改脚本，不为了让脚本变绿而改产品。
+
+### 功能边界（本步结束时的如实状态）
+
+- **已实现且已验证（L1+L2+L3）**：条纹（Step 7）、包装（Step 8）、魔力鸟（Step 9）三种特殊元素的生成 / 触发 / 链式连锁 / 计分倍数 / 外观 / 动画，加上核心可玩版全部功能。
+- **未实现（不得预设为可用）**：特殊元素组合效果（Step 10，`resolveSpecialCombo` 仍留空）、障碍物与关卡目标（Step 11-12）、音效/震动/粒子（Step 16-17）、Capacitor 打包（Step 18）。
+- **未验证**：真机 iOS/Android、真实刘海屏安全区、其它浏览器、长会话内存、离线、平台构建与签名。
+- **仅代码审查**：`state.gameOver = stuck`（死局且重排失败）的接线；「被其它特效波及时不触发全屏清除」这条保守口径只有单测与脚本级证据，没有真机观感确认。
+
+### 下一步
+
+- 按 ROADMAP 进入 **Step 10（特殊元素组合）**：实现 3.3 的六种组合（条纹+条纹 / 条纹+包装 / 条纹+魔力鸟 / 包装+包装 / 包装+魔力鸟 / 魔力鸟+魔力鸟），4.3.9 要求「两个特殊元素相邻交换时触发组合，不进行普通匹配检测」。开工前仍需先过 0.1 门禁并归档证据。
+
+---
+
+## 2026-09-20（Step 9 执行卡：魔力鸟）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。三项口径已获用户批准（见 D025）。
+
+1. **开始前置条件**：Step 8 已验收（`step8-done`）、Gate 0.1 第二轮已通过（`gate-0.1-step8-pass`）；起点 = tag **`step9-start`（08b568f）**，工作区干净。相关章节：AGENTS 3.2（魔力鸟：5 连直线生成；与任意普通色块对调消除全屏该色）、3.5（魔力鸟倍数 2.5）、4.2、4.3.5/4.3.8/4.3.9/4.3.13、5.4（视觉区分）；ROADMAP Step 9；`REFERENCES.md` §2.2 Step 9。前置决策：D020（Step 7）、D023（Step 8）、D024（本步契约待确认项）。
+2. **允许修改范围**：`match.js`、`special.js`、`board.js`、`game.js`、`app.js`、`candy.js`、`render.js`、`tests/special.test.js`、`tests/match.test.js`、`tests/board.test.js`、`tests/game.test.js`；**宪法 v1.11（已获批准）**：3.2 补魔力鸟的口径、4.2 登记三条追加、4.3 增补「魔力鸟不参与同色匹配」、第 11 节记录。**禁止**：`config.js`（不新增配置键）、`shuffle.js`、`hud.js`、`input.js`、`styles.css`、`index.html`，以及 Step 10 的组合效果（`resolveSpecialCombo` 仍留空）。
+3. **执行顺序**：执行卡与 DoR → 宪法 v1.11 登记 → 契约与夹具 → 实现（`match.js` 映射与排除 → `special.js` 生成/目标集合 → `board.js` initialClear → `game.js` 交换编排与计分 → `candy.js`/`render.js` 外观）→ 失败用例 → 修复 → 自动回归 → 浏览器验证 → 文档与提交。
+4. **必须产物**：源码 diff；`node tests/run-all.js` 结果；`_build/verify-step9.mjs` 结果（含像素取证）；`DECISIONS.md` D025；`[step9]` 提交 + `step9-done` tag。
+5. **自动化测试**：`node tests/run-all.js`（用例/断言数增长且 0 失败、exit 0）；`node tests/special.test.js`、`tests/game.test.js`、`tests/match.test.js` 单跑。
+6. **手动/浏览器测试**：390×844@DPR3；用 CDP 驱动真实页面，断言 5 连直线生成 `magic`、魔力鸟与普通糖果交换后全屏同色被清除且消耗 1 步、与空格交换被拒绝、像素上魔力鸟有彩虹环与白色中心。
+7. **证据等级**：L1 + L2 + L3；真机、Android/iOS、发布**未验证**。
+8. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step9-start` = `08b568f`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（5 连直线 → magic；与普通色块交换消全屏同色）与非目标（不实现组合效果）明确；前置 Step 8 与 Gate 0.1 已验收；允许修改文件已列出；**契约已确认** —— 用户批准三条追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）与两条行为口径（保留颜色但不参与同色匹配；交换消耗 1 步且拒绝空格）；夹具与验收路径可执行；风险、依赖与回滚点已登记 → **通过**。
+
+---
+
 ## 2026-09-20（Gate 0.1 第二轮：Step 8 → Step 9 门禁证据 + 宪法 v1.10 + 项数更正）
 
 ### 一、审计对象与环境

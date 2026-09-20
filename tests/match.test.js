@@ -4,7 +4,7 @@
 // 不得直接构造裸数组传入逻辑函数。
 
 import { test, assertEqual, assertTrue, assertDeepEqual, summarize } from './assert.js';
-import { CONFIG, DIRECTION, MATCH_SHAPE } from '../config.js';
+import { CELL_TYPE, CONFIG, DIRECTION, MATCH_SHAPE } from '../config.js';
 import { createBoard } from '../board.js';
 import { findMatches, findAllMatchGroups, detectMatchShape } from '../match.js';
 
@@ -149,6 +149,52 @@ test('detectMatchShape 对非法形状返回 null', () => {
   assertEqual(detectMatchShape([at(0, 0), at(0, 1)]), null, '不足 3 格');
   assertEqual(detectMatchShape([at(0, 0), at(0, 1), at(0, 2), at(1, 0)]), null, '竖臂只有 2 格，不算包装糖果形状');
   assertEqual(detectMatchShape([at(0, 0), at(0, 1), at(5, 5)]), null, '有游离格，不构成单组形状');
+});
+
+// ---------------------------------------------------------------- Step 9：魔力鸟不参与同色匹配（4.3.14）
+
+test('魔力鸟不参与同色匹配：它会把色段切断（3.2 / 4.3.14）', () => {
+  const board = fixture((b) => {
+    paint(b, [[2, 1], [2, 2], [2, 3]]); // 先造一条 3 连
+    b[2][2].type = CELL_TYPE.MAGIC; // 中间那格变成魔力鸟（颜色仍是 2）
+  });
+
+  assertEqual(findMatches(board).length, 0, '被魔力鸟切断后不再是 3 连');
+  assertEqual(findAllMatchGroups(board).length, 0, '合并后同样没有匹配组');
+});
+
+test('魔力鸟不参与同色匹配：两侧各 2 格也不算匹配', () => {
+  const board = fixture((b) => {
+    paint(b, [[5, 0], [5, 1], [5, 3], [5, 4]]);
+    b[5][2].type = CELL_TYPE.MAGIC;
+    b[5][2].color = 2;
+  });
+
+  assertEqual(findMatches(board).length, 0, '1+1 与 1+1 都不足 3 连');
+});
+
+test('条纹与包装糖果仍然参与同色匹配（只有魔力鸟被排除）', () => {
+  const striped = fixture((b) => {
+    paint(b, [[3, 1], [3, 2], [3, 3]]);
+    b[3][2].type = CELL_TYPE.STRIPED;
+  });
+  assertEqual(findMatches(striped).length, 1, '条纹所在色段仍算 3 连（4.3.8 靠它触发）');
+
+  const wrapped = fixture((b) => {
+    paint(b, [[4, 1], [4, 2], [4, 3]]);
+    b[4][2].type = CELL_TYPE.WRAPPED;
+  });
+  assertEqual(findMatches(wrapped).length, 1, '包装糖果所在色段仍算 3 连');
+});
+
+test('魔力鸟自己的颜色不会让它在别处凑出匹配', () => {
+  const board = fixture((b) => {
+    b[6][6].type = CELL_TYPE.MAGIC;
+    b[6][6].color = 2;
+    paint(b, [[6, 3], [6, 4]]); // 与魔力鸟同性色的两格，被 (6,5) 的填充色隔开
+  });
+
+  assertEqual(findMatches(board).length, 0, '含魔力鸟的任何组合都不构成匹配');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

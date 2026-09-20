@@ -20,6 +20,8 @@ import {
 // Step 6.1：可移动性/死局检测/重排来自 shuffle.js（与 board.js 的棋盘机制分离）
 import { hasPossibleMove, isCellMovable, shuffleBoard } from './shuffle.js';
 import { findAllMatchGroups, matchShapeToSpecial } from './match.js';
+// Step 9：魔力鸟的全屏同色目标集合（v1.11 登记的纯追加函数）
+import { getMagicTargets } from './special.js';
 import {
   calcBaseScore,
   calcCascadeBonus,
@@ -69,13 +71,15 @@ export function trySwap(state, a, b) {
   const snapshot = cloneBoard(state.board); // 4.2：cloneBoard 供回退使用
   swapCells(state.board, a, b);
 
-  if (findAllMatchGroups(state.board).length === 0) {
+  // 3.2 / D025：魔力鸟 + 普通色块的对调本身就是一次有效交换（不需要形成匹配）
+  const magicClear = magicClearTargets(state.board, a, b);
+  if (!magicClear && findAllMatchGroups(state.board).length === 0) {
     state.board = snapshot; // 4.3.2：回退到交换前，且不消耗步数
     return rejected;
   }
 
   const afterSwap = cloneBoard(state.board);
-  const resolve = resolveBoard(state);
+  const resolve = magicClear ? resolveBoard(state, { initialClear: magicClear }) : resolveBoard(state);
   consumeStep(state.level); // 4.3.3：只有有效交换才扣步数
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
@@ -101,8 +105,11 @@ export function trySwap(state, a, b) {
  *   + scoreDelta（本次结算总分）+ levelScores（逐层明细，供 UI 与测试核对公式）
  *   + deadlock（3.8：消除与填充完成后检测死局并尝试重排；无死局时为 null）
  */
-export function resolveBoard(state) {
-  const result = resolveCascades(state.board, state.level.colorCount, { rng: state.rng });
+export function resolveBoard(state, options = {}) {
+  const result = resolveCascades(state.board, state.level.colorCount, {
+    rng: state.rng,
+    initialClear: options.initialClear // 3.2 的魔力鸟交换用（v1.11 登记）
+  });
 
   let scoreDelta = 0;
   const levelScores = [];
@@ -163,8 +170,26 @@ function multiplierForLevel(level) {
   return 1;
 }
 
-/** 3.2 生成优先级：魔力鸟 > 包装糖果 > 条纹糖果（Step 8/9 会让后两者真正出现）。 */
+/** 3.2 优先级：魔力鸟 > 包装糖果 > 条纹糖果（Step 8/9 会让后两者真正出现）。 */
 const PRIORITY = [CELL_TYPE.MAGIC, CELL_TYPE.WRAPPED, CELL_TYPE.STRIPED];
+
+/**
+ * 3.2 / D025：判断这次交换是不是「魔力鸟 + 普通色块」。
+ * 调用点在 `swapCells` **之后**，因此魔力鸟现在位于 a/b 中的一侧、被换过来的普通糖果在另一侧。
+ * 返回要清除的坐标集合（全屏该颜色 + 魔力鸟自身）；不是这种交换时返回 null，交回普通匹配路径。
+ * 与空格 / 纯障碍 / 其它特殊元素的交换都不触发（3.2 要求「任意普通色块」；特效+特效属 Step 10 的组合）。
+ */
+function magicClearTargets(board, a, b) {
+  const magicAt = board[a.r]?.[a.c]?.type === CELL_TYPE.MAGIC ? a : board[b.r]?.[b.c]?.type === CELL_TYPE.MAGIC ? b : null;
+  if (!magicAt) return null;
+
+  const other = magicAt === a ? b : a;
+  const target = board[other.r]?.[other.c];
+  if (!target || target.color === null || target.color === undefined) return null;
+  if (target.type !== CELL_TYPE.NORMAL) return null;
+
+  return [...getMagicTargets(board, target.color), { r: magicAt.r, c: magicAt.c }];
+}
 
 /**
  * 4.2：getState(state) —— 返回不可变快照，供 UI 读取（深拷贝 + 冻结，杜绝外部改写内部状态）。

@@ -289,4 +289,99 @@ test('getState：返回不可变快照，与内部状态互相隔离', () => {
   assertEqual(getState(game).remainingSteps, 5, '新快照反映最新状态');
 });
 
+// ---------------------------------------------------------------- Step 9：魔力鸟（3.2 / D025）
+
+/** Step 9 夹具：0/1 棋盘格 + 一颗魔力鸟（颜色 0）与若干颜色 4 的普通糖果。 */
+function magicBoard(board) {
+  paintFixture(board, (b) => {
+    b[4][4].type = CELL_TYPE.MAGIC; // 魔力鸟（自身颜色与目标色不同，便于验证「目标色来自被交换的那颗」）
+    b[4][4].color = 0;
+    b[1][1].color = 4;
+    b[3][6].color = 4;
+    b[6][2].color = 4;
+    b[4][5].color = 4; // 与魔力鸟相邻的那颗（本次交换的目标）
+  });
+}
+
+test('trySwap：魔力鸟 + 普通色块 → 清除全屏该色（含魔力鸟自身）且消耗 1 步（3.2）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  magicBoard(game.board);
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertTrue(result.valid, '魔力鸟与普通色块的交换本身就是有效的');
+  assertEqual(result.stepsLeft, 29, '消耗 1 步（4.3.3）');
+  assertEqual(result.resolve.levels[0].cleared.length, 5, '4 颗颜色 4 + 魔力鸟自身 = 5 格');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.magic, '魔力鸟倍数 2.5（3.5）');
+  assertEqual(result.resolve.levelScores[0].base, 5 * SCORE.basePerCell, '基础分 50');
+  assertEqual(result.resolve.levelScores[0].gained, 125, '50 × 2.5');
+  assertEqual(
+    result.resolve.levels[0].board.flat().filter((cell) => cell.type === CELL_TYPE.MAGIC).length,
+    0,
+    '魔力鸟自身也被消耗掉'
+  );
+});
+
+test('trySwap：魔力鸟 + 空格 → 无效且不消耗步数（验收项：不能与空格交换）', () => {
+  const game = createGame({ steps: 30 });
+  paintFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.MAGIC;
+    b[4][4].color = 0;
+    b[4][5].color = null; // 空格
+  });
+  const idsBefore = game.board.map((row) => row.map((cell) => cell.id));
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertEqual(result.valid, false, '与空格交换无效');
+  assertEqual(result.stepsLeft, 30, '不消耗步数');
+  assertDeepEqual(game.board.map((row) => row.map((cell) => cell.id)), idsBefore, '棋盘未变');
+});
+
+test('trySwap：魔力鸟 + 另一颗特效 → 本步不触发（特效+特效属 Step 10 的组合）', () => {
+  const game = createGame({ steps: 30 });
+  paintFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.MAGIC;
+    b[4][4].color = 0;
+    b[4][5].type = CELL_TYPE.STRIPED;
+    b[4][5].color = 4;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertEqual(result.valid, false, '尚未实现组合效果 → 按普通匹配判定为无效');
+  assertEqual(result.stepsLeft, 30, '不消耗步数');
+});
+
+test('resolveBoard：5 连直线生成魔力鸟的那一层按 3.5 计 2.5 倍（Step 9 接入）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    for (const c of [1, 2, 3, 4, 5]) b[4][c].color = 3; // 第 4 行 5 连
+  });
+
+  const result = resolveBoard(game);
+  const first = result.levelScores[0];
+
+  assertEqual(result.levels[0].groups[0].shape, 'line5', '被识别为 line5');
+  assertEqual(result.levels[0].cleared.length, 4, '5 连只消除 4 格');
+  assertEqual(first.base, 4 * SCORE.basePerCell, '基础分 40');
+  assertEqual(first.multiplier, SCORE.specialMultipliers.magic, '魔力鸟倍数 2.5');
+  assertEqual(first.gained, 100, '40 × 2.5');
+  assertEqual(result.levels[0].board[4][3].type, CELL_TYPE.MAGIC, '正中那一格留下魔力鸟');
+});
+
+test('resolveBoard：initialClear 透传给 resolveCascades（v1.11 契约）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    b[2][2].color = 4;
+    b[5][5].color = 4;
+  });
+
+  const result = resolveBoard(game, { initialClear: [{ r: 2, c: 2 }, { r: 5, c: 5 }] });
+
+  assertEqual(result.levels[0].groups.length, 0, '该层没有匹配组');
+  assertEqual(result.levels[0].cleared.length, 2, '恰好清除指定的 2 格');
+  assertTrue(result.scoreDelta > 0, '照常计分');
+});
+
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
