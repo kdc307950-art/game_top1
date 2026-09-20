@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-09-19（Step 4：计分、步数、游戏结束、最高分）
+
+### 事故与处理（必须先记录）
+
+- 开工时发现 **四个文件被本会话之外的写入替换**：`score.js`（8:59:01）、`level.js`（8:59:30）、`game.js`（9:00:03）、`app.js`（9:00:29），均晚于 Step 3 提交 `420a5be`。前三份由 550/545 字节的占位注释变成压缩实现；`app.js` 被改成调用 `game.trySwap` 的半截接线，**日志仍引用 `result.cleared.length`/`result.spawned.length`，每次有效交换必然抛 `TypeError`**。
+- `node tests/run-all.js` 当时仍报 41/41 PASS —— 因为 `tests/game.test.js`、`score.test.js`、`level.test.js` 还是空占位、从不 import 这三个模块。**这是「测试全绿」掩盖真实故障的一例**，已在此登记。
+- 已向用户报告并取证（`git show HEAD:game.js` 证明仓库内仍是占位、`git status` 证明仅这四个文件被改），用户选择「按项目风格与 4.2 契约重写这三份 + 修好 app.js」。处理口径与理由见 **D016**。
+
+### 完成项
+
+- `score.js`（57 行）：`calcBaseScore` / `calcSpecialMultiplier` / `calcCascadeBonus` / `calcFinalScore` 四个 4.2 契约函数，全部查 `CONFIG.SCORE_CONFIG` 取值，无魔法数字。
+- `level.js`（72 行）：`createLevel`（按 4.4 逐条校验 goal 与三元组非递减）、`consumeStep`、`getRemainingStepBonus`；`checkGoal`（3.6）与 `calcStars`（3.7）按 Step 4 禁止项与 Step 12 范围**明确不实现**。
+- `game.js`（149 行）：`createGame` / `trySwap` / `resolveBoard` / `getState`，落地 4.3.2（无匹配回退且不扣步数）、4.3.3（只有有效交换扣 1 步）、3.5 计分接入；`getState` 返回深冻结快照。
+- `app.js`（674 行）：游戏逻辑改由 `game.js` 承担；新增 Canvas HUD（分数/剩余步数/最高分常驻可见）、步数用尽结束面板与「再来一局」按钮；最高分经 `STORAGE_KEYS.BEST_SCORE`（`xxl_best_score`）读写 `localStorage`；级联回放结束后再弹面板。
+- 三个测试文件从 0 用例补到：`score.test.js` 10 个、`level.test.js` 6 个、`game.test.js` 8 个。
+- **范围**：本步改动 `score.js`、`level.js`、`game.js`、`app.js` 与三个测试文件；`config.js`、`board.js`、`match.js` 未改（无需改）。
+
+### 验证方式
+
+- `node tests/run-all.js` → **65 用例 / 704 断言 / 0 加载错误 / PASS**，退出码 0。逐文件：score 10/10、level 6/6、game 8/8、board 14/14、match 15/15、integration 12/12。
+- 关键断言：`calcFinalScore` 与附录 A 速查表逐项一致（30 分基数 × 7 种倍数 = 45/60/75/90/105/120/150）；`calcCascadeBonus` 第 1 层 0、第 2 层起 30/60/90/120；`createLevel` 对 10 种非法配置抛错；`consumeStep` 减到 0 不变负；`trySwap` 有效交换**精确得到 30 分并扣 1 步**；死局棋盘上任意交换无效且**棋盘逐格（id）不变、步数不变**；步数用尽后 `gameOver` 且拒绝后续交换；`resolveBoard` 对每层核对 `base = 消除格数 × 10`、`bonus = (层−1) × 30`（种子锁定 2 层：3 格 + 15 格 = 210 分）；`getState` 深冻结且与内部状态隔离。
+- **死局率实测**（200 局 × 最多 30 次交换的模拟）：5902 个局面中 6 个无可行交换 = **0.102%**，30 步完成率 194/200 —— 既确认 Step 6 的必要性，也说明整局验证基本不会被害。
+- **真实浏览器整局验证**（`_build/verify-step4.mjs`，Chrome headless + CDP，390×844 DPR3）：7 阶段 **32 项全部 PASS**，其中：
+  - 有效交换日志含「本步 +N 分（本局 N）」「剩余步数 29」，且 HUD 区像素随之变化（证明 HUD 真的重绘，不只是日志对）。
+  - 无效交换日志注明「不消耗步数，剩余 29」，画布像素**逐字节等于**交换前；随后再有效交换得到「剩余步数 **28**」——用两步之差反证无效交换确实没扣步。
+  - **真实打完整局**：脚本从像素反推棋盘、自行挑选有效交换并派发 CDP 触摸事件，直到出现「游戏结束：步数用尽。本局得分 1290，最高分 1290（新纪录）」；死局 0 次。
+  - 结束面板：检测到「再来一局」按钮像素、棋盘区平均亮度下降 25% 以上；`localStorage.xxl_best_score` 存在且**等于本局得分**。
+  - 点按按钮中心重开后：出现「新一局开始…步数 30」、按钮像素消失、棋盘恢复明亮、最高分保留。
+  - 回归：横向为主斜滑 → `(4,4)↔(4,5)`；越界滑动显式忽略；无横纵向滚动、`overflow:hidden`、`touch-action:none`、后备缓冲 = CSS 边长 × DPR；全流程控制台无 error/warning（唯一噪声来自脚本自身 `getImageData`）。
+
+### 遗留问题
+
+- **`app.js` 674 行**（Step 5 前拆分已获批准）；`board.js` 355 行的拆分仍属**待批准事项**（D015 第 9 条）。
+- **契约扩展尚未写入宪法**：`GameState`/`ResolveResult`/`SwapResult` 的追加字段、`options.rng`、`level.consumeStep` 都记在 D016 第 4 条，若希望写进 4.2 需你批准修改宪法。
+- `calcCascadeBonus` 的「第 2 层起给分」读法虽有两处依据（3.5 语义 + game2 参考实现），但**宪法文字本身未明确**，属需要你确认的解释（D016 第 2 条）。
+- 关卡目标（3.6）、三星评分（3.7）、剩余步数转化接入均属 Step 12；本步的 HUD 因此只显示分数/步数/最高分，未显示关卡目标。
+- 障碍物在重力下的语义、以及死局重排仍分别属 Step 11/13 与 Step 6。
+- 本次事故暴露出一个流程缺口：**空占位测试文件会让「测试全绿」失去意义**。建议后续每步都确认新模块至少被一个测试 import（本轮已通过补三个测试文件解决）。
+- 视觉观感与真机手感仍未由你确认；未做真机（iOS/Android）实测。
+
+### 下一步
+
+- 进入 Step 5（移动端适配 + 动画打磨）：允许改 `app.js`、`styles.css`、`config.js`（仅 `ANIMATION_CONFIG`）。**开工第一件事是按已批准的计划把 `app.js` 拆成 `render.js` 与 `input.js`，并同步更新 `AGENTS.md` 第 2.2 节与模块边界**（需你确认宪法改动文本）；随后做消除/下落的补间动画、色盲友好形状、安全区适配与帧率实测。
+
+---
+
 ## 2026-09-19（Step 3：消除、下落、填充、级联）
 
 ### 前置：参考项目源码核实（`REFERENCES.md` §2.1 Step 3）

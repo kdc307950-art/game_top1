@@ -6,6 +6,32 @@
 
 ---
 
+## D016：Step 4 的实现口径、契约扩展，以及一次外部改动事故的处理
+
+- 日期：2026-09-19
+- 背景（事故部分）：开始 Step 4 时发现工作区有四个文件被**本会话之外**的写入替换：`score.js`（8:59:01）、`level.js`（8:59:30）、`game.js`（9:00:03）、`app.js`（9:00:29），全部晚于 Step 3 的提交 `420a5be`。前三份从 550/545 字节的占位注释变成压缩实现（`game.js` 5 行），`app.js` 则被改成调用 `game.trySwap` 的半截接线 —— 但日志仍引用 `result.cleared.length`/`result.spawned.length`，而 `game.js` 的返回值没有这两个字段，**每次有效交换都会抛 `TypeError`**。`node tests/run-all.js` 当时仍显示 41/41 PASS，只是因为三个对应测试文件还是空占位、从不 import 这三个模块。
+- 决策（经用户选择「按项目风格与 4.2 契约重写这三份 + 修好 app.js」）：
+  1. **重写 `score.js` / `level.js` / `game.js`**：保留原素材里值得留的设计（`getState` 的 `Object.freeze` 不可变快照、`resolveBoard` 单一路径），但按 §6 的代码风格（函数短小、注释解释「为什么」、引用章节号）与 4.2 的签名重写；`checkGoal`（3.6 关卡目标）与 `calcStars`（3.7 三星评分）**退回 Step 12** —— Step 4 的禁止项明确包含「实现三星评分」，原素材把它们提前实现了。
+  2. **`calcCascadeBonus` 取「第 2 层起给分」的读法**：第 1 层是交换本身造成的消除，不算「连消」；第 2 层 +30、第 3 层 +60…… 依据有两条：3.5 的「连消每次 +30，依次为 30、60、90、120」按语义是*后续*连消的递增值；参考项目 game2 的 `score = removed × 10 + max(0, chains − 1) × 25` 同样从第二波才给加分。签名保留 4.2 的 `(cascadeLevel, baseScore)`：`baseScore` 当前不参与计算（3.5 是固定递增值），保留它是为了将来按消除规模调整比例时不动签名与调用点。
+  3. **`calcSpecialMultiplier` 在 Step 4 就实现为查表**：虽然本步的游戏流程只会传出 `normal`（恒为 ×1），但 ROADMAP 的 Step 7-12 范围里**没有任何一步允许修改 `score.js`**，若把倍数的接入留到那时将无处落地；而倍数表本身早在 Step 0 就登记在 `CONFIG.SCORE_CONFIG.specialMultipliers`。因此本步只把「查表函数」写对，特殊元素的**生成、激活与组合**仍严格留给 Step 7-10（Step 4 禁止项针对的是后者）。
+  4. **契约扩展（4.2 未定义的形状，集中登记）**：
+     - `GameState = { level, board, gameOver, rng }`；**分数不另存一份**，统一读 `level.currentScore`（4.4 的 Level 已含该字段），杜绝双真相源。
+     - `SwapResult` 在 4.2 的五个字段之外追加 `resolve`（`resolveBoard` 的完整结果，含每层快照与轨迹）与 `afterSwap`（交换后、结算前的棋盘快照）。前者供分层回放，后者让 UI 能画出「这一手造成的匹配」而不必自行重建棋盘。
+     - `ResolveResult = { cascades, levels, cleared, spawned, capped, scoreDelta, levelScores }`；`levelScores` 是逐层计分明细，供 UI 与测试核对 3.5 公式。
+     - `createGame(levelConfig, options)` 的 `options.rng`：注入补充新格子的随机源，使「级联层数/精确分数」可断言（参考项目同样支持注入种子）。
+     - `level.consumeStep(level)`：2.3 规定 level.js 的职责含「步数消耗」，而 4.2 未给签名，故补一个最小函数（4.3.3 的调用点在 `game.trySwap`）。
+  5. **`getRemainingStepBonus` 实现但不接入**：3.5 的剩余步数转化发生在「关卡结束时」，而 Step 4 的结束条件是步数用尽（此时剩余为 0，转化恒为 0），接入与否行为相同；Step 12 做达标结算时再接。**`checkGoal`/`calcStars` 不写空壳**，避免被误读为已实现。
+  6. **关卡配置在 `app.js` 内构造**（`buildLevelConfig()`）：数值全部取自 `CONFIG` 已登记的键（`BOARD_SIZE`/`COLOR_COUNT`/`LEVEL_DEFAULTS`/`GOAL_TYPE`），**不新增附录 B 键**（新增配置项需先改宪法并获批准）。集中到关卡表属 Step 12/14 的工作。
+  7. **HUD 与结束面板画在 Canvas 上**：Step 4 的范围**不含 `index.html` 与 `styles.css`**，因此不新增 DOM 结构与样式表；画布顶部划出 13% 的 HUD 带（分数/步数/最高分，5.5 要求常驻可见），其余为正方形棋盘区，「步数用尽」面板与「再来一局」按钮同样由 Canvas 绘制（5.5：页面内 UI，禁止 alert）。
+  8. **「再来一局」按钮用洋红 `#ff4fd8`**：原色 `#4ecb71` 与绿色糖果**完全相同**，人眼与像素检测都无法与糖果区分；换成调色板外的颜色后既能一眼认出，也让验证脚本可以据像素定位按钮。
+  9. **`getState` 深冻结**（数组、行、格子逐层 `Object.freeze`）；但**逐帧渲染直接读 `GameState`** 而不每帧调 `getState` —— 后者每帧会深拷贝 64 个格子，与 15 节的内存预算冲突；`app.js` 是唯一读者且从不改写棋盘，已在文件头注释说明。
+  10. **行数超限**：`app.js` 674 行（拆分已获批、定于 Step 5 前）、`board.js` 355 行（拆分属待批准事项，见 D015 第 9 条）。
+  11. **死局率实测**：200 局模拟（每局最多 30 次有效交换）得到 **0.102%** 的局面无可行交换（5902 个局面中 6 个），30 步完成率 194/200。这既说明「死局确实存在、Step 6 的必要性成立」，也说明 Step 4 的浏览器整局验证在真实环境下基本不会被死局卡住。
+- 影响：`score.js`、`level.js`、`game.js`、`app.js`、`tests/score.test.js`、`tests/level.test.js`、`tests/game.test.js`。`config.js`、`board.js`、`match.js` 本步未改动。
+- 替代方案：保留外部那份压缩实现（用户已否决：会留下 §6 风格违规、Step 4 禁止项、`calcSpecialMultiplier` 恒返回 1 使 Step 7-10 无法计分）；把 `checkGoal`/`calcStars` 一起实现（否决：Step 4 禁止项）；把 HUD 做成 DOM（否决：需要改范围外的 `index.html`/`styles.css`）；每帧调 `getState` 渲染（否决：与 15 节内存预算冲突）。
+
+---
+
 ## D015：Step 3 的消除循环落点、契约扩展与可测性
 
 - 日期：2026-09-19
