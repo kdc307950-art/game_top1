@@ -8,13 +8,14 @@
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, summarize } from './assert.js';
 import { CELL_TYPE, CONFIG, DIRECTION, MATCH_SHAPE } from '../config.js';
-import { createBoard, resolveCascades } from '../board.js';
+import { cloneBoard, createBoard, resolveCascades } from '../board.js';
 import {
   activateSpecial,
   createSpecial,
   getSpecialAffectedCells
 } from '../special.js';
 import { matchShapeToSpecial } from '../match.js';
+import { buildPhases, motionDurations } from '../timeline.js';
 
 const SIZE = 8;
 /** 让补充的新格子尽量不产生新匹配，便于把断言锁定在第 1 层。 */
@@ -192,6 +193,24 @@ test('resolveCascades：条纹被 3 连触发时消除整行（4.3.8 优先激�
     '被清除的格子里包含那颗条纹（供上层按 3.5 应用 1.5 倍）'
   );
   assertEqual(rowBefore.length, SIZE, '夹具行长度自检');
+});
+
+test('timeline：条纹波及的整行格子都进入消除与下落隐藏集合', () => {
+  const board = fixture((b) => {
+    for (const c of [1, 2, 3]) b[3][c].color = 3;
+    b[3][2].type = CELL_TYPE.STRIPED;
+    b[3][2].direction = DIRECTION.H;
+  });
+  const afterSwap = cloneBoard(board);
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, { rng: NO_CASCADE_RNG });
+  const phases = buildPhases(result, afterSwap, motionDurations(false));
+  const clear = phases.find((phase) => phase.phase === 'clear' && phase.levelIndex === 0);
+  const fall = phases.find((phase) => phase.phase === 'fall' && phase.levelIndex === 0);
+  const expected = [0, 1, 2, 3, 4, 5, 6, 7].map((c) => `3,${c}`);
+
+  assertEqual(clear.keys.size, SIZE, '消除动画覆盖条纹实际清除的整行');
+  assertDeepEqual([...clear.keys].sort(), expected, '消除键与实际波及坐标一致');
+  assertDeepEqual([...fall.hidden].sort(), expected, '下落阶段隐藏同一批已清除格子');
 });
 
 test('resolveCascades：两颗条纹同行时链式激活（行 ∪ 列）', () => {

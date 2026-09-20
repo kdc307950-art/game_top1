@@ -12,6 +12,8 @@
 范围：只允许修改 <文件列表>
 验收：<可观察的行为>
 测试：<运行哪些测试 / 手动验证步骤>
+证据：<ROADMAP.md §0.2 的 L0-L6 等级；已验证 / 仅代码审查 / 未验证>
+失败与回滚：<失败时保留什么证据、回到哪个提交或子步骤>
 禁止：<本步明确不允许做的事>
 前置依赖：<ROADMAP 中的 Step 编号>
 参考：<REFERENCES.md 中的章节编号>
@@ -22,6 +24,7 @@
 ```text
 请先阅读 AGENTS.md、ROADMAP.md、REFERENCES.md、PROGRESS.md 和 DECISIONS.md。
 然后按 ROADMAP.md 的 <Step N> 开始。
+若准备开始新的玩法 Step，先执行 ROADMAP.md §0.1 扩展前 Bug Audit Gate；未得出“允许进入下一 Step”结论前不得新增玩法。
 只允许修改该 Step“范围”内列出的文件。
 先给计划，再改代码，最后告诉我如何验证。
 ```
@@ -36,6 +39,25 @@
 - 下一步建议
 
 如本次出现非显然决策，请在 DECISIONS.md 追加记录。
+```
+
+## 扩展前 Bug Audit（当前 Step 7 后先用）
+
+```text
+任务：在不推进下一玩法 Step 的前提下，审计当前项目的功能缺陷、回归风险和未验证边界
+范围：默认只读；允许运行现有测试、静态一致性脚本、本地 HTTP 冒烟和可用的移动模拟。除非用户明确要求修复，否则不改游戏代码、不新增 Step 8 功能。
+开始前：阅读 AGENTS.md、ROADMAP.md §0.1/§0.2、当前 Step、REFERENCES.md 对应章节、PROGRESS.md 最近记录和 DECISIONS.md。
+执行：
+1. 运行 node tests/run-all.js，记录测试文件数、用例数、断言数、失败数和退出码。
+2. 若 _build/consistency_check.py 存在则运行，区分静态检查与行为验证。
+3. 经 HTTP 服务器验证首屏、有效/无效交换、消除/下落/补充、步数、结束面板和最高分；没有实际浏览器/设备时写未验证。
+4. 检查窄屏触摸、滚动/缩放、安全区、输入锁、性能、控制台错误和本地存储边界；不得用桌面鼠标结果冒充真机触摸。
+5. 对每个发现写 P0/P1/P2/P3、复现步骤、影响、证据等级、建议修复和回归用例。
+输出：先列 findings（按严重度），再列未验证项、通过项和“是否允许进入下一 Step”的明确结论。
+门禁：P0/P1 未清零、自动回归失败或浏览器冒烟失败时结论必须为“不允许进入下一 Step”。P2/P3 必须登记负责项和回归计划。
+证据：严格按 ROADMAP.md §0.2 标注 L0-L6，并使用“已验证 / 仅代码审查 / 未验证”。
+归档：在 PROGRESS.md 写审计命令、环境、结果和未验证边界；规则或范围变化才写 DECISIONS.md。
+禁止：以分析或文档结论替代实际测试；在审计期间顺手实现包装糖果、魔力鸟、组合或其他后续 Step。
 ```
 
 ## 环境提示词（本项目专用）
@@ -263,13 +285,29 @@
 ## Step 18：Capacitor 打包
 
 ```text
-任务：用 Capacitor 打包为 Android/iOS
-范围：新增 capacitor.config.json、android/、ios/，不改逻辑模块
-验收：Android APK 可安装运行，iOS 模拟器可运行，真机触摸/音效/震动正常
-测试：真机安装联调，确认 WebView 内 ESM、localStorage、vibrate 正常
-禁止：为适配原生改动游戏逻辑语义
-前置依赖：Step 17
-参考：REFERENCES.md §2.3 Step 18
+任务：按 ROADMAP.md Step 18.<子步骤>，把功能冻结的 H5 游戏包装为 Capacitor 原生应用候选版本
+开始前：
+1. 阅读 AGENTS.md、ROADMAP.md §0.1/§0.2/Step 18、REFERENCES.md Step 18、PROGRESS.md、DECISIONS.md。
+2. 先完成扩展前 Bug Audit Gate，固定源码 commit/tag，确认 P0/P1 为 0。
+3. 取得用户对 Capacitor 依赖、平台工程和最小资源准备脚本的明确批准；没有批准不得修改 package.json 的零依赖状态。
+4. 盘点实际可用环境。Windows 上不得把 iOS 写成“已验证”；缺少 Android Studio/SDK、macOS/Xcode 或真机时必须写未验证。
+子步骤：
+- 18.1：环境盘点、功能冻结、包标识/版本/回滚点与本地存储预期。
+- 18.2：可重复生成 webDir、Capacitor 初始化、add/sync 平台，验证 ESM 和资源路径。
+- 18.3：WebView 的触摸、生命周期、safe-area、localStorage、音频、震动和离线降级边界。
+- 18.4：Android Debug 构建、安装、真机冒烟和日志证据。
+- 18.5：macOS/Xcode 上 iOS 模拟器/真机构建与验证；模拟器不能替代真实触摸或震动。
+- 18.6：Release 版本映射、图标/启动图、最小权限、隐私说明、签名隔离和签名产物。
+- 18.7：新安装、覆盖升级、卸载重装、前后台、离线启动、平台矩阵、归档和回滚演练。
+范围：只改当前子步骤列出的文档、资源准备、Capacitor 配置或平台工程；不得推进 Step 8-17 玩法，不得在 Android/iOS 原生层重写匹配、计分、棋盘或关卡规则。
+验收：逐项满足 ROADMAP 对应子步骤的门禁；分别报告“生成工程”“Debug 已安装”“真机已验证”“Release 已签名”“商店准备”的实际状态，不能混用。
+测试：每次 Web 资源变更均执行 npm run stage:web -> 资源检查 -> npx cap sync <platform> -> 平台复测；若 Web 逻辑改动，额外运行 node tests/run-all.js 和浏览器冒烟。
+证据：按 ROADMAP.md §0.2 标注 L0-L6；记录命令、工具版本、commit/tag、包标识、版本、设备、产物文件名、校验值、日志位置和未验证边界。
+安全：密钥、证书、Provisioning Profile、签名密码和真实账号信息均不得进入 Git、终端回显、截图或 PROGRESS.md；只使用受控凭据存储。
+失败与回滚：保留完整构建错误和最小复现；修复后从 stage:web 和 cap sync 重新开始。发布阻塞缺陷回到固定 tag/commit，修复并递增构建版本后生成新包，不覆盖旧 Release 包。
+禁止：用 Android 结果替代 iOS 结论；把 Debug APK 说成正式发布包；为了适配原生而改变已验收游戏规则语义；未记录许可来源就加入图标、启动图或其他素材。
+前置依赖：Step 17、ROADMAP.md §0.1 Gate；iOS 还依赖可用的 macOS/Xcode 环境
+参考：REFERENCES.md §2.3 Step 18.1-18.7
 ```
 
 ---

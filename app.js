@@ -71,7 +71,8 @@ function init() {
 
   bindInput({
     target: canvas,
-    isLocked: () => timeline.running || view.game.gameOver,
+    // 结束面板本身需要接收点按以重开；交换入口会单独拒绝 gameOver 状态。
+    isLocked: () => timeline.running,
     onSwipe,
     onTap
   });
@@ -337,6 +338,7 @@ function drawFrame(entry = null, progress = 1) {
 function finishGame() {
   const snapshot = getGameState(view.game);
   const isRecord = snapshot.currentScore > view.best;
+  const endReasonText = view.endReason === 'stuck' ? '无可消除组合（重排失败）' : '步数用尽';
   if (isRecord) {
     view.best = snapshot.currentScore;
     writeBestScore(view.best);
@@ -344,7 +346,7 @@ function finishGame() {
   view.newRecord = isRecord;
   log(
     'info',
-    `游戏结束：步数用尽。本局得分 ${snapshot.currentScore}，最高分 ${view.best}` +
+    `游戏结束：${endReasonText}。本局得分 ${snapshot.currentScore}，最高分 ${view.best}` +
       (isRecord ? '（新纪录，已写入 localStorage）' : '')
   );
   drawFrame();

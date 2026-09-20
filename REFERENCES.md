@@ -1,6 +1,6 @@
 # REFERENCES.md — 外部参考项目与逐 Step 借鉴方案
 
-> 版本：v1.0.2
+> 版本：v1.0.3
 > 关联文件：`AGENTS.md`、`ROADMAP.md`、`DECISIONS.md`
 > 用途：记录 GitHub 参考项目、逐 Step 借鉴方案、借鉴原则与许可证合规。
 > 维护方式：Agent 提议，用户批准后更新；每次具体借鉴记入 `DECISIONS.md`。
@@ -212,14 +212,58 @@ candy-crush 实测含 8 个音频文件：`click.mp3`、`swap.mp3`、`invalid.mp
 
 #### Step 18：Capacitor 打包为 Android/iOS
 
-**核心参考**：`k8scat/kaixinxiaoxiaole`
+**核心参考**：Capacitor 官方文档（环境、配置、工作流、Android、iOS）+ Android Developers / Apple Developer 的签名与分发文档。
 
-k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它用 Cocos 构建系统，适配思路可参考。
+**辅助参考**：`k8scat/kaixinxiaoxiaole`。它已适配 H5、微信小游戏、Android 原生与 iOS 原生；但其 Cocos 构建系统与本项目的 Vanilla JS + Canvas 架构不同，只借鉴“多端验收维度”，不复制构建配置、原生工程或资源。
 
-**适配建议**：Capacitor 核心是「将 Web 应用包装为原生 App」：
-1. 确保 `index.html` 与所有 ES Module 在原生 WebView 正常运行（注意：WebView 内同样需要 `http(s)` 或 Capacitor 的自定义 scheme，`file://` 下 ESM 会被 CORS 拦截）。
-2. 处理原生环境下 `localStorage`、`navigator.vibrate` 等 API 兼容性。
-3. 用 Capacitor CLI 生成原生项目并构建。
+> **当前边界（2026-09-20）**：本项目仍处于 Step 7 功能冻结后的 Bug Audit 与文档治理阶段；没有安装 Capacitor、没有 `android/` / `ios/` 原生工程、没有 APK/AAB/IPA 产物。本节是将来执行 Step 18 时的参考与检查清单，不能据此声称已支持 Android/iOS 或已可发布。具体门禁、证据等级和执行顺序以 `ROADMAP.md` §0.1–§0.3 与 Step 18 为准。
+
+**适配总原则**：Capacitor 是一次经用户批准的“打包例外”，不是现在对“零依赖、无构建工具”开发约束的追溯性否定。只有本阶段功能冻结、回归证据完整后，才允许安装 CLI/runtime、创建原生目录或改动 `package.json`。游戏规则模块、`cell[][]` 契约与 Web 开发入口不因打包而重写。
+
+##### Step 18.1：环境与功能冻结
+
+- 重读 Capacitor 当期官方环境文档，记录实际安装的 Node、Capacitor CLI/runtime、Android Studio、Android SDK、Xcode 与原生依赖版本；不要把本文档中的版本描述当作永久值。
+- 在 Windows 上只规划/构建 Android；iOS 原生构建、签名和设备调试必须转到 macOS + Xcode 环境。没有 macOS 证据时，iOS 只能记为“未验证”。
+- 先冻结 Web 版本：记录 Git commit/tag、`node tests/run-all.js` 结果、浏览器回归结果、已知 P2/P3 和明确延期的 Step 8–17 能力。P0/P1 未清零时不进入打包。
+
+##### Step 18.2：Web 资源暂存与 Capacitor 初始化
+
+- Capacitor 的 `webDir` 必须指向包含最终 `index.html` 的 Web 资源目录。当前项目无构建工具，未来须在实施时明确一个可重复生成的暂存目录（建议 `www/`），而不是让原生工程直接引用工作区根目录。
+- 暂存流程要验证：`index.html`、全部 ES Module、`styles.css`、`assets/`、图标/启动图和版本清单均存在；不带入 `_build/`、测试夹具、密钥、调试日志或开发说明。
+- 选择 `capacitor.config.json` 还是 `capacitor.config.ts`、应用 ID、显示名称、`webDir` 和原生目录跟踪策略前，先把拟定值写入 `DECISIONS.md`；应用 ID 一旦进入商店不可随意更换。
+- 首次执行 `cap init`、添加平台与同步前，保留根目录 Web 版的可运行验证。不同 CLI 版本的 `npx cap init` 可能要求交互式填写；执行时必须记录 CLI 版本、完整命令、实际填写的 `appName`/`appId`/`webDir` 和生成的配置文件，不能只记“已初始化”。Capacitor 侧的 `sync` 是将已准备好的 Web 资源和原生依赖同步到平台工程，不替代 Web 版测试。
+
+##### Step 18.3：WebView 与原生能力兼容
+
+- 在真实 WebView 中单独回归 ES Module 加载、Canvas DPR/方向变化、安全区、`localStorage` 的首次启动/重启/升级/卸载后行为、触摸滑动、输入锁、音频解锁与减少动效。桌面浏览器通过不能推导为 WebView 通过。
+- 若未来 Step 16 或原生包装引入 `navigator.vibrate`，只能以能力检测后的降级路径运行；若确有原生触感需求，再参考 Capacitor Haptics 插件，并把新增依赖、权限和隐私影响写入决策与隐私清单。当前未验证的震动能力不得写成已有功能。
+- Android 返回键、前后台恢复等属于原生行为，只有引入并验证 Capacitor App 插件后才处理；不得把浏览器 `history` 行为当作原生返回键已验收。
+- 每项结论都要标出平台、设备/模拟器、系统与 WebView/WKWebView 版本、构建号、复现步骤和结果。失败时保留日志/截图/最小复现，不以“某个 API 看起来可用”替代完整一局验证。
+
+##### Step 18.4：Android Debug 交付
+
+- 按当期官方文档准备 Android Studio 与 SDK，添加 Android 平台、同步暂存资源、用 Android Studio 或 CLI 打开并运行 Debug 包。模拟器和真机都要记录；模拟器通过不能代替至少一台真机。
+- Debug 包的验收至少包含：冷启动、连续完整一局、无效交换回退、暂停/恢复、旋转或横屏提示、返回键策略、离线启动、升级覆盖安装与卸载重装后的存档边界。
+- Debug 安装成功只表示 Android 冒烟通过，不能称为签名发布包、商店就绪或 iOS 已支持。
+
+##### Step 18.5：iOS 构建与验证
+
+- 在 macOS 上按当期官方文档配置 Xcode、命令行工具和所需的 iOS 依赖管理方式，添加/同步 iOS 平台并通过 Xcode 打开工作区。
+- 分开记录 iOS 模拟器与真机的结果：模拟器用于基础启动与布局，真机必须复核触摸、音频、低电量/后台恢复、安全区、存档和安装包行为。
+- iOS 构建、证书、描述文件、TestFlight 上传与 App Store 审核是独立证据；Windows 上的 Web 或 Android 结果不得迁移为 iOS 结论。
+
+##### Step 18.6：Release 签名、版本与合规
+
+- 版本策略至少区分对用户可见的版本号、平台构建号、Git commit/tag 与 Web 资源清单；每次候选包都能追溯到唯一源码提交和唯一暂存资源。
+- Android Release 需要保护 keystore / upload key，绝不提交密码、私钥或签名文件；Google Play 的 App Bundle、签名和上传流程以 Android Developers 当期文档为准。
+- iOS Release 需要匹配的 Bundle ID、签名能力、构建号与 App Store Connect 记录；上传、TestFlight 与提交审核以 Apple Developer 当期文档为准。
+- 发布前建立最小合规包：应用名称/图标/启动图来源、第三方依赖与许可证、隐私说明、数据存储说明、联网/权限说明、年龄分级素材与商店截图。零素材策略不自动覆盖原生图标、启动图或商店素材的权利来源。
+
+##### Step 18.7：发布候选回归、归档与回滚
+
+- 对每个 Release Candidate 分平台执行安装、升级覆盖、冷启动、完整一局、暂停恢复、离线启动、清存档/卸载重装、权限拒绝和崩溃/控制台检查；结论按 `ROADMAP.md` §0.2 的证据等级登记。
+- 归档内容至少包括：源码 commit/tag、锁定依赖版本、`capacitor.config.*`、Web 资源清单/校验值、产物文件名与校验值、设备矩阵、测试记录、签名保管位置说明（不记录秘密）、已知风险与回滚步骤。
+- 回滚优先恢复到上一个已签名且已验证的版本；不要在商店/原生工程内临时手改规则逻辑来“救火”。若原生壳配置需要热修，必须能重建同一 Web 暂存资源并重新走最小回归。
 
 ---
 
@@ -278,7 +322,7 @@ k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它�
 | Step 15 | bazhanius | — | 实现参考 |
 | Step 16 | candy-crush | k8scat | 功能参考 |
 | Step 17 | candy-crush | — | 实现参考 |
-| Step 18 | k8scat | — | 意识参考 |
+| Step 18 | Capacitor 官方文档 + Android/Apple 官方发布文档 | k8scat | 流程与发布参考 |
 
 ### 3.5 性能红线（Canvas 2D 实测结论）
 
@@ -294,7 +338,7 @@ k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它�
    | 径向渐变 + 双层描边（视觉上无差别） | **2.18 ms** |
 
    **3 倍**代价换一个肉眼看不出的差异。更糟的是 6.53ms 时 CDP 的 `Page.captureScreenshot` 开始**超时**，表现为「浏览器工具坏了」，实为渲染太慢。替代：`createRadialGradient` 画光晕、双层描边画选中态、`strokeText` + `fillText` 画发光文字。
-   - 验证命令：`grep -c shadowBlur app.js` → 目标 **0**。
+    - 验证命令：Windows PowerShell 用 `(Select-String -LiteralPath app.js,render.js,candy.js,hud.js,timeline.js -Pattern 'shadowBlur' -AllMatches | ForEach-Object Matches | Measure-Object).Count`；POSIX 环境可用 `rg -n 'shadowBlur' app.js render.js candy.js hud.js timeline.js`（无匹配即通过）。目标均为 **0**。
 2. **静态图层烘焙到离屏 canvas 后 `drawImage` 复用**，不要每帧重画背景；保留 10-15% 的动态元素（呼吸、摇摆）避免画面发死。
 3. **修饰性描边透明度 ≤ 0.1。** 网格线、分隔线在 alpha 0.26 时会变成画面主体（看起来像布纹），0.09 才是纹理。
 
@@ -318,6 +362,15 @@ k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它�
 | Ghamza-Jd 源码 | https://github.com/Ghamza-Jd/Match-3 | 死局预防算法参考 |
 | Ghamza-Jd 轻量试玩 | http://hamzajadid.me/match3.html | 交互体验参考（HTML5 Canvas 版） |
 | k8scat 源码 | https://github.com/k8scat/kaixinxiaoxiaole | 多平台/障碍物参考 |
+| Capacitor 环境准备 | https://capacitorjs.com/docs/getting-started/environment-setup | Step 18 的 Node、Android 与 macOS/Xcode 前置条件；执行时重读当期版本要求 |
+| Capacitor 配置 | https://capacitorjs.com/docs/config | `appId`、`appName`、`webDir` 与原生配置边界 |
+| Capacitor 工作流 | https://capacitorjs.com/docs/basics/workflow | Web 资源构建/同步、平台运行、原生 IDE 与产物构建流程 |
+| Capacitor Android | https://capacitorjs.com/docs/android | Android 平台添加、运行、Android Studio 与设备/模拟器验证 |
+| Capacitor iOS | https://capacitorjs.com/docs/ios | iOS 平台添加、Xcode 工作区与设备/模拟器验证 |
+| Capacitor App API | https://capacitorjs.com/docs/apis/app | 前后台、恢复和 Android 返回键的原生行为参考；未引入前不实施 |
+| Capacitor Haptics API | https://capacitorjs.com/docs/apis/haptics | Step 16/18 的原生触感候选；仅在用户批准依赖后使用 |
+| Android 应用签名 | https://developer.android.com/studio/publish/app-signing | Android APK/AAB、keystore/upload key 与 Play App Signing 流程 |
+| App Store Connect 上传构建 | https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds | iOS 构建上传、处理、TestFlight/审核前的官方流程 |
 
 ---
 
@@ -341,6 +394,8 @@ k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它�
 - GPL 类：谨慎，避免传染本项目许可证。当前参考列表中无 GPL 项目。
 - 任何复制行为必须在本文件与 `DECISIONS.md` 双重登记。
 - **本项目当前策略：全部参考项目一律只借鉴思路，不复制代码**，因此上述许可证差异目前不产生实际义务；该策略一旦改变，必须重新审视本表。
+- Step 18 的 Capacitor CLI/runtime、原生工程模板与插件不是“参考项目代码复制”，但它们会成为发布依赖：实施时必须锁定实际版本、核对其许可证/通知义务，并把新增依赖、权限和资源来源写入交付清单。
+- 签名文件、keystore、证书、描述文件、Apple/Google 账号令牌和商店上传凭据不得进入 Git、`www/` 暂存目录、截图或 `PROGRESS.md`。日志只记录安全的保管位置说明与是否完成校验。
 
 ---
 
@@ -351,3 +406,4 @@ k8scat 已适配 H5 | 微信小游戏 | Android 原生 | iOS 原生。虽然它�
 | v1.0 | 2026-09-18 | 用户 | 初始版本（结构与逐 Step 借鉴方案） | 全文 |
 | v1.0.1 | 2026-09-18 | Agent | 填入实测许可证/星标/最后推送；移除已失效的 `youssefmyh/Match3Algorithm`（404）；补充 `rembound/Match-3-Game-HTML5`；新增 §3.5 性能红线；标注未复核的文件级结论 | §1、§2、§3.5、§4、§5、§6 |
 | v1.0.2 | 2026-09-18 | Agent | §3.5 补测量环境与对照表（数据来源为另一项目，非本项目实测）；§1「新增」措辞明确版本号 | §1、§3.5、§6 |
+| v1.0.3 | 2026-09-20 | Agent | 扩充 Step 18 为 18.1–18.7 的官方参考与执行检查：功能冻结、Web 资源暂存、WebView/原生兼容、Android/iOS、签名合规、发布回滚；补 Windows 兼容的性能检查命令 | §2.3 Step 18、§3.4、§3.5、§4、§5、§6 |

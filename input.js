@@ -14,7 +14,7 @@ const TOUCH_MOUSE_GUARD_MS = 600;
  * 绑定输入。返回解绑函数。
  * @param {object} options
  * @param {HTMLElement} options.target        接收触摸/鼠标事件的元素（画布）
- * @param {() => boolean} [options.isLocked]  返回 true 时丢弃整段手势（动画播放中 / 已结束）
+ * @param {() => boolean} [options.isLocked]  返回 true 时丢弃整段手势（动画播放中）
  * @param {(gesture: object) => void} [options.onSwipe] 滑动：{ kind:'swipe', x0,y0,x1,y1 }
  * @param {(gesture: object) => void} [options.onTap]   点按：{ kind:'tap', x0,y0,x1,y1 }
  */

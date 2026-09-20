@@ -39,7 +39,11 @@ export function computeBoardSize() {
   const viewportH = root.clientHeight || window.innerHeight;
   const availW = viewportW - readSafeInset('left') - readSafeInset('right') - BOARD_MARGIN * 2;
   const availH = viewportH - readSafeInset('top') - readSafeInset('bottom') - BOARD_MARGIN * 2;
-  return Math.max(MIN_BOARD_PX, Math.min(availW, availH, MAX_BOARD_PX) | 0);
+  const available = Math.min(availW, availH);
+  if (available <= 0) return 1;
+  // 220px 是可读性目标；更窄的设备必须服从实际可用空间，避免棋盘横向溢出。
+  const target = available < MIN_BOARD_PX ? available : Math.min(available, MAX_BOARD_PX);
+  return Math.max(1, Math.floor(target));
 }
 
 /** 画布内的分区几何：顶部 HUD 带 + 正方形棋盘区（5.2 棋盘必须是正方形）。 */

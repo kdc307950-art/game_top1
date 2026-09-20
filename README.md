@@ -4,8 +4,11 @@
 
 ## 当前阶段
 
-第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）。
-当前进度：Step 7 条纹糖果已完成（宪法 v1.7；4 连生成横/竖条纹、激活消整行/列、按 3.5 计 1.5 倍；糖果外观按用户批准的程序化方案重做，并拆出 `candy.js`；`app.js` 已拆为 `app.js` + `render.js` + `candy.js` + `hud.js` + `input.js` + `timeline.js`）。第二阶段进行中，下一步为 Step 8（包装糖果），详见 `PROGRESS.md`。
+第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）已完成；第二阶段目前已实现 Step 7 条纹糖果（4 连生成横/竖条纹、激活消整行/列、按 3.5 计 1.5 倍）。糖果外观采用用户批准的程序化绘制方案，界面层已拆为 `app.js`、`render.js`、`candy.js`、`hud.js`、`input.js`、`timeline.js`。
+
+**当前暂停点不是 Step 8。** 在开始包装糖果前，必须先完成 `ROADMAP.md` §0.1 的扩展前 Bug Audit Gate：自动回归、静态一致性、HTTP 浏览器冒烟、移动交互检查、缺陷分级与证据归档。最终是否允许进入 Step 8，以 `PROGRESS.md` 的最新审计记录为准；README 不替代测试证据。
+
+当前已实现、仅代码审查、仅测试夹具通过、真机未验证和延期能力必须分开表述。特别是 Android/iOS 包装、真实设备性能、iOS Safari/WebView、音频/震动、色盲与控制台检查，未实际验证前均不得写成“已支持”或“可发布”。
 
 ## 快速开始
 
@@ -31,9 +34,27 @@ http://<电脑局域网IP>:8000/
 ```bash
 node tests/run-all.js        # 自动发现并执行 tests/*.test.js，失败时退出码 1
 node tests/board.test.js     # 单文件直接运行
+python _build/consistency_check.py  # 若该脚本存在，检查文档/模块约束一致性
 ```
 
 零依赖、零框架的自研断言工具在 `tests/assert.js`（`assertEqual` / `assertTrue` / `assertFalse` / `assertDeepEqual` / `assertThrows` + `test()` 注册表）。
+
+### 验收和证据
+
+每次准备进入新玩法 Step 前，按 `ROADMAP.md` §0.1 做 Bug Audit；不要把一次测试通过等同于跨平台可用。路线图 §0.2 定义了以下证据等级：
+
+| 等级 | 含义 | 不能替代 |
+|---|---|---|
+| L1 | Node 单测/集成测试通过 | 浏览器、触摸和设备验证 |
+| L2 | 本机 HTTP 浏览器流程通过 | 移动 WebView 或真机 |
+| L3 | 窄屏/触摸模拟通过 | 真实设备性能、音频、震动 |
+| L4-模拟器 | Android 模拟器安装包与核心冒烟 | Android 真机、iOS 或商店发布 |
+| L4-真机 | Android 真机安装包与核心冒烟 | iOS 或商店发布 |
+| L5-模拟器 | macOS/Xcode 上的 iOS 模拟器构建与核心冒烟 | iOS 真机、签名和渠道发布 |
+| L5-真机 | macOS/Xcode 上的 iOS 真机构建与核心冒烟 | 签名、审核和渠道发布 |
+| L6 | 签名产物、升级/卸载回归、合规材料 | 实际审核结果 |
+
+审计报告必须区分“已验证”“仅代码审查”“未验证”。P0/P1 缺陷、自动回归失败或浏览器冒烟失败时，不得开始下一个玩法 Step。
 
 ## 项目结构
 
@@ -54,14 +75,45 @@ node tests/board.test.js     # 单文件直接运行
 - `app.js`：应用编排（视图状态、调用游戏逻辑、动画起播），唯一允许操作 `localStorage` 的模块。
 - `render.js`、`candy.js`、`hud.js`、`input.js`、`timeline.js`：界面层 —— 几何与每帧绘制、糖果外观与精灵烘焙、HUD 与结束面板、手势识别、动画时间线。只接收「场景描述」数据，不读游戏状态、不碰存档。
 - `tests/`：自动化测试。
-- `package.json`：**无任何依赖**，只有 `"type": "module"` 与两个 script —— `test` = `node tests/run-all.js`、`serve` = `python -m http.server 8000`（见 D004）。零依赖是硬约束，禁止往里加 `dependencies`。
+- `package.json`：**当前没有任何依赖**，只有 `"type": "module"` 与两个 script —— `test` = `node tests/run-all.js`、`serve` = `python -m http.server 8000`（见 D004）。零依赖是 H5 本体的硬约束；只有经用户批准并进入 `ROADMAP.md` Step 18.1 后，才可为 Capacitor 增加受控的打包依赖。
+
+## 从可玩 H5 到原生软件交付
+
+路线图不会从“浏览器能打开”直接跳到“可以发布”。完整路径见 `ROADMAP.md` §0.3 和 Step 18：
+
+1. **核心可玩**：逻辑回归和本机浏览器能完整玩一局。
+2. **移动可玩**：完成窄屏、触摸、安全区、滚动/缩放、性能和视觉边界验证。
+3. **功能冻结**：通过 Bug Audit Gate，P0/P1 清零并保留可回退 commit/tag。
+4. **Capacitor 候选**：经明确批准后，将 H5 资源确定性准备到 `webDir`，再初始化和同步平台工程。
+5. **平台验证**：Android 与 iOS 分别在对应环境中构建、安装、测试；Android 不能替代 iOS，Windows 不能替代 macOS/Xcode。
+6. **发布候选**：完成签名、版本、图标/启动图、最小权限、隐私资料、新安装/升级/卸载/离线回归和产物归档。
+
+Step 18 已拆为可独立验收的 7 个子步骤：
+
+| 子步骤 | 交付焦点 | 最低结论 |
+|---|---|---|
+| 18.1 | 环境盘点、功能冻结、包标识、版本与回滚点 | 仅在 Gate 通过后允许初始化打包 |
+| 18.2 | 可重复 `webDir`、Capacitor 初始化、资源同步 | Web 资源不白屏、无模块/资源路径错误 |
+| 18.3 | WebView、触摸、存储、音频/震动、离线边界 | 同一 Web 逻辑可降级运行 |
+| 18.4 | Android Debug 构建、安装与真机冒烟 | L4 Android 证据 |
+| 18.5 | iOS 模拟器/真机构建与验证 | L5 iOS 证据，需 macOS/Xcode |
+| 18.6 | Release 签名、版本、素材、隐私与权限 | 可重建的签名候选输入 |
+| 18.7 | 新装/升级/卸载/前后台/离线回归、归档与回滚 | L6 发布候选证据 |
+
+### Step 18 的执行边界
+
+- Capacitor 不是当前已安装工具，也不是现在要执行的下一步。只有完成 18.1、得到用户批准并准备好对应环境后，才能安装它和创建 `android/`、`ios/`。
+- 未来的命令必须在 PowerShell 中逐行运行，例如 `npm run stage:web`、`npx cap sync android`、`npx cap run android`；不要复制 Bash 专用的 `&&`、环境变量写法或未验证的版本参数。
+- 每次 Web 资源变更都必须重新走“生成 `webDir` → 资源检查 → `npx cap sync <platform>` → 平台复测”。`sync` 不会替代资源准备。
+- Debug APK、Android 真机安装、iOS 模拟器运行、签名 Release、商店审核是不同状态。发布说明只能写已有的证据等级和实际平台。
+- 私钥、keystore、Apple 证书、Provisioning Profile、密码、真实账号和个人设备标识不得写入仓库、命令输出、截图或进度日志。
 
 ## 开发规则
 
 所有开发必须遵守 `AGENTS.md`。开始任何 Step 前，先读：
 
 1. `AGENTS.md` 对应章节。
-2. `ROADMAP.md` 当前 Step 与第 0.9 条运行方式。
+2. `ROADMAP.md` 当前 Step 与第 0 节第 9 条运行方式。
 3. `REFERENCES.md` 对应章节。
 4. `PROGRESS.md` 最近记录。
 5. `DECISIONS.md` 全部条目。
@@ -80,7 +132,9 @@ node tests/board.test.js     # 单文件直接运行
 |---|---|
 | `python -m http.server 8000` | 起本地服务器（浏览器验证必需） |
 | `node tests/run-all.js` | 跑全部测试 |
-| `grep -c shadowBlur app.js` | 性能红线检查，目标 0（见 `REFERENCES.md` §3.5） |
+| `python _build/consistency_check.py` | 若脚本存在，检查模块与文档约束一致性 |
+| `(Select-String -LiteralPath app.js,render.js,candy.js,hud.js,timeline.js -Pattern 'shadowBlur' -AllMatches | ForEach-Object Matches | Measure-Object).Count` | PowerShell 下检查绘制路径中的高开销阴影调用，目标为 0，结合 `REFERENCES.md` §3.5 人工判断 |
+| `git status --short` | 检查工作区是否混入未审查的文件 |
 | `git log --oneline` | 查看 Step 提交历史（提交信息格式 `[stepN] 描述`） |
 
 > 上表是**操作建议**，不是验收标准。验收以 `AGENTS.md` 第 7 节（测试与验证）、第 10 节（完成定义）、第 16 节（提交与回滚）为准；两者若冲突，以宪法为准并在 `DECISIONS.md` 记录。

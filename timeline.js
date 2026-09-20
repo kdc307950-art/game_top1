@@ -43,12 +43,9 @@ export function buildPhases(resolve, afterSwap, motion) {
     // 并把消除前的棋盘打上补丁，让消除/下落阶段就按特效的样子绘制。
     const patches = spawnedSpecials(preBoard, level);
     const spawnKeys = new Set(patches.map((patch) => `${patch.at.r},${patch.at.c}`));
-    const keys = new Set(
-      level.groups
-        .flatMap((group) => group.cells)
-        .map((pos) => `${pos.r},${pos.c}`)
-        .filter((key) => !spawnKeys.has(key))
-    );
+    // groups 只有初始匹配；条纹激活会额外清除整行/列。动画必须以逻辑层实际
+    // 返回的 cleared 集合为准，否则波及格会在下落阶段突然消失。
+    const keys = clearedKeys(preBoard, level.cleared, spawnKeys);
     const board = patches.length > 0 ? patchedBoard(preBoard, patches) : preBoard;
     const moves = new Map(level.moves.map((move) => [move.id, { from: move.from, to: move.to }]));
     phases.push({ phase: 'clear', board, keys, levelIndex: index, duration: motion.clear });
@@ -103,6 +100,19 @@ function spawnedSpecials(preBoard, level) {
     });
   });
   return patches;
+}
+
+/** 按消除前快照中的 cell.id 还原本层实际清除坐标，不猜测特效波及范围。 */
+function clearedKeys(preBoard, cleared, excluded) {
+  const clearedIds = new Set(cleared.map((cell) => cell.id));
+  const keys = new Set();
+  preBoard.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      const key = `${r},${c}`;
+      if (clearedIds.has(cell.id) && !excluded.has(key)) keys.add(key);
+    });
+  });
+  return keys;
 }
 
 /** 在消除前的棋盘上按下标打补丁（浅拷贝行，不改动原快照）。 */
