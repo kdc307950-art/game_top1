@@ -7,10 +7,11 @@
 //   - AlexKutepov 的「一次遍历 + 已处理集合」：本实现用「只在段起点产出」达到同样效果，
 //     不需要额外 Set，扫描仍然是 O(rows × cols)。
 //
-// 4.2 契约里的 `matchShapeToSpecial` 把形状映射到特殊元素（条纹/包装/魔力鸟），
-// 属 ROADMAP Step 7-9，本步不实现（Step 2 明确禁止引入 special.js 逻辑）。
+// 4.2 的 `matchShapeToSpecial` 把形状映射到特殊元素类型（条纹/包装/魔力鸟）。
+// 【Step 7】只实现 4 连 → 条纹：「包装糖果（L/T 型）」属 Step 8、「魔力鸟（5 连直线）」属 Step 9，
+// 两处都明确禁止在本步实现，故此处返回 null；Step 8/9 会在本函数内补上对应分支。
 
-import { DIRECTION, MATCH_SHAPE } from './config.js';
+import { CELL_TYPE, DIRECTION, MATCH_SHAPE } from './config.js';
 
 const MIN_MATCH_LENGTH = 3; // AGENTS.md 3.1：三个相同色块成同一直线即可消除
 const LINE_4_LENGTH = 4; // 3.2：4 连 → 条纹糖果
@@ -109,6 +110,18 @@ export function findAllMatchGroups(board) {
     const cells = mergeCells(groupRuns);
     return { cells, shape: detectMatchShape(cells), direction: directionOf(cells) };
   });
+}
+
+/**
+ * 4.2：matchShapeToSpecial(shape, direction) —— 形状 → 特殊元素类型。
+ * 【Step 7】只实现「4 连直线 → 条纹糖果」（3.2 / 附录 A）。方向不入参判定：
+ * 3.2 规定「横向四连生成横向条纹（消除整行），纵向四连生成纵向条纹（消除整列）」，
+ * 即**条纹方向 = 匹配方向**（与参考实现相反，见 D014 第 1 条），所以 `direction` 原样沿用。
+ * line5（魔力鸟）与 L/T（包装糖果）属 Step 8/9，本步返回 null。
+ */
+export function matchShapeToSpecial(shape, direction) {
+  if (shape === MATCH_SHAPE.LINE4) return CELL_TYPE.STRIPED;
+  return null;
 }
 
 /**

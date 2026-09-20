@@ -2,14 +2,17 @@
 //
 // 边界（2.3）：只接收「场景描述」对象并绘制；不读游戏状态、不绑定事件、不碰 localStorage。
 // 信息层（HUD、结束面板）在 hud.js，本文件**单向**依赖它（需要 HUD_RATIO/hudCells 切分布局与烘焙静态图层）。
+// 【Step 7】糖果外观与精灵烘焙拆到 candy.js（宪法 v1.7）：本文件只保留几何、布局与每帧绘制。
 // 性能（REFERENCES.md §3.5 三条红线）：
 //   1) 每帧绘制路径不使用阴影模糊类 API（本文件没有该调用，验证见 PROGRESS 的红线计数）；
-//   2) 静态图层（背景 + HUD 底 + 棋盘区底）与 6 色 × 6 形状糖果**烘焙到离屏 canvas**，
-//      每帧只用 drawImage 复用，避免每帧几十次路径绘制；
-//   3) 修饰性底色透明度 0.06（≤ 0.1）；匹配/选中高亮是有意义的状态提示，不属修饰性描边。
-// 色盲友好（5.4）：普通动物除颜色外还有 6 种可区分形状，形状由 color 索引决定。
+//   2) 静态图层（背景 + HUD 底 + 棋盘区底 + 64 个格位槽）与糖果精灵（candy.js 烘焙）
+//      都在布局时烘焙，每帧只用 drawImage 复用，避免每帧几十次路径绘制；
+//   3) 修饰性底色透明度 0.045（≤ 0.1）；匹配/选中高亮是有意义的状态提示，不属修饰性描边。
+// 色盲友好（5.4）：普通动物除颜色外还有 6 种可区分形状 + 内嵌图案（candy.js 实现）。
+// 外观方案经用户批准（深色描边 + 内阴影 + 内嵌图案 + 高光 + 条纹/方向箭头），见 DECISIONS.md D020。
 
-import { CONFIG } from './config.js';
+import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
+import { buildSpriteAtlas, roundRectPath } from './candy.js';
 import { HUD_RATIO, drawBanner, drawGameOver, drawHud, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
@@ -19,27 +22,15 @@ const MIN_BOARD_PX = 220; // 极窄视口下的可读下限
 const MAX_BOARD_PX = 720; // 平板/桌面上不让棋盘无限放大
 const BACKDROP_RADIUS_RATIO = 0.03; // 画布圆角 / 边长
 const FIELD_RADIUS_RATIO = 0.03; // 棋盘区圆角 / 棋盘边长
-const CELL_RADIUS_RATIO = 0.36; // 糖果半径 / 格子边长（5.2 正方形棋盘）
+const SLOT_INSET_RATIO = 0.06; // 格位槽相对格子的内缩比例
+const SLOT_RADIUS_RATIO = 0.18; // 格位槽圆角 / 格子边长
 const MATCH_RING_RATIO = 0.44; // 匹配高亮环半径 / 格子边长
 const SELECT_RING_RATIO = 0.43; // 选中环半径 / 格子边长
 const BACKDROP_COLOR = '#1b1830';
 const FIELD_COLOR = '#221d38';
+const SLOT_COLOR = 'rgba(255, 255, 255, 0.045)'; // 格位槽底色（红线 3：≤ 0.1 的修饰性底色）
 const MATCH_RING_COLOR = 'rgba(255, 246, 180, 0.95)';
 const SELECT_RING_COLOR = 'rgba(255, 255, 255, 0.85)';
-
-// 颜色索引（0-5）→ 调色板。顺序对应 CONFIG.COLOR_NAMES，改动顺序等于改动视觉语义。
-const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff', '#a06bff'];
-
-// 6 种形状与颜色一一对应（5.4 色盲友好）。每项返回闭合路径的顶点数（0 表示圆/圆角矩形）。
-// 多边形参数：顶点数、旋转（-π/2 表示尖朝上）、外半径倍数、（仅星形）内半径倍数。
-const SHAPES = [
-  { kind: 'circle' },
-  { kind: 'roundRect', corner: 0.34 },
-  { kind: 'polygon', sides: 3, spin: 0, outer: 1.12, squash: 0.62 },
-  { kind: 'polygon', sides: 4, spin: 0, outer: 1.1, squash: 0 },
-  { kind: 'star', points: 5, outer: 1.08, inner: 0.45 },
-  { kind: 'polygon', sides: 6, spin: 0, outer: 1, squash: 0 }
-];
 
 /** 画布边长（CSS 像素）：取可用宽高中的较小者，扣除安全区与留白（5.1）。 */
 export function computeBoardSize() {
@@ -131,59 +122,18 @@ function buildChrome(sizePx, dpr, layout) {
   roundRectPath(ctx, x, y, side, side, side * FIELD_RADIUS_RATIO);
   ctx.fillStyle = FIELD_COLOR;
   ctx.fill();
+  // 格位槽：给棋盘「底盘格子」的观感（参考项目棋盘语言的零素材复刻）。
+  // 64 次路径绘制只发生在布局时（prepare），烘焙后每帧只 1 次 drawImage（红线 2）。
+  const cell = side / CONFIG.BOARD_SIZE;
+  const inset = cell * SLOT_INSET_RATIO;
+  ctx.fillStyle = SLOT_COLOR;
+  for (let r = 0; r < CONFIG.BOARD_SIZE; r += 1) {
+    for (let c = 0; c < CONFIG.BOARD_SIZE; c += 1) {
+      roundRectPath(ctx, x + c * cell + inset, y + r * cell + inset, cell - inset * 2, cell - inset * 2, cell * SLOT_RADIUS_RATIO);
+      ctx.fill();
+    }
+  }
   return canvas;
-}
-
-/** 糖果精灵图集：6 色 × 6 形状，每个精灵正好覆盖一格，绘制时按格位贴图（红线 2）。 */
-function buildSpriteAtlas(cellCss, dpr) {
-  const px = Math.max(8, Math.round(cellCss * dpr));
-  const radius = cellCss * CELL_RADIUS_RATIO * dpr;
-  return BASE_COLORS.map((base) =>
-    SHAPES.map((shape) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = px;
-      canvas.height = px;
-      paintCandy(canvas.getContext('2d'), px / 2, px / 2, radius, base, shape);
-      return canvas;
-    })
-  );
-}
-
-function paintCandy(ctx, cx, cy, radius, base, shape) {
-  const grad = ctx.createRadialGradient(cx - radius * 0.35, cy - radius * 0.4, radius * 0.12, cx, cy, radius);
-  grad.addColorStop(0, mixHex(base, '#ffffff', 0.45));
-  grad.addColorStop(0.55, base);
-  grad.addColorStop(1, mixHex(base, '#000000', 0.3));
-  ctx.fillStyle = grad;
-  shapePath(ctx, shape, cx, cy, radius);
-  ctx.fill();
-}
-
-/** 生成形状路径：圆 / 圆角方 / 正多边形（可纵向压扁）/ 星形，全部闭合。 */
-function shapePath(ctx, shape, cx, cy, r) {
-  if (shape.kind === 'circle') {
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.closePath();
-    return;
-  }
-  if (shape.kind === 'roundRect') {
-    roundRectPath(ctx, cx - r, cy - r, r * 2, r * 2, r * shape.corner);
-    return;
-  }
-  const tips = shape.kind === 'star' ? shape.points * 2 : shape.sides;
-  ctx.beginPath();
-  for (let i = 0; i < tips; i += 1) {
-    const isInner = shape.kind === 'star' && i % 2 === 1;
-    const length = isInner ? r * shape.inner : r * shape.outer;
-    const angle = -Math.PI / 2 + (i * Math.PI * 2) / tips;
-    const x = cx + Math.cos(angle) * length;
-    // squash 让三角形/菱形等比拉伸，避免细长失真
-    const y = cy + Math.sin(angle) * length * (1 + (shape.squash ?? 0));
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +162,7 @@ function drawCandies(ctx, cache, scene, field) {
         row = move.from.r + (move.to.r - move.from.r) * t;
         col = move.from.c + (move.to.c - move.from.c) * t;
       }
-      blit(ctx, cache.sprites[item.color % cache.sprites.length], item.color, field.x + col * cell, field.y + row * cell, cell, 1, 1);
+      blit(ctx, spriteFor(cache, item), field.x + col * cell, field.y + row * cell, cell, 1, 1);
     }
   }
 
@@ -226,14 +176,22 @@ function drawCandies(ctx, cache, scene, field) {
       const c = Number(key.slice(comma + 1));
       const item = board[r]?.[c];
       if (!item || item.color === null || item.color === undefined) continue;
-      blit(ctx, cache.sprites[item.color % cache.sprites.length], item.color, field.x + c * cell, field.y + r * cell, cell, scale, alpha);
+      blit(ctx, spriteFor(cache, item), field.x + c * cell, field.y + r * cell, cell, scale, alpha);
     }
   }
 }
 
+/** 按格子的 color/type/direction 选精灵：条纹糖果用条纹精灵（Step 7；包装/魔力鸟在 Step 8/9）。 */
+function spriteFor(cache, item) {
+  const set = cache.sprites[item.color % cache.sprites.length];
+  if (item.type === CELL_TYPE.STRIPED) {
+    return item.direction === DIRECTION.V ? set.stripedV : set.stripedH;
+  }
+  return set.normal;
+}
+
 /** 贴图；scale ≠ 1 时以格心为中心缩放（消除动画用）。 */
-function blit(ctx, row, color, x, y, cell, scale, alpha) {
-  const sprite = row[color % row.length];
+function blit(ctx, sprite, x, y, cell, scale, alpha) {
   ctx.globalAlpha = alpha;
   if (scale === 1) {
     ctx.drawImage(sprite, x, y, cell, cell);
@@ -264,32 +222,8 @@ function strokeRing(ctx, field, pos, radius, lineWidth, color) {
   ctx.stroke();
 }
 
-/** HUD 与结束面板的绘制已迁到 hud.js（2.3 的信息层）；本文件只保留棋盘层与几何。 */
-function roundRectPath(ctx, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-}
-
 function readSafeInset(side) {
   const raw = getComputedStyle(document.documentElement).getPropertyValue(`--safe-${side}`);
   const px = Number.parseFloat(raw);
   return Number.isFinite(px) ? px : 0;
-}
-
-function mixHex(hex, targetHex, amount) {
-  const from = parseHex(hex);
-  const to = parseHex(targetHex);
-  const channel = (index) => Math.round(from[index] + (to[index] - from[index]) * amount);
-  return `#${[0, 1, 2].map((i) => channel(i).toString(16).padStart(2, '0')).join('')}`;
-}
-
-function parseHex(hex) {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return [(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff];
 }

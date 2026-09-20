@@ -4,7 +4,7 @@
 // 不实现任何游戏规则 —— 它不知道什么叫消除，只知道「第 N 阶段的进度是多少」。
 // 时长全部来自 `CONFIG.ANIMATION_CONFIG`（15 节），并支持系统「减少动效」（5.4）。
 
-import { CONFIG } from './config.js';
+import { CELL_TYPE, CONFIG } from './config.js';
 
 /**
  * 三档时长。系统「减少动效」或配置 reducedMotion 为真时，消除与下落归零（直接显示结果），
@@ -37,13 +37,25 @@ export function buildPhases(resolve, afterSwap, motion) {
   const phases = [];
   let preBoard = afterSwap;
   resolve.levels.forEach((level, index) => {
-    const keys = new Set(level.groups.flatMap((group) => group.cells).map((pos) => `${pos.r},${pos.c}`));
+    // 本层新生成的特殊元素本层**不被消除**（board.js 的 collectClearKeys 排除了它），
+    // 因此它既不该播「缩小淡出」，也不该在下落阶段被隐藏 —— 否则玩家会看到
+    // 「刚做出来的条纹糖果一闪就没了」（用户反馈的现象）。做法：把它从消除键里剔除，
+    // 并把消除前的棋盘打上补丁，让消除/下落阶段就按特效的样子绘制。
+    const patches = spawnedSpecials(preBoard, level);
+    const spawnKeys = new Set(patches.map((patch) => `${patch.at.r},${patch.at.c}`));
+    const keys = new Set(
+      level.groups
+        .flatMap((group) => group.cells)
+        .map((pos) => `${pos.r},${pos.c}`)
+        .filter((key) => !spawnKeys.has(key))
+    );
+    const board = patches.length > 0 ? patchedBoard(preBoard, patches) : preBoard;
     const moves = new Map(level.moves.map((move) => [move.id, { from: move.from, to: move.to }]));
-    phases.push({ phase: 'clear', board: preBoard, keys, levelIndex: index, duration: motion.clear });
+    phases.push({ phase: 'clear', board, keys, levelIndex: index, duration: motion.clear });
     if (moves.size > 0) {
       phases.push({
         phase: 'fall',
-        board: preBoard,
+        board,
         hidden: keys,
         moves,
         levelIndex: index,
@@ -71,8 +83,36 @@ export function buildPhases(resolve, afterSwap, motion) {
   return phases;
 }
 
-/** 按 cell.id 匹配前后快照，得出每格的起止位置；只做数据变换，不改动棋盘。 */
-function diffById(before, after) {
+/**
+ * 找出本层「刚升级成特效」的格子：id 在消除前就存在（排除补位新格），但 type 从普通变成了特效。
+ * 返回其在**消除前**的位置（补丁点）与消除后的格子对象；不修改任何棋盘。
+ */
+function spawnedSpecials(preBoard, level) {
+  if (!preBoard) return [];
+  const before = new Map();
+  preBoard.forEach((row, r) => {
+    row.forEach((cell, c) => before.set(cell.id, { r, c, type: cell.type }));
+  });
+  const patches = [];
+  level.board.forEach((row) => {
+    row.forEach((cell) => {
+      const from = before.get(cell.id);
+      if (!from) return; // 补位新格
+      if (from.type !== CELL_TYPE.NORMAL || cell.type === CELL_TYPE.NORMAL) return; // 不是本层新特效
+      patches.push({ at: { r: from.r, c: from.c }, cell });
+    });
+  });
+  return patches;
+}
+
+/** 在消除前的棋盘上按下标打补丁（浅拷贝行，不改动原快照）。 */
+function patchedBoard(board, patches) {
+  const copy = board.map((row) => row.slice());
+  for (const patch of patches) copy[patch.at.r][patch.at.c] = patch.cell;
+  return copy;
+}
+
+/** 按 cell.id 匹配前后快照，得出每格的起止位置；只做数据变换，不改动棋盘。 */function diffById(before, after) {
   const origin = new Map();
   before.forEach((row, r) => {
     row.forEach((cell, c) => origin.set(cell.id, { r, c }));

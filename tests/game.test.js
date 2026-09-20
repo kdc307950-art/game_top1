@@ -12,7 +12,7 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CONFIG, OBSTACLE_TYPE } from '../config.js';
+import { CELL_TYPE, CONFIG, DIRECTION, OBSTACLE_TYPE } from '../config.js';
 import { createGame, getState, resolveBoard, trySwap } from '../game.js';
 import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
@@ -186,13 +186,51 @@ test('resolveBoard：计分与 3.5 一致，并给出可逐层核对的明细', 
     assertEqual(detail.level, level.level, '层号对应');
     assertEqual(detail.base, level.cleared.length * SCORE.basePerCell, `第 ${level.level} 层基础分`);
     assertEqual(detail.bonus, (level.level - 1) * SCORE.cascadeStep, `第 ${level.level} 层连消加分`);
-    assertEqual(detail.multiplier, 1, `第 ${level.level} 层倍数（Step 4 无特殊元素）`);
+    assertEqual(detail.multiplier, 1, `第 ${level.level} 层倍数（该夹具无 4 连、不触发条纹）`);
     assertEqual(detail.gained, detail.base * detail.multiplier + detail.bonus, `第 ${level.level} 层得分`);
   });
 
   const total = result.levelScores.reduce((sum, detail) => sum + detail.gained, 0);
   assertEqual(result.scoreDelta, total, '总得分 = 各层之和');
   assertEqual(game.level.currentScore, total, '分数已记入关卡状态');
+});
+
+test('resolveBoard：4 连生成条纹的那一层按 3.5 计 1.5 倍（Step 7 接入）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    for (const c of [1, 2, 3, 4]) b[4][c].color = 3; // 第 4 行 4 连 → 生成横向条纹
+  });
+
+  const result = resolveBoard(game);
+  const first = result.levelScores[0];
+
+  assertEqual(result.levels[0].cleared.length, 3, '4 连只消除 3 格');
+  assertEqual(first.base, 3 * SCORE.basePerCell, '基础分 30');
+  assertEqual(first.multiplier, SCORE.specialMultipliers.striped, '条纹糖果倍数 1.5');
+  assertEqual(first.bonus, 0, '第 1 层无连消加分');
+  assertEqual(first.gained, 45, '30 × 1.5');
+  assertEqual(
+    result.levels[0].board.flat().filter((cell) => cell.type === CELL_TYPE.STRIPED).length,
+    1,
+    '第 1 层后棋盘上留下 1 颗条纹（后续级联可能再生成）'
+  );
+});
+
+test('resolveBoard：3 连触发已有条纹的那一层也按 1.5 倍计（4.3.8 + 3.5）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    for (const c of [1, 2, 3]) b[3][c].color = 3; // 3 连，其中 (3,2) 是横条纹
+    b[3][2].type = CELL_TYPE.STRIPED;
+    b[3][2].direction = DIRECTION.H;
+  });
+
+  const result = resolveBoard(game);
+  const first = result.levelScores[0];
+
+  assertEqual(result.levels[0].cleared.length, SIZE, '条纹激活 → 清除整行 8 格');
+  assertEqual(first.base, SIZE * SCORE.basePerCell, '基础分 80');
+  assertEqual(first.multiplier, SCORE.specialMultipliers.striped, '条纹触发倍数 1.5');
+  assertEqual(first.gained, 120, '80 × 1.5');
 });
 
 test('getState：返回不可变快照，与内部状态互相隔离', () => {

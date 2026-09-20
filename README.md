@@ -5,7 +5,7 @@
 ## 当前阶段
 
 第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）。
-当前进度：Step 6 死局检测与重排已完成（宪法 v1.5；`app.js` 已拆为 `app.js` + `render.js` + `hud.js` + `input.js` + `timeline.js`；3.8 四条重排约束逐条落地，死局自动重排并在界面上给出提示）。第一阶段（核心可玩版）功能已齐，下一步为 Step 6.1 纯重构（拆 `board.js`），详见 `PROGRESS.md`。
+当前进度：Step 7 条纹糖果已完成（宪法 v1.7；4 连生成横/竖条纹、激活消整行/列、按 3.5 计 1.5 倍；糖果外观按用户批准的程序化方案重做，并拆出 `candy.js`；`app.js` 已拆为 `app.js` + `render.js` + `candy.js` + `hud.js` + `input.js` + `timeline.js`）。第二阶段进行中，下一步为 Step 8（包装糖果），详见 `PROGRESS.md`。
 
 ## 快速开始
 
@@ -50,8 +50,9 @@ node tests/board.test.js     # 单文件直接运行
 
 - `index.html`、`styles.css`：页面结构与移动端样式。
 - `config.js`：全局配置，唯一允许存放可调数值/常量字符串的文件。
-- `game.js`、`board.js`、`match.js`、`special.js`、`score.js`、`obstacles.js`、`level.js`：游戏逻辑模块（纯逻辑，不碰 DOM）。
-- `app.js`：Canvas 渲染与触摸交互，唯一允许操作 DOM / Canvas / `localStorage` 的模块。
+- `game.js`、`board.js`、`shuffle.js`、`match.js`、`special.js`、`score.js`、`obstacles.js`、`level.js`：游戏逻辑模块（纯逻辑，不碰 DOM）。
+- `app.js`：应用编排（视图状态、调用游戏逻辑、动画起播），唯一允许操作 `localStorage` 的模块。
+- `render.js`、`candy.js`、`hud.js`、`input.js`、`timeline.js`：界面层 —— 几何与每帧绘制、糖果外观与精灵烘焙、HUD 与结束面板、手势识别、动画时间线。只接收「场景描述」数据，不读游戏状态、不碰存档。
 - `tests/`：自动化测试。
 - `package.json`：**无任何依赖**，只有 `"type": "module"` 与两个 script —— `test` = `node tests/run-all.js`、`serve` = `python -m http.server 8000`（见 D004）。零依赖是硬约束，禁止往里加 `dependencies`。
 

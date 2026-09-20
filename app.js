@@ -8,7 +8,7 @@
 //   - 5.4：逻辑先全部算完（game.trySwap 同步结算），再按时间线播放快照 —— 动画不阻塞逻辑更新；
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
 
-import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from './config.js';
+import { CELL_TYPE, CONFIG, GOAL_TYPE, STORAGE_KEYS } from './config.js';
 import { createGame, getState as getGameState, trySwap as gameTrySwap } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
@@ -232,11 +232,14 @@ function attemptSwap(a, b) {
   if (result.resolve.capped) {
     log('warn', `级联达到层数上限（${result.cascades} 层）后强制结束，请检查随机源或色数设置`);
   }
+  // Step 7 的日志摘要：本步触发了多少颗条纹糖果（4.3.8），配合上面的形状列表即可核对 3.2 的生成
+  const stripedTriggered = result.resolve.cleared.filter((cell) => cell.type === CELL_TYPE.STRIPED).length;
   log(
     'info',
     `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${firstLevelGroups.length} 组匹配` +
       `[${firstLevelGroups.map((group) => group.shape).join(', ')}]，级联 ${result.cascades} 层，` +
       `共消除 ${result.resolve.cleared.length} 格，新生成 ${result.resolve.spawned.length} 格，` +
+      `触发条纹 ${stripedTriggered}，` +
       `本步 +${result.scoreDelta} 分（本局 ${result.scoreDelta + scoreBefore}），剩余步数 ${result.stepsLeft}`
   );
 

@@ -19,6 +19,8 @@
 
 import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from './config.js';
 import { findAllMatchGroups, findMatches } from './match.js';
+// Step 7：4 连生成条纹糖果、被消除时优先激活（3.2 / 4.3.8）
+import { activateSpecial, createSpecial } from './special.js';
 // Step 6.1 纯重构：可移动性/死局检测/重排移到 shuffle.js（职责分离）；
 // createBoard 仍需 hasPossibleMove 校验「开局至少有一个可行交换」，故此处单向依赖 shuffle.js。
 import { hasPossibleMove } from './shuffle.js';
@@ -163,7 +165,16 @@ export function resolveCascades(board, colorCount, options = {}) {
     const groups = findAllMatchGroups(board);
     if (groups.length === 0) break;
 
-    const removed = clearGroups(board, groups);
+    // 3.2：先按形状在落点生成特殊元素（Step 7 只生成条纹糖果）。
+    // 这些格子**本层不参与消除**——这正是「4 连留下一颗条纹糖果」的实现方式。
+    const spawnKeys = new Set();
+    for (const group of groups) {
+      const pos = createSpecial(board, group);
+      if (pos) spawnKeys.add(posKey(pos.r, pos.c));
+    }
+
+    // 4.3.8：特殊元素在消除时优先激活其效果（可链式），再进入下落与级联
+    const removed = clearCells(board, collectClearKeys(board, groups, spawnKeys));
     const moves = applyGravity(board);
     const created = refillBoard(board, colorCount, rng);
 
@@ -175,20 +186,51 @@ export function resolveCascades(board, colorCount, options = {}) {
   return { cascades: levels.length, levels, cleared, spawned, capped: levels.length >= maxLevels };
 }
 
-/** 把匹配组的格子置空并返回被清除格子的快照（不保留棋盘内的活动引用，见 15 节）。 */
-function clearGroups(board, groups) {
-  const removed = [];
+/**
+ * 本层要清除的格子集合 = 匹配组 ∪ 组内特殊元素激活波及的格子（链式，直到没有新的）。
+ * 本层新生成的特殊元素（spawnKeys）不参与清除，也不会立刻自我引爆。
+ */
+function collectClearKeys(board, groups, spawnKeys) {
+  const keys = new Set();
+  const queue = [];
   for (const group of groups) {
     for (const pos of group.cells) {
-      const cell = board[pos.r][pos.c];
-      if (!carriesAnimal(cell)) continue;
-      removed.push({ ...cell });
-      // 保留 obstacle/obstacleLayers（3.4：冰块本身不会因动物被消除而消失），
-      // 特殊元素的 type 复位属 Step 7 的激活流程，本步只做普通消除。
-      cell.color = null;
-      cell.type = CELL_TYPE.NORMAL;
-      cell.direction = null;
+      const key = posKey(pos.r, pos.c);
+      if (spawnKeys.has(key) || keys.has(key)) continue;
+      keys.add(key);
+      queue.push(pos);
     }
+  }
+
+  while (queue.length > 0) {
+    const pos = queue.shift();
+    const cell = board[pos.r]?.[pos.c];
+    if (!cell || cell.type === CELL_TYPE.NORMAL) continue; // 普通格没有额外波及
+    for (const hit of activateSpecial(board, pos.r, pos.c)) {
+      const key = posKey(hit.r, hit.c);
+      if (keys.has(key) || spawnKeys.has(key)) continue;
+      keys.add(key);
+      queue.push(hit);
+    }
+  }
+  return keys;
+}
+
+/** 按位置集合清除格子，返回被清除格子的快照（不保留棋盘内的活动引用，见 15 节）。 */
+function clearCells(board, keys) {
+  const removed = [];
+  for (const key of keys) {
+    const comma = key.indexOf(',');
+    const r = Number(key.slice(0, comma));
+    const c = Number(key.slice(comma + 1));
+    const cell = board[r]?.[c];
+    if (!carriesAnimal(cell)) continue;
+    // 快照保留 type/direction：上层据此判断本层是否触发了特殊元素（3.5 的倍数）
+    removed.push({ ...cell });
+    // 保留 obstacle/obstacleLayers（3.4：冰块本身不会因动物被消除而消失）
+    cell.color = null;
+    cell.type = CELL_TYPE.NORMAL;
+    cell.direction = null;
   }
   return removed;
 }

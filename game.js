@@ -10,7 +10,7 @@
 //   （无效交换回退且不扣步数、只有有效交换才扣步数）与 3.5 的计分接入。
 // 【Step 6】死局检测与重排（3.8）；【Step 7-10】特殊元素与组合（3.2/3.3）。
 
-import { CONFIG, GOAL_TYPE } from './config.js';
+import { CELL_TYPE, CONFIG, GOAL_TYPE } from './config.js';
 import {
   cloneBoard,
   createBoard,
@@ -19,7 +19,7 @@ import {
 } from './board.js';
 // Step 6.1：可移动性/死局检测/重排来自 shuffle.js（与 board.js 的棋盘机制分离）
 import { hasPossibleMove, isCellMovable, shuffleBoard } from './shuffle.js';
-import { findAllMatchGroups } from './match.js';
+import { findAllMatchGroups, matchShapeToSpecial } from './match.js';
 import {
   calcBaseScore,
   calcCascadeBonus,
@@ -94,7 +94,8 @@ export function trySwap(state, a, b) {
 
 /**
  * 4.2：resolveBoard(state) —— 消除 → 下落 → 填充 → 级联，并把分数结算进 level.currentScore。
- * 计分按 3.5：每层 base（动物数 × 10）× 倍数 + 连消加分；本步无特殊元素，倍数恒为 1。
+ * 计分按 3.5：每层 base（动物数 × 10）× 倍数 + 连消加分；倍数由 multiplierForLevel 判定
+ * （Step 7 起：本层生成或触发条纹糖果时为 1.5，其余为 1）。
  * 返回 ResolveResult：
  *   cascades / levels / cleared / spawned / capped（来自 board.resolveCascades）
  *   + scoreDelta（本次结算总分）+ levelScores（逐层明细，供 UI 与测试核对公式）
@@ -107,8 +108,7 @@ export function resolveBoard(state) {
   const levelScores = [];
   for (const level of result.levels) {
     const base = calcBaseScore(level.cleared);
-    // Step 4 只会产生普通消除；特殊元素接入后这里改为按 cell.type / 组合类型取值（3.5）
-    const multiplier = calcSpecialMultiplier('normal', null);
+    const multiplier = multiplierForLevel(level); // 3.5：条纹糖果（4 消/触发）= 1.5
     const bonus = calcCascadeBonus(level.level, base);
     const gained = calcFinalScore(base, multiplier, bonus);
     scoreDelta += gained;
@@ -138,6 +138,33 @@ function ensurePlayable(state) {
     after: cloneBoard(state.board)
   };
 }
+
+/**
+ * 3.5：本层特效倍数。两种情形都算「条纹糖果（4 消）」：
+ *   1. 本层生成了条纹 —— 匹配组形状经 4.2 的 matchShapeToSpecial 映射为 striped（即 4 连直线）；
+ *   2. 本层触发了已存在的条纹 —— 被消除的格子里含 type !== normal（4.3.8 优先激活特效）。
+ * 同时出现多种特效时按 3.2 的优先级取值（魔力鸟 > 包装糖果 > 条纹糖果）；
+ * 组合效果（3.3）的倍数由 Step 10 传入 comboType，此处不预实现。
+ */
+function multiplierForLevel(level) {
+  const types = [];
+  for (const cell of level.cleared) {
+    if (cell.type !== CELL_TYPE.NORMAL) types.push(cell.type);
+  }
+  for (const group of level.groups) {
+    const type = matchShapeToSpecial(group.shape, group.direction);
+    if (type) types.push(type);
+  }
+  if (types.length === 0) return calcSpecialMultiplier(CELL_TYPE.NORMAL, null);
+
+  for (const type of PRIORITY) {
+    if (types.includes(type)) return calcSpecialMultiplier(type, null);
+  }
+  return 1;
+}
+
+/** 3.2 生成优先级：魔力鸟 > 包装糖果 > 条纹糖果（Step 8/9 会让后两者真正出现）。 */
+const PRIORITY = [CELL_TYPE.MAGIC, CELL_TYPE.WRAPPED, CELL_TYPE.STRIPED];
 
 /**
  * 4.2：getState(state) —— 返回不可变快照，供 UI 读取（深拷贝 + 冻结，杜绝外部改写内部状态）。
