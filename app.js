@@ -1,14 +1,16 @@
 // app.js — Canvas 渲染、触摸输入、动画。本项目唯一允许操作 DOM / Canvas / localStorage 的模块。
 // 见 AGENTS.md 2.3 / 9 节。
 //
-// 【Step 2 · ROADMAP】棋盘来自 board.js 的真实 cell[][]，并实现滑动交换 + 3 连识别：
-//   - 允许：滑动/点击交换、无效交换自动回退、识别匹配组并高亮；
-//   - 禁止（Step 2）：消除动画、计分、special.js 逻辑；步数系统属 Step 4，本步无计数器。
-//   - 交换编排（快照 → 交换 → 检测 → 回退）暂放本文件：4.2 的 game.trySwap 属 Step 4，
-//     而 Step 2 不允许修改 game.js，Step 4 会把这段编排迁移过去。
+// 【Step 3 · ROADMAP】在 Step 2 的交换之上接入完整消除循环：
+//   - 逻辑：交换有效 → board.resolveCascades 一次性算完整条级联（消除 → 下落 → 填充 → 再消除）；
+//   - 渲染：按 ANIMATION_CONFIG 的 clearDuration / cascadeGap 回放每层快照（5.4：先更新状态、
+//     再播放动画；本步只做「分层播放」，真正的位移补间属 Step 5）；
+//   - 仍禁止（Step 3）：特殊元素生成、计分与步数消耗、死局检测与重排。
+//   - 交换与级联编排暂放本文件：4.2 的 game.trySwap / resolveBoard 属 Step 4，
+//     而 Step 3 不允许修改 game.js，Step 4 会把这段编排迁移过去。
 
 import { CONFIG } from './config.js';
-import { cloneBoard, createBoard, isCellMovable, swapCells } from './board.js';
+import { cloneBoard, createBoard, isCellMovable, resolveCascades, swapCells } from './board.js';
 import { findAllMatchGroups } from './match.js';
 
 // ---------------------------------------------------------------------------
@@ -44,9 +46,12 @@ const PALETTE = BASE_COLORS.map((base) => ({
 const view = {
   canvas: null,
   ctx: null,
-  board: null, // board.js 的 cell[][]（AGENTS.md 4.1 唯一真相源）
+  board: null, // board.js 的 cell[][]（AGENTS.md 4.1 唯一真相源），始终是「逻辑上的最终状态」
+  renderBoard: null, // 级联回放期间要绘制的历史快照；null 表示绘制 view.board
   matched: [], // 最近一次有效交换识别出的匹配格（绘制高亮用，不参与规则）
   selected: null, // 点击两次交换的后备方案中已选中的格子
+  playback: false, // 级联回放中：期间锁定输入，避免逻辑状态与画面错位
+  playbackTimer: 0,
   sizePx: 0, // Canvas 的 CSS 像素边长（正方形）
   dpr: 1,
   frameRequest: 0
@@ -142,14 +147,14 @@ function scheduleLayout() {
 
 /**
  * 绘制整块棋盘（先画糖果，再画匹配高亮与选中态）。
+ * board 默认取「当前应显示的画面」：级联回放期间是历史快照，否则是最终逻辑状态。
  * 绘制/路径调用预算（保守计法，fill + arc + stroke）：棋盘底 1 + 每格 2
  * = 129 次，再加高亮环（匹配格数 + 选中 1，通常 < 10）仍远低于
  * AGENTS.md 15 节「单帧绘制调用不超过 200 次」。
  * 光晕只用径向渐变实现，不使用阴影模糊（REFERENCES.md §3.5 性能红线第 1 条）。
  */
-function drawBoard() {
+function drawBoard(board = view.renderBoard ?? view.board, matched = view.matched) {
   const ctx = view.ctx;
-  const board = view.board;
   const rows = CONFIG.BOARD_SIZE;
   const cols = CONFIG.BOARD_SIZE;
   const size = view.sizePx;
@@ -187,7 +192,7 @@ function drawBoard() {
     }
   }
 
-  for (const pos of view.matched) {
+  for (const pos of matched) {
     drawRing(ctx, pos, cell * MATCH_RING_RATIO, cell * 0.09, MATCH_RING_COLOR);
   }
   if (view.selected) {
@@ -259,6 +264,7 @@ function isCompatibilityMouseEvent() {
 }
 
 function beginGesture(clientX, clientY) {
+  if (view.playback) return; // 级联回放中不接受新输入（画面与逻辑状态错位会误导玩家）
   gesture.startX = clientX;
   gesture.startY = clientY;
   gesture.startCell = cellAt(clientX, clientY);
@@ -299,6 +305,7 @@ function cellAt(clientX, clientY) {
 
 /** 后备交互：第一次点击选中，第二次点相邻格交换；点同格取消，点远处改选。 */
 function handleTap(cell) {
+  if (view.playback) return;
   if (!isCellMovable(view.board, cell.r, cell.c)) {
     view.selected = null;
     drawBoard();
@@ -324,12 +331,14 @@ function handleTap(cell) {
 }
 
 /**
- * 交换编排：快照 → 交换 → 匹配检测 → 无效则回退。
+ * 交换编排：快照 → 交换 → 匹配检测 → 无效则回退 → 有效则结算整条级联并回放。
  * 4.3.1/4.3.2：只有相邻格可交换；交换后无匹配必须回退。步数系统属 Step 4，
  * 本步没有计数器，因此「无效交换不扣步数」自然成立。
+ * 5.4：先把逻辑全部算完（resolveCascades 同步执行），再按配置时长回放每层快照。
  */
 function attemptSwap(a, b) {
   const board = view.board;
+  if (view.playback) return;
   if (!isInsideBoard(board, b.r, b.c)) {
     log('info', `滑动超出棋盘边界，忽略：(${a.r},${a.c}) → (${b.r},${b.c})`);
     return;
@@ -351,15 +360,63 @@ function attemptSwap(a, b) {
     view.board = snapshot; // 4.3.2：无效交换回退到交换前
     view.matched = [];
     log('info', `交换无效，已回退：(${a.r},${a.c}) ↔ (${b.r},${b.c})`);
-  } else {
-    view.matched = groups.flatMap((group) => group.cells);
-    log(
-      'info',
-      `交换有效：识别到 ${groups.length} 组匹配 [${groups.map((group) => group.shape).join(', ')}]，` +
-        `共 ${view.matched.length} 格（消除属 Step 3）`
-    );
+    drawBoard();
+    return;
   }
-  drawBoard();
+
+  // 交换后的画面（带着匹配）先留作回放首帧，随后由 resolveCascades 把棋盘推进到最终状态
+  const afterSwap = cloneBoard(board);
+  view.matched = groups.flatMap((group) => group.cells);
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT);
+
+  log(
+    'info',
+    `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${groups.length} 组匹配 ` +
+      `[${groups.map((group) => group.shape).join(', ')}]，级联 ${result.cascades} 层，` +
+      `共消除 ${result.cleared.length} 格，新生成 ${result.spawned.length} 格` +
+      `（计分与步数属 Step 4）`
+  );
+  if (result.capped) {
+    log('warn', `级联达到层数上限（${result.cascades} 层）后强制结束，请检查随机源或色数设置`);
+  }
+
+  view.renderBoard = afterSwap;
+  drawBoard(afterSwap, view.matched); // 首帧：高亮本次匹配
+  startCascadePlayback(result.levels);
+}
+
+/**
+ * 分层回放级联结果（Step 5 会把这里升级为带补间的位移/消除动画）。
+ * 时间取自 ANIMATION_CONFIG：clearDuration = 高亮帧停留（即「消除动画时长」的语义），
+ * cascadeGap = 每层之间的间隔（15 节「级联间隔」）。第 0 帧已由 attemptSwap 绘出。
+ */
+function startCascadePlayback(levels) {
+  if (levels.length === 0) {
+    view.renderBoard = null;
+    view.matched = [];
+    drawBoard();
+    return;
+  }
+
+  view.playback = true;
+  let index = 0;
+
+  const showNextLevel = () => {
+    if (index >= levels.length) {
+      view.playback = false;
+      view.playbackTimer = 0;
+      view.renderBoard = null; // 回到最终逻辑状态（= 最后一层快照的内容）
+      view.matched = [];
+      drawBoard();
+      return;
+    }
+    view.renderBoard = levels[index].board;
+    drawBoard(levels[index].board, []);
+    index += 1;
+    view.playbackTimer = window.setTimeout(showNextLevel, CONFIG.ANIMATION_CONFIG.cascadeGap);
+  };
+
+  view.playbackTimer = window.setTimeout(showNextLevel, CONFIG.ANIMATION_CONFIG.clearDuration);
 }
 
 function isInsideBoard(board, r, c) {

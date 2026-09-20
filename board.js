@@ -4,15 +4,21 @@
 // 棋盘结构唯一真相源是 4.1 的 cell[][]，禁止使用二维数字数组。
 //
 // 【Step 2（ROADMAP）已实现】createBoard / swapCells / cloneBoard / isCellMovable / hasPossibleMove
+// 【Step 3（ROADMAP）已实现】applyGravity / refillBoard / resolveCascades
 // 【后续 Step 实现，本步不写】
-//   - applyGravity / refillBoard → Step 3（消除、下落、填充、级联）
-//   - shuffleBoard               → Step 6（死局检测与重排）
-// 实现思路借鉴（REFERENCES.md §2.1 Step 2，只借鉴思路、不复制代码）：
+//   - shuffleBoard → Step 6（死局检测与重排）
+//
+// 实现思路借鉴（REFERENCES.md §2.1 Step 2/3，两个参考项目均无 LICENSE，只借鉴思路、不复制代码）：
 //   - game2：生成时过滤「左边两格同色 / 上面两格同色」以杜绝初始三连；重试直到存在可行交换；
-//     无效交换通过返回原棋盘快照实现回退；相邻对只需检查「右」「下」两个方向。
+//     无效交换通过返回原棋盘快照实现回退；相邻对只需检查「右」「下」两个方向；
+//     级联用「找匹配 → 置空 → 压缩 → 补充 → 再找」的循环。
+//   - AlexKutepov 的 BoardPhysics：每列自下而上扫描、为每个空洞向上找最近的可落格；
+//     其 `FallMove { from, to }` 与本文件 MoveRecord 同构；不可承载格（canHoldChip=false）
+//     终止该列的下落查找 —— 本项目对应「纯障碍格是屏障」。该实现另有**对角下落**变体，
+//     但宪法 4.3 只规定「下落填充」，故**不采纳**对角下落（见 D015）。
 
 import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from './config.js';
-import { findMatches } from './match.js';
+import { findAllMatchGroups, findMatches } from './match.js';
 
 // 4.1：cell.color 为 null 表示空格或纯障碍。
 // 3.4 的语义差别：冰块内的动物可以移动并消除、藤蔓困住的是动物，所以这两类障碍的格子
@@ -116,6 +122,148 @@ export function hasPossibleMove(board) {
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Step 3：消除 → 下落 → 填充 → 级联
+//
+// 三个名词（与 4.1 的 color/obstacle 语义对应，见 D014）：
+//   动物格    color !== null（含冰块/藤蔓里的动物，3.4：冰块内的动物可以移动）
+//   洞 hole   color === null 且 obstacle === null：空格，需要被填充
+//   屏障      color === null 且 obstacle !== null：纯障碍（雪块/巧克力），
+//             占据格子且不下落，并把该列切成若干段（3.4「占据格子，影响下落」）
+// ---------------------------------------------------------------------------
+
+/**
+ * 4.2：applyGravity(board) —— **原地**让动物下落（3.1「消除后下落填充」），返回下落轨迹。
+ * MoveRecord = { id, from: {r,c}, to: {r,c}, color }（4.2 未给出 MoveRecord 结构，见 D015）；
+ * 只记录真正发生位移的格子，供动画使用（Step 5 按下落距离缩放时长）。
+ */
+export function applyGravity(board) {
+  if (!board || board.length === 0) return [];
+  const rows = board.length;
+  const cols = board[0].length;
+  const moves = [];
+
+  for (let c = 0; c < cols; c += 1) {
+    let segmentEnd = rows - 1;
+    // r 递减到 -1 是为了让「列顶端」也被当作一条边界，从而统一处理最后一段
+    for (let r = rows - 1; r >= -1; r -= 1) {
+      if (r >= 0 && !isBarrierCell(board[r][c])) continue;
+      if (segmentEnd > r) compactSegment(board, c, r + 1, segmentEnd, moves);
+      segmentEnd = r - 1;
+    }
+  }
+
+  return moves;
+}
+
+/**
+ * 4.2：refillBoard(board, colorCount, rng?) —— **原地**填充所有空洞，返回新生成的格子（4.2）。
+ * 新格子的颜色完全随机（不规避匹配）：这正是级联的来源（3.1「级联检测直到无新匹配」）。
+ * rng 为可选随机源（默认 Math.random），只用于测试注入确定性序列，见 D015。
+ */
+export function refillBoard(board, colorCount, rng = Math.random) {
+  const spawned = [];
+  if (!board || board.length === 0) return spawned;
+  const rows = board.length;
+  const cols = board[0].length;
+
+  for (let c = 0; c < cols; c += 1) {
+    for (let r = 0; r < rows; r += 1) {
+      if (!isHole(board[r][c])) continue;
+      const cell = makeCell(randomColor(colorCount, rng));
+      board[r][c] = cell;
+      spawned.push(cell);
+    }
+  }
+
+  return spawned;
+}
+
+/**
+ * Step 3 追加导出（不在 4.2 的 board.js 清单内，见 D015）：
+ * resolveCascades(board, colorCount, options?) —— 反复「消除 → 下落 → 填充」直到无新匹配。
+ * 同步执行完整逻辑（5.4：先更新状态，再播放动画），把每层结算后的棋盘快照一并返回，供 UI 回放。
+ *
+ * 返回：{
+ *   cascades  级联层数（第 1 层 = 本次消除的第一波；无匹配时为 0）
+ *   levels    每层 { level, groups, cleared, moves, spawned, board(快照) }
+ *   cleared   展平后的被消除格子快照（含 color，供 Step 4 计分）
+ *   spawned   展平后的新生成格子
+ *   capped    是否触发了层数上限（3.8「禁止无限重试」的同类保护）
+ * }
+ * 层数上限取棋盘格数：任何真实级联都远达不到（每层至少消除 3 格），因此它是一个
+ * 宽松但确定的终止保证；4.2 未定义该上限，故不新增配置键（见 D015）。
+ */
+export function resolveCascades(board, colorCount, options = {}) {
+  const rng = typeof options.rng === 'function' ? options.rng : Math.random;
+  const rows = board.length;
+  const cols = rows > 0 ? board[0].length : 0;
+  const maxLevels = Math.max(1, rows * cols);
+
+  const levels = [];
+  const cleared = [];
+  const spawned = [];
+
+  for (let level = 1; level <= maxLevels; level += 1) {
+    const groups = findAllMatchGroups(board);
+    if (groups.length === 0) break;
+
+    const removed = clearGroups(board, groups);
+    const moves = applyGravity(board);
+    const created = refillBoard(board, colorCount, rng);
+
+    cleared.push(...removed);
+    spawned.push(...created);
+    levels.push({ level, groups, cleared: removed, moves, spawned: created, board: cloneBoard(board) });
+  }
+
+  return { cascades: levels.length, levels, cleared, spawned, capped: levels.length >= maxLevels };
+}
+
+/** 把匹配组的格子置空并返回被清除格子的快照（不保留棋盘内的活动引用，见 15 节）。 */
+function clearGroups(board, groups) {
+  const removed = [];
+  for (const group of groups) {
+    for (const pos of group.cells) {
+      const cell = board[pos.r][pos.c];
+      if (!carriesAnimal(cell)) continue;
+      removed.push({ ...cell });
+      // 保留 obstacle/obstacleLayers（3.4：冰块本身不会因动物被消除而消失），
+      // 特殊元素的 type 复位属 Step 7 的激活流程，本步只做普通消除。
+      cell.color = null;
+      cell.type = CELL_TYPE.NORMAL;
+      cell.direction = null;
+    }
+  }
+  return removed;
+}
+
+/** 在一段（两根屏障之间）内把动物压到底部，并记录位移。 */
+function compactSegment(board, c, start, end, moves) {
+  let write = end;
+  for (let r = end; r >= start; r -= 1) {
+    const cell = board[r][c];
+    if (!carriesAnimal(cell)) continue; // 空洞：跳过，等上面的动物压下来
+    if (write !== r) {
+      board[write][c] = cell;
+      board[r][c] = makeCell(null);
+      moves.push({ id: cell.id, from: { r, c }, to: { r: write, c }, color: cell.color });
+    }
+    write -= 1;
+  }
+  for (let r = write; r >= start; r -= 1) board[r][c] = makeCell(null);
+}
+
+function randomColor(colorCount, rng) {
+  const value = Number(rng());
+  const index = Math.floor((Number.isFinite(value) ? value : 0) * colorCount);
+  return Math.min(Math.max(index, 0), colorCount - 1);
+}
+
+const carriesAnimal = (cell) => Boolean(cell) && cell.color !== null && cell.color !== undefined;
+const isHole = (cell) => Boolean(cell) && !carriesAnimal(cell) && cell.obstacle === null;
+const isBarrierCell = (cell) => Boolean(cell) && !carriesAnimal(cell) && cell.obstacle !== null;
 
 // ---------------------------------------------------------------------------
 // 内部实现

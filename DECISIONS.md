@@ -6,6 +6,25 @@
 
 ---
 
+## D015：Step 3 的消除循环落点、契约扩展与可测性
+
+- 日期：2026-09-19
+- 背景：Step 3 要实现「消除 → 下落 → 填充 → 级联」，但宪法 4.2 把「整条消除循环」放在了 `game.js` 的 `resolveBoard`（Step 4 才允许改 `game.js`），而 Step 3 的验收又要求 `tests/integration.test.js` 能断言**最终棋盘与级联层数** —— 循环若写在 `app.js`，集成测试就无法导入（`app.js` 依赖 DOM）。此外有若干 4.2 未定义的细节必须现在定下来。
+- 决策：
+  1. **消除循环落在 `board.js`**，新增导出 `resolveCascades(board, colorCount, options?)`（4.2 的 board.js 清单里没有它，属**契约扩展**，在此登记）。理由：Step 3 不许改 `game.js`；`app.js` 无法被 Node 测试；而 `board.js` 是棋盘机制的自然归属。Step 4 的 `game.resolveBoard` 将**在其上叠加**计分、步数、状态快照，而不是重写一遍循环（因此 `resolveCascades` 不是临时过渡代码，而是长期底层入口）。
+  2. **给 `refillBoard` / `resolveCascades` 增加可选的 `rng` 参数**（默认 `Math.random`），用于测试注入确定性随机源。4.2 的签名未包含该参数，属**契约扩展**。依据：参考项目 game2 的 `createBoard(rows, cols, colors, seed)` 与 `makeRandomGem(colors, rng = Math.random)` 同样支持注入随机源，是「可测试性」的通行做法。副作用：`options.rng` 使「级联层数」这类断言可以写成确定值，而不是「跑出来多少算多少」。
+  3. **级联层数上限 = 棋盘格数**（8×8 → 64 层），用于「禁止无限重试」的同类保护。4.2 未定义该上限，而**新增配置键必须同步宪法附录 B（需批准）**，因此本步不复用也不新增配置项，取一个由棋盘尺寸导出的、任何真实级联都远达不到的宽松上界；`capped` 标志返回给调用方，`app.js` 会 `log('warn')`。
+  4. **不采纳参考实现的对角下落**：AlexKutepov 的 `BoardPhysics` 除直落外还有 `calculateDiagonalFalls`（正上方无格子时改从斜上方落）。宪法 4.3 只规定「下落填充」，故本项目只做直落，`REFERENCES.md` 的该条借鉴要点在此**明确不采纳**。
+  5. **障碍物在重力下的语义（本步暂定，Step 11/13 定稿）**：动物格 = `color !== null`（含冰块/藤蔓里的动物，3.4「冰块内的动物可以移动并消除」）；空洞 = `color === null && obstacle === null`；**纯障碍格（雪块/巧克力）= 屏障**，不下落、不被穿越，并把该列切成若干段分别压缩。依据：3.4「障碍物……占据格子，影响下落」+ 参考实现把不可承载格（`canHoldChip=false`）当作下落查找的终点。**未决项**：藤蔓中的动物在重力下是否跟随下落（3.4 只说了「不能移动」）留给 Step 13。
+  6. **清除时保留 `obstacle`/`obstacleLayers`，只把 `color` 置空，并复位 `type`/`direction`**：3.4 规定冰块不因里面的动物被消除而消失；而空格必须保持 4.1「color 为 null 表示空格或纯障碍」的不变式，不能留下「无颜色却仍是条纹/包装」的格子。特殊元素的**激活**流程属 Step 7，届时在清除前扩展。
+  7. **`app.js` 的分层回放让时间语义落到既有配置键上**：交换后的高亮帧停留 `ANIMATION_CONFIG.clearDuration`（该键的语义就是「消除动画时长」），每层级联之间间隔 `ANIMATION_CONFIG.cascadeGap`（键的语义就是「级联间隔」）；`fallDuration` 暂不使用，留给 Step 5 的位移补间。逻辑在 `resolveCascades` 中**同步算完**，回放只画历史快照，符合 5.4「先更新状态，再播放动画」。
+  8. **回放期间锁定输入**（`view.playback`）：否则玩家能在画面尚未追上逻辑时继续交换，导致所见与状态错位。
+  9. **行数超限登记**：`app.js` 458 行、`board.js` 355 行，均超出宪法 6 节「模块不超过 300 行」的目标。`app.js` 的拆分已获用户批准、定于 Step 5 前执行；`board.js` 若同样要拆，需要新增 2.2 节未登记的文件，**属待批准事项**（建议与 Step 5 的 `app.js` 拆分一并处理，例如把下落/填充抽到 `gravity.js`）。
+- 影响：`board.js`、`app.js`、`tests/integration.test.js`。`match.js`、`config.js` 本步**未改动**（Step 3 允许但无必要）。
+- 替代方案：把循环写进 `app.js`（否决：集成测试无法导入 DOM 模块，等于放弃 Step 3 的自动化验收）；把循环写进 `game.js`（否决：Step 3 范围不含 `game.js`，跨 Step 修改）；新增 `MAX_CASCADE_LEVELS` 配置键（否决：需先改附录 B）；不做 `rng` 注入、改为断言随机结果（否决：级联层数不可断言，测试会变成「跑出来是多少就是多少」）；采纳对角下落（否决：宪法 4.3 未规定，属自行发明规则）。
+
+---
+
 ## D014：Step 2 的规则空白与实现取舍（含参考项目冲突一处）
 
 - 日期：2026-09-19
