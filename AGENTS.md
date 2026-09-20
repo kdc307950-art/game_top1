@@ -1,9 +1,19 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.4
+> 版本：v1.5
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.4 → v1.5 关键变更）
+
+本次修订把 Step 5 的第二次拆分登记入目录与边界，并为 Step 6 的死局重排补全契约。不改动任何游戏规则数值。
+
+1. **2.2 / 2.3 登记 `hud.js` 与 `timeline.js`**：`app.js` 进一步瘦身为「编排 + 存档 + 日志」；信息层（HUD、结束面板、重排提示）移入 `hud.js`，动画时间线调度与 rAF 回放移入 `timeline.js`，两者均只接收数据、不读游戏状态、不碰 `localStorage`。
+2. **4.2 扩展 `shuffleBoard`**：改为 `shuffleBoard(board, options?: { rng?: () => number, maxTries?: number }): boolean`，允许注入随机源（确定性测试）与覆盖尝试上限（3.8 的默认值取附录 B 的 `shuffleMaxTries`）。
+3. **4.2 补 `ResolveResult.deadlock`**：新增 `DeadlockResolution = { tries, shuffled, before, after }`，让「消除后检测到死局 → 重排」的过程与前后快照对 UI 可见（3.8 要求每次消除填充后检测）。
 
 ---
 
@@ -136,9 +146,11 @@
   score.js         # 计分系统、连消倍数
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
-  app.js           # 应用编排：视图状态、动画调度、调用游戏逻辑、localStorage 读写
-  render.js         # Canvas 绘制与几何：画布尺寸/DPR、棋盘与 HUD 布局、6 色形状、结束面板
-  input.js          # 触摸/鼠标手势识别与视口守卫：只产出手势，不碰游戏状态
+  app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播、localStorage 读写
+  render.js        # 棋盘层绘制与几何：画布尺寸/DPR、棋盘布局、6 色形状、离屏烘焙
+  hud.js           # 信息层绘制：HUD（分数/步数/最高分）、结束面板、重排提示
+  input.js         # 触摸/鼠标手势识别与视口守卫：只产出手势，不碰游戏状态
+  timeline.js      # 动画时间线调度与 rAF 回放：只接收阶段列表与回调
   tests/
     assert.js
     run-all.js
@@ -172,9 +184,11 @@
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
 - `level.js`：关卡配置、目标追踪、步数消耗、三星判定。
-- `app.js`：应用编排——持有视图状态、调度动画时间线、调用游戏逻辑，并**唯一**允许读写 `localStorage`。
-- `render.js`：Canvas 绘制与几何计算（画布尺寸与 DPR、棋盘与 HUD 布局、形状与配色、结束面板）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档。
+- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画，并**唯一**允许读写 `localStorage`。
+- `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、形状与配色、静态图层与精灵的离屏烘焙）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量。
+- `hud.js`：信息层绘制（HUD 三个信息格、结束面板、重排提示）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
 - `input.js`：触摸与鼠标手势识别（滑动阈值、主轴锁定、视口守卫），只产出 `{ kind, x0, y0, x1, y1 }` 手势事件；不认识棋盘、不碰游戏状态与存档。
+- `timeline.js`：动画时间线调度（阶段划分、时长计算、rAF 回放）。只接收阶段列表与每帧/结束回调；不读游戏状态、不碰存档、不实现游戏规则。
 - `index.html`：只放结构、viewport、引入脚本。
 - `styles.css`：移动端布局、禁止滚动、Canvas 样式。
 - `tests/`：各模块的算法单元测试与集成测试。
@@ -348,7 +362,17 @@ ResolveResult = {
   spawned: Cell[],
   capped: boolean,                 // 是否触发级联层数上限（上限 = 棋盘格数，见 ROADMAP Step 3）
   scoreDelta: number,
-  levelScores: LevelScore[]        // 逐层计分明细，供 UI 与测试核对 3.5 公式
+  levelScores: LevelScore[],       // 逐层计分明细，供 UI 与测试核对 3.5 公式
+  deadlock: DeadlockResolution | null  // 消除填充后检测到无可行交换时的处理结果（v1.5 补）
+}
+
+// v1.5 补：3.8 要求「每次消除和填充完成后」检测死局；这里把检测与重排的结果对 UI 公开，
+// before/after 供重排动画使用（UI 按 cell.id 匹配即可得到每格的起止位置，无需额外轨迹字段）。
+DeadlockResolution = {
+  tries: number,      // 实际尝试的重排次数
+  shuffled: boolean,  // 是否成功重排（false 表示超过上限，调用方应进入结束流程）
+  before: Board,      // 重排前快照
+  after: Board        // 重排后快照
 }
 
 ResolveLevel = { level: number, groups: MatchGroup[], cleared: Cell[], moves: MoveRecord[], spawned: Cell[], board: Board }
@@ -370,7 +394,8 @@ GameSnapshot = {
 - `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子）
 - `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
 - `hasPossibleMove(board: Board): boolean`
-- `shuffleBoard(board: Board): boolean`（返回是否成功）
+- `shuffleBoard(board: Board, options?: { rng?: () => number, maxTries?: number }): boolean`
+  - 3.8 的重排：只重排普通动物格（`color !== null && obstacle === null`），**不改变障碍物布局**；重排后不得存在初始三连且必须存在可行交换；成功返回 `true`，超过尝试上限返回 `false`（由调用方进入结束流程）。`maxTries` 缺省取附录 B 的 `shuffleMaxTries`。
 - `isCellMovable(board: Board, r: number, c: number): boolean`
 - `cloneBoard(board: Board): Board`（深拷贝，供测试与回退使用）
 
@@ -668,6 +693,7 @@ node tests/integration.test.js
 | v1.2 | 2026-09-18 | Agent  | 补全 game.js 接口与 4.4 关卡契约、与 ROADMAP 双向引用、清理附录 B 残渣 | 4.2、4.4、12、17、附录 B |
 | v1.3 | 2026-09-18 | Agent  | 补齐 REFERENCES.md 的宪法地位（六处）、2.2 节目录补 package.json 与 assets/、第 0 节优先级纳入 REFERENCES.md、附录 B 补 9 键并新增 B-2 字符串常量表、通篇移除不可见字符与格式缺陷 | 2.2、第 0 节、第 8 节、8.1、8.3、12、17、附录 B、附录 B-2、修订记录 |
 | v1.4 | 2026-09-19 | Agent  | 把 Step 2-4 的契约扩展与规则口径写入宪法：4.2 补齐 GameState/SwapResult/ResolveResult/ResolveLevel/LevelScore/GameSnapshot/MoveRecord 结构并登记 `options.rng`、`board.resolveCascades`、`level.consumeStep`；3.5 明确连消自第 2 层起计；2.2/2.3 登记 Step 5 的 `render.js`/`input.js` 拆分 | 2.2、2.3、3.5、4.2、11 |
+| v1.5 | 2026-09-19 | Agent  | 登记 Step 5 的第二次拆分（`hud.js` 信息层、`timeline.js` 时间线）并写明边界；4.2 扩展 `shuffleBoard` 增加 `rng`/`maxTries` 选项、补 `ResolveResult.deadlock`（`DeadlockResolution`）以支撑 3.8 的死局检测与重排 | 2.2、2.3、4.2、11 |
 
 ---
 

@@ -123,6 +123,68 @@ export function hasPossibleMove(board) {
   return false;
 }
 
+/**
+ * 4.2 / 3.8：shuffleBoard(board, options?) —— 重排普通动物格，满足 3.8 的四条约束：
+ *   1) 重排后不存在初始三连；2) 重排后存在至少一个有效交换；
+ *   3) **不改变障碍物布局**；4) 尝试次数不超过 maxTries（缺省取附录 B 的 shuffleMaxTries），
+ *      超限返回 false，由调用方进入结束流程（视为关卡异常）。
+ *
+ * 只重排「普通动物格」（`color !== null && obstacle === null`）：冰块/藤蔓里的动物与障碍物绑定，
+ * 一起搬动会改变障碍物与动物的对应关系与他人对障碍物的观察，故不参与重排（Step 11/13 再细化）。
+ * 重排的是**格子对象本身**（`cell.id` 随之移动），因此 UI 可以按 id 匹配出每格的起止位置做动画。
+ * options.rng 可注入随机源；options.stats 为可选诊断出参，会被写入实际尝试次数。
+ */
+export function shuffleBoard(board, options = {}) {
+  const rng = typeof options.rng === 'function' ? options.rng : Math.random;
+  const maxTries =
+    Number.isInteger(options.maxTries) && options.maxTries > 0
+      ? options.maxTries
+      : Math.max(1, CONFIG.ANIMATION_CONFIG.shuffleMaxTries);
+
+  const positions = [];
+  const pool = [];
+  for (let r = 0; r < board.length; r += 1) {
+    for (let c = 0; c < board[r].length; c += 1) {
+      const cell = board[r][c];
+      if (cell.color === null || cell.color === undefined) continue;
+      if (cell.obstacle !== null) continue; // 约束 3：不动障碍物格
+      positions.push({ r, c });
+      pool.push(cell);
+    }
+  }
+  if (pool.length < 2) return finish(options, 0, false); // 少于两格可换，重排不可能改变局面
+
+  const original = [...pool]; // 失败时用它还原，避免棋盘停在「打过乱且含三连」的中间态
+  for (let tries = 1; tries <= maxTries; tries += 1) {
+    shuffleArray(pool, rng);
+    positions.forEach((pos, index) => {
+      board[pos.r][pos.c] = pool[index];
+    });
+    if (findMatches(board).length === 0 && hasPossibleMove(board)) return finish(options, tries, true);
+  }
+  positions.forEach((pos, index) => {
+    board[pos.r][pos.c] = original[index];
+  });
+  return finish(options, maxTries, false);
+}
+
+/** Fisher–Yates；rng 取值越界时按 0 处理，保证索引始终合法。 */
+function shuffleArray(array, rng) {
+  for (let i = array.length - 1; i > 0; i -= 1) {
+    const value = Number(rng());
+    const raw = Math.floor((Number.isFinite(value) ? value : 0) * (i + 1));
+    const j = Math.min(i, Math.max(0, raw));
+    const tmp = array[i];
+    array[i] = array[j];
+    array[j] = tmp;
+  }
+}
+
+function finish(options, tries, ok) {
+  if (options.stats) options.stats.tries = tries;
+  return ok;
+}
+
 // ---------------------------------------------------------------------------
 // Step 3：消除 → 下落 → 填充 → 级联
 //

@@ -5,7 +5,7 @@
 ## 当前阶段
 
 第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）。
-当前进度：Step 5 移动端适配 + 动画打磨已完成（`app.js` 按宪法 v1.4 拆为 `app.js` + `render.js` + `input.js`；消除/下落/级联动画时长全部取自 `ANIMATION_CONFIG`；6 色改为 6 种可辨识形状以支持色盲；跟随系统「减少动效」），下一步为 Step 6 死局检测与重排，详见 `PROGRESS.md`。
+当前进度：Step 6 死局检测与重排已完成（宪法 v1.5；`app.js` 已拆为 `app.js` + `render.js` + `hud.js` + `input.js` + `timeline.js`；3.8 四条重排约束逐条落地，死局自动重排并在界面上给出提示）。第一阶段（核心可玩版）功能已齐，下一步为 Step 6.1 纯重构（拆 `board.js`），详见 `PROGRESS.md`。
 
 ## 快速开始
 

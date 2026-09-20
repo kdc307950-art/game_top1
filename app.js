@@ -1,8 +1,9 @@
 // app.js — 应用编排：视图状态、动画调度、调用游戏逻辑，并**唯一**允许读写 localStorage。
 // 见 AGENTS.md 2.2 / 2.3 / 5.4 / 15 节。
 //
-// 【Step 5 · ROADMAP】本文件按宪法 2.2 拆出 `render.js`（绘制与几何）与 `input.js`（手势与守卫）：
-//   - 本文件只负责：视图状态、动画时间线调度、交换编排、存档、日志；
+// 【Step 5 · ROADMAP】本文件按宪法 2.2/2.3 拆出四个 UI 模块，只保留编排职责：
+//   - `render.js`（棋盘层绘制与几何）、`hud.js`（HUD 与结束面板）、
+//     `input.js`（手势与视口守卫）、`timeline.js`（动画时间线调度与 rAF 回放）；
 //   - 动画时长全部取自 `CONFIG.ANIMATION_CONFIG`（15 节），并让系统「减少动效」偏好一并生效（5.4）；
 //   - 5.4：逻辑先全部算完（game.trySwap 同步结算），再按时间线播放快照 —— 动画不阻塞逻辑更新；
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
@@ -11,12 +12,20 @@ import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from './config.js';
 import { createGame, getState as getGameState, trySwap as gameTrySwap } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
+import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
 const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
 const MIN_LOG_RANK = LOG_RANK.info;
 const MAX_DPR = 3; // 后备缓冲上限（与 render.js 的绘制预算一致）
 
 const renderer = createRenderer();
+const timeline = createTimeline({
+  onFrame: (phase, progress) => {
+    view.hudScore = hudScoreAt(phase.levelIndex); // 连消的收益逐层显示
+    drawFrame(phase, progress);
+  },
+  onDone: finishTimeline
+});
 
 // 视图状态（唯一可变副作用集中处）
 const view = {
@@ -30,7 +39,8 @@ const view = {
   layout: null, // render.js 的 boardRect(sizePx) 结果（prepare 时复用）
   selected: null, // 点击两次交换的后备方案中已选中的格子
   firstGroups: [], // 本次交换第 1 层识别出的匹配（仅用于高亮）
-  animation: null, // 时间线播放状态；非 null 时锁定输入
+  endReason: 'steps', // 结束原因：'steps'（步数用尽）/ 'stuck'（死局重排超限，3.8 约束 4）
+  playback: null, // 本轮回放的数据（逐层分数、是否待结束）；timeline.running 决定是否锁输入
   hudScore: null, // 播放期间按层累加的分数；null 表示直接读 GameState
   restartRect: null,
   systemReducedMotion: false,
@@ -61,7 +71,7 @@ function init() {
 
   bindInput({
     target: canvas,
-    isLocked: () => Boolean(view.animation) || view.game.gameOver,
+    isLocked: () => timeline.running || view.game.gameOver,
     onSwipe,
     onTap
   });
@@ -83,11 +93,12 @@ function init() {
 
 /** 开新一局：重建 GameState 并复位视图侧状态。 */
 function startNewGame() {
+  timeline.stop(); // 防御性：正常路径下不会在回放中重开
   view.game = createGame(buildLevelConfig());
   view.newRecord = false;
   view.selected = null;
   view.firstGroups = [];
-  view.animation = null;
+  view.playback = null;
   view.hudScore = null;
   view.restartRect = null;
 
@@ -199,7 +210,7 @@ function isSelectable(cell) {
  */
 function attemptSwap(a, b) {
   const board = view.game.board;
-  if (view.animation || view.game.gameOver) return;
+  if (timeline.running || view.game.gameOver) return;
   if (!isInsideBoard(board, b.r, b.c)) {
     log('info', `滑动超出棋盘边界，忽略：(${a.r},${a.c}) → (${b.r},${b.c})`);
     return;
@@ -229,6 +240,18 @@ function attemptSwap(a, b) {
       `本步 +${result.scoreDelta} 分（本局 ${result.scoreDelta + scoreBefore}），剩余步数 ${result.stepsLeft}`
   );
 
+  // 3.8：死局与重排的结果（成功：提示 + 重排动画；失败：结束流程，不消耗步数）
+  const deadlock = result.resolve.deadlock;
+  view.endReason = 'steps';
+  if (deadlock) {
+    if (deadlock.shuffled) {
+      log('info', `检测到无可消除组合，已重排棋盘（第 ${deadlock.tries} 次尝试成功，不消耗步数）`);
+    } else {
+      view.endReason = 'stuck';
+      log('warn', `死局重排尝试 ${deadlock.tries} 次仍无可行组合，判定为关卡异常，进入游戏结束流程（3.8 约束 4）`);
+    }
+  }
+
   startTimeline(result, scoreBefore);
 }
 
@@ -237,97 +260,33 @@ function attemptSwap(a, b) {
 // ---------------------------------------------------------------------------
 
 /**
- * 每一层级联拆成三段：消除（clearDuration）→ 下落（fallDuration，按距离缩放）→ 落定（cascadeGap）。
- * 系统「减少动效」或配置 reducedMotion 为真时，消除与下落时长归零（直接显示结果），
- * 但保留 cascadeGap —— 静态的逐层揭示仍能让玩家看出发生了连消（5.4）。
+ * 起播一次结算回放：阶段列表与时长由 timeline.js 负责（时长取自 ANIMATION_CONFIG，见 15 节），
+ * 本文件只提供数据（SwapResult 的快照与逐层明细）与每帧的场景组装。
  * 入参是 game.trySwap 的 SwapResult：层级数据在 `result.resolve.levels`，
  * 首帧快照在 `result.afterSwap`，是否进入结束面板在 `result.gameOver`。
  */
 function startTimeline(result, scoreBefore) {
-  const resolve = result.resolve;
-  const motion = motionDurations();
-  const timeline = [];
-  let preBoard = result.afterSwap;
-
-  resolve.levels.forEach((level, index) => {
-    const keys = new Set(level.groups.flatMap((group) => group.cells).map((pos) => `${pos.r},${pos.c}`));
-    const moves = new Map(level.moves.map((move) => [move.id, { from: move.from, to: move.to }]));
-    timeline.push({ phase: 'clear', board: preBoard, keys, levelIndex: index, duration: motion.clear });
-    if (moves.size > 0) {
-      timeline.push({
-        phase: 'fall',
-        board: preBoard,
-        hidden: keys,
-        moves,
-        levelIndex: index,
-        duration: fallDurationFor(level.moves, motion.fall)
-      });
-    }
-    timeline.push({ phase: 'settle', board: level.board, levelIndex: index, duration: motion.gap });
-    preBoard = level.board;
-  });
-
-  view.animation = {
-    timeline,
-    index: 0,
-    startedAt: 0,
+  view.playback = {
     scoreBefore,
-    levelScores: resolve.levelScores,
-    pendingGameOver: result.gameOver,
-    raf: 0
+    levelScores: result.resolve.levelScores,
+    pendingGameOver: result.gameOver
   };
-  view.animation.raf = window.requestAnimationFrame(stepTimeline);
-}
-
-function motionDurations() {
-  const cfg = CONFIG.ANIMATION_CONFIG;
-  const reduced = cfg.reducedMotion || view.systemReducedMotion;
-  return {
-    clear: reduced ? 0 : cfg.clearDuration,
-    fall: reduced ? 0 : cfg.fallDuration,
-    gap: cfg.cascadeGap
-  };
-}
-
-/** 下落时长按距离缩放，并落在 15 节的 150-250ms 区间内（基值为 fallDuration）。 */
-function fallDurationFor(moves, baseDuration) {
-  if (baseDuration <= 0 || moves.length === 0) return 0;
-  const maxDistance = moves.reduce((max, move) => Math.max(max, move.to.r - move.from.r), 1);
-  const ratio = Math.min(maxDistance, 4) / 4; // 1 格 → 0.25；≥4 格 → 1
-  return Math.round(baseDuration * (0.75 + 0.25 * ratio));
-}
-
-function stepTimeline(now) {
-  const anim = view.animation;
-  if (!anim) return;
-  const entry = anim.timeline[anim.index];
-  if (!entry) {
-    finishTimeline();
-    return;
-  }
-  if (anim.startedAt === 0) anim.startedAt = now;
-  const progress = entry.duration > 0 ? Math.min(1, (now - anim.startedAt) / entry.duration) : 1;
-
-  view.hudScore = hudScoreAt(anim, entry.levelIndex); // 连消的收益逐层显示
-  drawFrame(entry, progress);
-
-  if (progress >= 1) {
-    anim.index += 1;
-    anim.startedAt = 0;
-  }
-  anim.raf = window.requestAnimationFrame(stepTimeline);
+  const motion = motionDurations(view.systemReducedMotion);
+  timeline.play(buildPhases(result.resolve, result.afterSwap, motion));
 }
 
 /** 播放期间 HUD 分数逐层累加；终值与 GameState 的总分一致。 */
-function hudScoreAt(anim, levelIndex) {
+function hudScoreAt(levelIndex) {
+  const playback = view.playback;
+  if (!playback) return view.game.level.currentScore;
   let gained = 0;
-  for (let i = 0; i <= levelIndex && i < anim.levelScores.length; i += 1) gained += anim.levelScores[i].gained;
-  return anim.scoreBefore + gained;
+  for (let i = 0; i <= levelIndex && i < playback.levelScores.length; i += 1) gained += playback.levelScores[i].gained;
+  return playback.scoreBefore + gained;
 }
 
 function finishTimeline() {
-  const pendingGameOver = Boolean(view.animation?.pendingGameOver);
-  view.animation = null;
+  const pendingGameOver = Boolean(view.playback?.pendingGameOver);
+  view.playback = null;
   view.hudScore = null;
   view.firstGroups = [];
   drawFrame();
@@ -346,16 +305,22 @@ function drawFrame(entry = null, progress = 1) {
     matched: entry && entry.phase === 'clear' && entry.levelIndex === 0 ? view.firstGroups : [],
     selected: entry ? null : view.selected,
     clearing: entry && entry.phase === 'clear' ? { keys: entry.keys, progress } : null,
-    falling: entry && entry.phase === 'fall' ? { moves: entry.moves, progress } : null,
+    falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
+    banner: entry && entry.phase === 'shuffle' ? entry.banner : null, // 5.5：重排前给出明确提示
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,
       steps: view.game.level.remainingSteps,
       best: view.best
     },
     overlay:
-      view.game.gameOver && !view.animation
-        ? { score: view.game.level.currentScore, best: view.best, newRecord: view.newRecord }
+      view.game.gameOver && !timeline.running
+        ? {
+            score: view.game.level.currentScore,
+            best: view.best,
+            newRecord: view.newRecord,
+            reason: view.endReason
+          }
         : null
   };
   view.restartRect = renderer.draw(view.ctx, scene).restartRect;

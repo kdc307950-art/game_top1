@@ -11,7 +11,15 @@
 // 【Step 6】死局检测与重排（3.8）；【Step 7-10】特殊元素与组合（3.2/3.3）。
 
 import { CONFIG, GOAL_TYPE } from './config.js';
-import { cloneBoard, createBoard, isCellMovable, resolveCascades, swapCells } from './board.js';
+import {
+  cloneBoard,
+  createBoard,
+  hasPossibleMove,
+  isCellMovable,
+  resolveCascades,
+  shuffleBoard,
+  swapCells
+} from './board.js';
 import { findAllMatchGroups } from './match.js';
 import {
   calcBaseScore,
@@ -70,7 +78,9 @@ export function trySwap(state, a, b) {
   const afterSwap = cloneBoard(state.board);
   const resolve = resolveBoard(state);
   consumeStep(state.level); // 4.3.3：只有有效交换才扣步数
-  state.gameOver = state.level.remainingSteps <= 0;
+  // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
+  const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
+  state.gameOver = state.level.remainingSteps <= 0 || stuck;
 
   return {
     valid: true,
@@ -86,9 +96,10 @@ export function trySwap(state, a, b) {
 /**
  * 4.2：resolveBoard(state) —— 消除 → 下落 → 填充 → 级联，并把分数结算进 level.currentScore。
  * 计分按 3.5：每层 base（动物数 × 10）× 倍数 + 连消加分；本步无特殊元素，倍数恒为 1。
- * 返回 ResolveResult（4.2 未定义其结构，见 D016）：
+ * 返回 ResolveResult：
  *   cascades / levels / cleared / spawned / capped（来自 board.resolveCascades）
  *   + scoreDelta（本次结算总分）+ levelScores（逐层明细，供 UI 与测试核对公式）
+ *   + deadlock（3.8：消除与填充完成后检测死局并尝试重排；无死局时为 null）
  */
 export function resolveBoard(state) {
   const result = resolveCascades(state.board, state.level.colorCount, { rng: state.rng });
@@ -106,7 +117,27 @@ export function resolveBoard(state) {
   }
 
   state.level.currentScore += scoreDelta;
-  return { ...result, scoreDelta, levelScores };
+  return { ...result, scoreDelta, levelScores, deadlock: ensurePlayable(state) };
+}
+
+/**
+ * 3.8：每次消除与填充完成后检测是否存在可行交换；无可行交换则重排。
+ * 返回 null（无死局）或 DeadlockResolution（供 UI 显示提示与重排动画）。
+ * 注意「每次都检测」是 3.8 的原文要求，因此即使本次已耗尽步数也会检测与重排 —— 保持规则一致，
+ * 不引入「最后一步跳过」这种例外。
+ */
+function ensurePlayable(state) {
+  if (hasPossibleMove(state.board)) return null;
+
+  const before = cloneBoard(state.board);
+  const stats = { tries: 0 };
+  const shuffled = shuffleBoard(state.board, { rng: state.rng, stats });
+  return {
+    tries: stats.tries,
+    shuffled,
+    before,
+    after: cloneBoard(state.board)
+  };
 }
 
 /**

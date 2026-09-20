@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-09-19（Step 5 补完：hud.js/timeline.js 拆分 + 宪法 v1.5 + Step 6：死局检测与重排）
+
+### 一、Step 5 补完（按你批准的顺序执行）
+
+- **新增 `hud.js`**（118 行）：HUD（分数/步数/最高分）、结束面板、重排提示；只接收场景数据，不读游戏状态、不碰 `localStorage`、不绑事件。
+- **新增 `timeline.js`**（104 行）：动画时间线调度（阶段划分、时长计算、rAF 回放、`stop/running`）；只接收阶段列表与回调。
+- `render.js` 381 → **294 行**（只留棋盘层与几何，单向依赖 `hud.js` 取 `HUD_RATIO/hudCells`）；`app.js` 418 → **364 行（纯代码 283）**。`localStorage` 仍只在 `app.js`。
+- **未改** `index.html`：`render.js`/`hud.js`/`input.js`/`timeline.js` 都由 `app.js` 以 ESM `import` 引入，HTML 无需新增引脚本行。
+- 验证：`run-all` 65 用例 / 704 断言全绿；浏览器 Step 5 套件 **30/30 PASS**（动画 8 帧 vs 减少动效 4 帧、帧率均值 16.7ms、形状剪影最差 IoU 0.846）；逻辑模块与 `tests/` `git diff` 为空。
+
+### 二、宪法 v1.5（你批准「写进宪法」）
+
+- **2.2/2.3**：登记 `hud.js`、`timeline.js` 及其边界（并注明 `render.js` 单向依赖 `hud.js`）。
+- **4.2**：`shuffleBoard(board, options?: { rng?, maxTries? })`；`ResolveResult.deadlock` 与 `DeadlockResolution = { tries, shuffled, before, after }`。
+- **11**：新增 v1.5 修订说明与记录行。附录 B 未新增键（本步未新增配置项）。
+
+### 三、Step 6：死局检测与重排
+
+- `board.js`：新增 `shuffleBoard`（Fisher–Yates + 上限重试；只重排普通动物格；失败还原原排列；`options.rng`/`options.maxTries`/`options.stats`）。
+- `game.js`：`resolveBoard` 内新增 `ensurePlayable`（3.8：每次消除与填充完成后检测；无可行交换则重排），结果写入 `ResolveResult.deadlock`；`trySwap` 增加「死局且重排失败 → 进入结束流程」的结束条件（3.8 约束 4）。
+- `hud.js`/`render.js`/`timeline.js`/`app.js`：新增重排提示胶囊（5.5）与 `shuffle` 动画阶段（按 `cell.id` 对位出每格起止位置），结束面板按原因显示「步数用尽」/「无可消除组合」。
+- `tests/board.test.js`：新增 9 个用例（死局盘重排成功、障碍物布局不变、同种子可复现、超限失败并还原、少于两格立即失败、`resolveBoard` 检测与不消耗步数、退化盘失败上报、正常盘不误判、整盘同色不算死局）。
+
+### 验证方式
+
+- `node tests/run-all.js` → **74 用例 / 742 断言 / 0 加载错误 / PASS**。
+- **浏览器 Step 6 套件**（`_build/verify-step6.mjs`）→ 5 阶段 **25 项 PASS**：
+  - 死局链路（浏览器内 `import` 真实模块）：`(r+2c)%6` 死局盘 → `resolveBoard` 检测到死局并重排成功（第 8 次尝试）、**不消耗步数**、重排后实际棋盘无三连且有可行交换；`buildPhases` 追加 `shuffle` 阶段（文案「无可消除组合，正在重排…」、64 格位移、时长 200ms 取自配置）。
+  - 失败路径：退化盘 `shuffled=false, tries=0`；全同色盘尝试到上限 5 次失败并**还原棋盘**。
+  - 新增渲染代码：提示胶囊在离屏画布上确实画出（胶囊底色像素 3307，静止帧为 0）；插值帧与静止帧像素不同。
+  - 完整一局（30 步真实滑动）：出现「游戏结束」、结束面板、最高分持久化、全程无未捕获异常。
+- **浏览器 Step 5 套件回归 30/30 PASS**（Step 6 改动后重跑）。
+- **本轮自查修正 2 处**：① 3 色死局盘无法在 50 次内重排出无三连局面（`e^{-10.6}` 量级），改用具 6 色死局盘做「应成功」夹具 —— 这个发现同时说明 3.8 的关卡异常分支是真实路径（D018 第 7 条）；② 我写的两处断言前提有误（覆盖颜色时冲掉雪块的「无动物」语义；把「整盘同色」误当成死局，实际它处处可交换）。
+
+### 遗留问题
+
+- **D018 第 6 条**：`state.gameOver = stuck`（死局且重排失败 → 结束流程）这一行**没有可执行测试**，只有代码审查；原因与替代验证方式已如实登记。
+- 重排的**视觉效果未经人眼确认**（我无视觉工具）；程序化只能证明「胶囊被画出、插值帧与静止帧不同」。
+- 真机（iOS/Android）跑一局 + 色盲模拟确认仍**待你执行**；本机 headless + 软件渲染的帧率数字不能当真机基线。
+- `board.js` 的纯重构拆分（Step 6.1）见下一条记录。
+
+### 下一步
+
+- **Step 6.1**：按你的顺序做纯重构，把 `board.js` 拆为 `board.js`（数据结构/交换/下落/填充/克隆）+ `shuffle.js`（死局检测、重排、可移动性），逻辑零 diff，宪法升 v1.6 登记新文件。
+
+---
+
 ## 2026-09-19（宪法 v1.4 + Step 5：移动端适配 + 动画打磨）
 
 ### 前置：宪法升级到 v1.4（用户批准「写进宪法」）

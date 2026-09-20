@@ -1,7 +1,8 @@
-// tests/board.test.js — board.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 2。
+// tests/board.test.js — board.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 2 / Step 6。
 //
 // 夹具约定（宪法 4.1 约束）：棋盘必须经 createBoard 构造后再覆盖 color，
 // 不得直接构造裸数组传入逻辑函数。
+// Step 6 起本文件还覆盖「死局检测与重排」在 game.js 中的接入（resolveBoard 的 deadlock 字段）。
 
 import {
   test,
@@ -18,14 +19,36 @@ import {
   swapCells,
   cloneBoard,
   isCellMovable,
-  hasPossibleMove
+  hasPossibleMove,
+  shuffleBoard
 } from '../board.js';
+import { createGame, resolveBoard } from '../game.js';
 import { findMatches } from '../match.js';
 
 const SIZE = 8;
 const COLORS = CONFIG.COLOR_COUNT;
 const idsOf = (board) => board.map((row) => row.map((cell) => cell.id));
 const colorsOf = (board) => board.map((row) => row.map((cell) => cell.color));
+
+/** 带种子的 LCG：重排测试需要确定性，又需要正常分布（否则重排永远失败）。 */
+function seededRng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+/** 6 色死局盘：`(r + 2c) % 6` —— 行列相邻都不同色（无三连），且任意相邻交换都凑不出三连。 */
+function deadlockBoard6(board) {
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) {
+      board[r][c].color = (r + 2 * c) % 6;
+    }
+  }
+  return board;
+}
+
 
 /**
  * 死局夹具（满足 3.8 的反面：不存在任何有效交换）。
@@ -188,5 +211,137 @@ test('无效交换：用快照回退（app.js 使用的路径）后状态一致'
   assertDeepEqual(idsOf(restored), idsOf(snapshot), '快照恢复后 id 布局一致');
   assertEqual(findMatches(restored).length, 0, '恢复后的棋盘与原始状态一样无匹配');
 });
+
+// ---------------------------------------------------------------------------
+// Step 6：死局检测与重排（3.8）
+// ---------------------------------------------------------------------------
+
+test('shuffleBoard：死局盘重排后无初始三连且有可行交换（3.8 约束 1、2）', () => {
+  const board = deadlockBoard6(createBoard(SIZE, SIZE, 6));
+  assertEqual(findMatches(board).length, 0, '前提：死局盘本身无三连');
+  assertFalse(hasPossibleMove(board), '前提：死局盘无可行交换');
+
+  const stats = { tries: 0 };
+  const ok = shuffleBoard(board, { rng: seededRng(20260919), stats });
+
+  assertTrue(ok, '6 色下应能在上限内重排出可玩局面');
+  assertTrue(stats.tries >= 1, `应记录尝试次数，实际 ${stats.tries}`);
+  assertEqual(findMatches(board).length, 0, '约束 1：重排后不存在初始三连');
+  assertTrue(hasPossibleMove(board), '约束 2：重排后存在至少一个有效交换');
+  assertEqual(new Set(idsOf(board).flat()).size, SIZE * SIZE, '重排只是置换格子对象，id 不应重复或丢失');
+});
+
+test('shuffleBoard：不改变障碍物布局（3.8 约束 3）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS);
+  deadlockBoard6(board); // 先把动物格铺成死局盘
+  // 再按 3.4 的语义挂上障碍物：雪块是纯障碍格（格内没有动物），冰块保留动物
+  board[2][2].color = null;
+  board[2][2].obstacle = OBSTACLE_TYPE.SNOW;
+  board[2][2].obstacleLayers = 3;
+  board[5][6].obstacle = OBSTACLE_TYPE.ICE;
+  board[5][6].obstacleLayers = 2;
+  const snowId = board[2][2].id;
+  const iceId = board[5][6].id;
+  const iceColor = board[5][6].color;
+
+  const ok = shuffleBoard(board, { rng: seededRng(7) });
+
+  assertTrue(ok, '含障碍物的死局盘也应能重排成功');
+  assertEqual(board[2][2].id, snowId, '雪块格未被换走');
+  assertEqual(board[2][2].obstacle, OBSTACLE_TYPE.SNOW, '雪块类型不变');
+  assertEqual(board[2][2].obstacleLayers, 3, '雪块层数不变');
+  assertEqual(board[2][2].color, null, '雪块格内仍然没有动物');
+  assertEqual(board[5][6].id, iceId, '冰块格未被换走');
+  assertEqual(board[5][6].color, iceColor, '冰块内的动物也不参与重排（障碍物与动物保持对应）');
+  assertEqual(board[5][6].obstacleLayers, 2, '冰块层数不变');
+});
+
+test('shuffleBoard：同一随机源可复现，且失败时还原棋盘（3.8 约束 4）', () => {
+  const first = deadlockBoard6(createBoard(SIZE, SIZE, 6));
+  const second = deadlockBoard6(createBoard(SIZE, SIZE, 6));
+  shuffleBoard(first, { rng: seededRng(42) });
+  shuffleBoard(second, { rng: seededRng(42) });
+  assertDeepEqual(colorsOf(first), colorsOf(second), '同种子两次重排结果一致');
+
+  // 全同色盘：任何排列都必然含三连 → 上限内必然失败
+  const stuck = createBoard(SIZE, SIZE, 6);
+  for (const row of stuck) {
+    for (const cell of row) cell.color = 0;
+  }
+  const before = idsOf(stuck);
+  const stats = { tries: 0 };
+  const ok = shuffleBoard(stuck, { rng: seededRng(1), maxTries: 5, stats });
+  assertFalse(ok, '无法避免三连时应返回 false');
+  assertEqual(stats.tries, 5, '应尝试到上限');
+  assertDeepEqual(idsOf(stuck), before, '失败时棋盘恢复原状（不留「打过乱且含三连」的中间态）');
+});
+
+test('shuffleBoard：可重排格少于两格时直接失败', () => {
+  const board = createBoard(SIZE, SIZE, COLORS);
+  for (const row of board) {
+    for (const cell of row) cell.color = null; // 全部清空：没有可置换的动物
+  }
+  assertFalse(shuffleBoard(board, { rng: seededRng(3) }), '无动物可置换时应返回 false');
+  assertFalse(hasPossibleMove(board), '空盘自然没有可行交换');
+});
+
+test('resolveBoard：检测到死局时自动重排，且不消耗步数（3.8）', () => {
+  const state = createGame({ steps: 30 }, { rng: seededRng(20260919) });
+  deadlockBoard6(state.board);
+  const stepsBefore = state.level.remainingSteps;
+
+  const result = resolveBoard(state);
+
+  assertEqual(result.cascades, 0, '死局盘没有可消除的匹配');
+  assertTrue(Boolean(result.deadlock), '消除填充完成后应检测到死局');
+  assertTrue(result.deadlock.shuffled, '应能在上限内重排成功');
+  assertTrue(result.deadlock.tries >= 1, '应记录尝试次数');
+  assertTrue(result.deadlock.before !== state.board, 'before 是快照而非活动棋盘');
+  assertTrue(result.deadlock.after !== state.board, 'after 是快照而非活动棋盘');
+  assertEqual(findMatches(state.board).length, 0, '重排后的实际棋盘无三连');
+  assertTrue(hasPossibleMove(state.board), '重排后的实际棋盘可继续游戏');
+  assertEqual(state.level.remainingSteps, stepsBefore, '3.8：重排不消耗步数');
+});
+
+test('resolveBoard：重排失败时 deadlock.shuffled 为 false（调用方据此进入结束流程）', () => {
+  const state = createGame({ steps: 30 }, { rng: seededRng(5) });
+  // 退化盘：几乎没有动物可供置换 → hasPossibleMove 为 false 且重排不可能成功
+  for (const row of state.board) {
+    for (const cell of row) cell.color = null;
+  }
+  const before = idsOf(state.board);
+
+  const result = resolveBoard(state);
+
+  assertTrue(Boolean(result.deadlock), '应检测到死局');
+  assertFalse(result.deadlock.shuffled, '退化盘无法重排出可玩局面');
+  assertEqual(result.deadlock.tries, 0, '可置换的动物少于两格时立即失败（不空转到上限）');
+  assertDeepEqual(idsOf(state.board), before, '失败后棋盘保持原状');
+});
+
+test('正常盘不会被误判死局（hasPossibleMove 为真时不触发重排）', () => {
+  const state = createGame({ steps: 30 }, { rng: seededRng(11) });
+  const result = resolveBoard(state);
+  assertEqual(result.deadlock, null, 'createBoard 保证有可行交换，故不应触发重排');
+});
+
+test('整盘同色不算死局：可行交换一直存在，因此不触发重排', () => {
+  // 这条同时说明「无三连排列」与「死局」是两回事：
+  // 整盘同色任何排列都有三连（shuffleBoard 必失败），但它每次交换都能产生匹配，故不是死局。
+  const state = createGame({ steps: 30 }, { rng: seededRng(9) });
+  for (const row of state.board) {
+    for (const cell of row) cell.color = 0;
+  }
+  assertTrue(hasPossibleMove(state.board), '同色盘处处可交换');
+  const result = resolveBoard(state);
+  assertEqual(result.deadlock, null, '不是死局，不应触发重排');
+});
+
+test('正常盘不会被误判死局（hasPossibleMove 为真时不触发重排）', () => {
+  const state = createGame({ steps: 30 }, { rng: seededRng(11) });
+  const result = resolveBoard(state);
+  assertEqual(result.deadlock, null, 'createBoard 保证有可行交换，故不应触发重排');
+});
+
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
