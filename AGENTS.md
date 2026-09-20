@@ -1,9 +1,18 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.5
+> 版本：v1.6
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.5 → v1.6 关键变更）
+
+本次修订只做**纯重构的登记**：把可移动性判定、死局检测与重排从 `board.js` 拆到 `shuffle.js`（Step 6.1），逻辑与行为零改动。不改动任何游戏规则数值。
+
+1. **2.2 / 2.3 登记 `shuffle.js`**：`board.js` 收敛为「数据结构、交换、下落、填充、克隆」；`shuffle.js` 负责「可移动性、死局检测、重排」。依赖方向单向：`board.js → shuffle.js`（`createBoard` 需要 `hasPossibleMove` 校验开局可玩性），`shuffle.js` 只依赖 `config.js` 与 `match.js`，不反向依赖 `board.js`。
+2. **4.2 把 `isCellMovable` / `hasPossibleMove` / `shuffleBoard` 三条从 `board.js` 挪到 `shuffle.js` 块**：签名与语义完全不变。
 
 ---
 
@@ -140,7 +149,8 @@
   styles.css
   config.js        # 全局配置：颜色数、倍数、时长、关卡默认值
   game.js          # 对外统一接口，组合调用其他模块
-  board.js         # 棋盘数据结构、交换、下落、填充、死局检测
+  board.js         # 棋盘数据结构、交换、下落、填充、克隆
+  shuffle.js       # 可移动性判定、死局检测、重排（3.8）
   match.js         # 匹配检测（横向、纵向、L/T 型）
   special.js       # 特殊元素生成、激活、组合效果
   score.js         # 计分系统、连消倍数
@@ -178,7 +188,8 @@
 
 - `config.js`：唯一允许存放可调数值的文件。
 - `game.js`：对外统一接口，组合调用其他逻辑模块，不碰 DOM。
-- `board.js`：棋盘状态、交换验证、下落、填充、死局检测。
+- `board.js`：棋盘数据结构、交换、下落、填充、克隆；单向依赖 `shuffle.js` 的 `hasPossibleMove`。
+- `shuffle.js`：可移动性判定、死局检测与重排（3.8）；只依赖 `config.js` 与 `match.js`。
 - `match.js`：匹配检测，返回匹配组及其形状（直线、L 型、T 型）。
 - `special.js`：根据匹配形状生成特殊元素，处理激活和组合。
 - `score.js`：基础分、特效倍数、连消倍数计算。
@@ -393,11 +404,15 @@ GameSnapshot = {
   - `MoveRecord = { id: number, from: Pos, to: Pos, color: number }`（只记录真正发生位移的格子；`id` 对应 4.1 的 `cell.id`，供动画追踪）
 - `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子）
 - `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
+- `cloneBoard(board: Board): Board`（深拷贝，供测试与回退使用）
+
+**shuffle.js**（v1.6 从 board.js 拆出，逻辑与签名不变）
+
+- `isCellMovable(board: Board, r: number, c: number): boolean`
 - `hasPossibleMove(board: Board): boolean`
 - `shuffleBoard(board: Board, options?: { rng?: () => number, maxTries?: number }): boolean`
-  - 3.8 的重排：只重排普通动物格（`color !== null && obstacle === null`），**不改变障碍物布局**；重排后不得存在初始三连且必须存在可行交换；成功返回 `true`，超过尝试上限返回 `false`（由调用方进入结束流程）。`maxTries` 缺省取附录 B 的 `shuffleMaxTries`。
-- `isCellMovable(board: Board, r: number, c: number): boolean`
-- `cloneBoard(board: Board): Board`（深拷贝，供测试与回退使用）
+  - 3.8 的重排：只重排普通动物格（`color !== null && obstacle === null`），**不改变障碍物布局**；重排后不得存在初始三连且必须存在可行交换；成功返回 `true`，超过尝试上限返回 `false`（由调用方进入结束流程），失败时把棋盘还原为重排前的排列。`maxTries` 缺省取附录 B 的 `shuffleMaxTries`；`options.stats` 为可选诊断出参（写入实际尝试次数）。
+  - 依赖方向：`shuffle.js` 只依赖 `config.js` 与 `match.js`；**board.js 单向依赖 shuffle.js**（`createBoard` 需要 `hasPossibleMove` 校验开局可玩性），不得反向依赖。
 
 **match.js**
 
@@ -694,6 +709,7 @@ node tests/integration.test.js
 | v1.3 | 2026-09-18 | Agent  | 补齐 REFERENCES.md 的宪法地位（六处）、2.2 节目录补 package.json 与 assets/、第 0 节优先级纳入 REFERENCES.md、附录 B 补 9 键并新增 B-2 字符串常量表、通篇移除不可见字符与格式缺陷 | 2.2、第 0 节、第 8 节、8.1、8.3、12、17、附录 B、附录 B-2、修订记录 |
 | v1.4 | 2026-09-19 | Agent  | 把 Step 2-4 的契约扩展与规则口径写入宪法：4.2 补齐 GameState/SwapResult/ResolveResult/ResolveLevel/LevelScore/GameSnapshot/MoveRecord 结构并登记 `options.rng`、`board.resolveCascades`、`level.consumeStep`；3.5 明确连消自第 2 层起计；2.2/2.3 登记 Step 5 的 `render.js`/`input.js` 拆分 | 2.2、2.3、3.5、4.2、11 |
 | v1.5 | 2026-09-19 | Agent  | 登记 Step 5 的第二次拆分（`hud.js` 信息层、`timeline.js` 时间线）并写明边界；4.2 扩展 `shuffleBoard` 增加 `rng`/`maxTries` 选项、补 `ResolveResult.deadlock`（`DeadlockResolution`）以支撑 3.8 的死局检测与重排 | 2.2、2.3、4.2、11 |
+| v1.6 | 2026-09-19 | Agent  | Step 6.1 纯重构：把可移动性判定、死局检测与重排从 `board.js` 拆到新增的 `shuffle.js`（逻辑与行为零改动），2.2/2.3 登记新文件与依赖方向，4.2 相应移动三条契约 | 2.2、2.3、4.2、11 |
 
 ---
 

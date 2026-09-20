@@ -14,12 +14,11 @@ import { CONFIG, GOAL_TYPE } from './config.js';
 import {
   cloneBoard,
   createBoard,
-  hasPossibleMove,
-  isCellMovable,
   resolveCascades,
-  shuffleBoard,
   swapCells
 } from './board.js';
+// Step 6.1：可移动性/死局检测/重排来自 shuffle.js（与 board.js 的棋盘机制分离）
+import { hasPossibleMove, isCellMovable, shuffleBoard } from './shuffle.js';
 import { findAllMatchGroups } from './match.js';
 import {
   calcBaseScore,

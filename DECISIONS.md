@@ -6,6 +6,21 @@
 
 ---
 
+## D019：Step 6.1 纯重构（board.js 拆出 shuffle.js）
+
+- 日期：2026-09-19
+- 背景：Step 6 之后 `board.js` 达 417 行，同时承担「棋盘机制」与「死局/重排判定」两类职责。按用户批准的顺序，Step 6 完成后立即做一次**纯重构**（不改行为）。
+- 决策：
+  1. **拆分为 `board.js`（createBoard / swapCells / cloneBoard / applyGravity / refillBoard / resolveCascades）与 `shuffle.js`（isCellMovable / hasPossibleMove / shuffleBoard）**：前者是「棋盘怎么变」，后者是「还有得走吗、没得走怎么重排」。结果：`board.js` 417 → **309 行**（纯代码约 205），新增 `shuffle.js` 130 行。
+  2. **依赖方向固定为 `board.js → shuffle.js`（单向）**：`createBoard` 需要 `hasPossibleMove` 校验「开局至少有一个可行交换」，所以 board.js 必须能拿到它；而 `shuffle.js` 只依赖 `config.js` 与 `match.js`。为此 `hasPossibleMove` 把「交换 → 检测 → 换回」三行置换**内联**在自身，不再调用 `board.swapCells` —— 否则会形成 `board ↔ shuffle` 模块环。这与 `hud.js` 就地实现 `roundRectPath` 是同一类取舍：**用一点点重复换取无环依赖**，并在两处都写明理由。
+  3. **4.2 契约条目随实现移动**（宪法 v1.6）：`isCellMovable` / `hasPossibleMove` / `shuffleBoard` 从 **board.js** 块移到新增的 **shuffle.js** 块，签名与语义一字未改。
+  4. **「逻辑与 tests 零 diff」的准确含义**：测试**导入路径**必须改（`tests/board.test.js`、`tests/game.test.js` 各一行从 `board.js` 改为 `shuffle.js`），浏览器验证脚本 `_build/verify-step6.mjs` 的页面内 `import` 同理 —— 这是文件移动的必然后果，不是行为变化。行为零 diff 的证据是：**用例数与断言数与重构前完全相同（74 用例 / 742 断言）**，且两套浏览器用例（Step 5 的 30 项、Step 6 的 25 项）全部保持通过。
+  5. **不保留兼容转发**：不在 `board.js` 里 `export { hasPossibleMove } from './shuffle.js'`。转发层会让「4.2 说这些函数属于谁」变得模糊，而 4.2 已经明确归属；调用方（game.js、两个测试文件）一次性改完。
+- 影响：`board.js`、新增 `shuffle.js`、`game.js`、`tests/board.test.js`、`tests/game.test.js`；`AGENTS.md`（v1.6）。其余模块与 `config.js` 未改动。
+- 替代方案：不拆（否决：单文件承担两类职责且已 417 行）；把 `hasPossibleMove` 留在 board.js（否决：用户批准的口径是「可移动性也归 shuffle.js」，且那会让 shuffle.js 反而依赖 board.js）；加转发层（否决：归属模糊）；顺手调整 `hasPossibleMove` 的判定口径（否决：细则是**纯重构**，禁止夹带行为变更）。
+
+---
+
 ## D018：Step 6 的死局检测与重排口径
 
 - 日期：2026-09-19

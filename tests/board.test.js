@@ -14,14 +14,9 @@ import {
   summarize
 } from './assert.js';
 import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
-import {
-  createBoard,
-  swapCells,
-  cloneBoard,
-  isCellMovable,
-  hasPossibleMove,
-  shuffleBoard
-} from '../board.js';
+import { createBoard, swapCells, cloneBoard } from '../board.js';
+// Step 6.1：可移动性/死局检测/重排已从 board.js 移到 shuffle.js
+import { hasPossibleMove, isCellMovable, shuffleBoard } from '../shuffle.js';
 import { createGame, resolveBoard } from '../game.js';
 import { findMatches } from '../match.js';
 

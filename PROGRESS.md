@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-09-19（Step 6.1：纯重构拆出 shuffle.js + 宪法 v1.6）
+
+### 完成项
+
+- **拆分**：`board.js` 417 → **309 行**（纯代码约 205），只保留 createBoard / swapCells / cloneBoard / applyGravity / refillBoard / resolveCascades；新增 **`shuffle.js`** 130 行，承载 isCellMovable / hasPossibleMove / shuffleBoard。逻辑与行为零改动。
+- **依赖方向**：固定为 `board.js → shuffle.js` 单向（createBoard 需要 hasPossibleMove 校验开局可玩性）；`shuffle.js` 只依赖 `config.js` 与 `match.js`。为避免 `board ↔ shuffle` 模块环，`hasPossibleMove` 内联了三行置换（不调用 `board.swapCells`），理由写在文件头，与 `hud.js` 就地实现 `roundRectPath` 同类。
+- **不保留兼容转发**：调用方（`game.js`、两个测试文件）一次性改完，避免「4.2 说这些函数属于谁」变模糊。
+- **宪法 v1.6**：2.2 目录、2.3 边界（含依赖方向）、4.2 三条契约从 board.js 块移到新增的 shuffle.js 块、第 11 节修订记录。
+
+### 验证方式
+
+- `node tests/run-all.js` → **74 用例 / 742 断言 / 0 加载错误 / PASS** —— 与重构前**完全相同的计数**，这是「逻辑零 diff」的直接证据。
+- **浏览器 Step 5 套件（重构后）→ 30/30 PASS**（帧率均值 16.7ms、p95 16.7ms；形状剪影最差 IoU 0.846）。
+- **浏览器 Step 6 套件（重构后）→ 25/25 PASS**（死局链路：第 8 次尝试重排成功、不消耗步数、shuffle 阶段 64 格位移与提示文案；退化盘/全同色盘失败与还原；提示胶囊像素 3450；完整一局出现「游戏结束」+ 最高分持久化）。
+- **「tests 零 diff」的准确说明**：测试**导入路径**必须改（`tests/board.test.js`、`tests/game.test.js` 各一行、以及 `_build/verify-step6.mjs` 的页面内 import），这是文件移动的必然结果；**用例数与断言数不变**才是行为零 diff 的证据（见 D019 第 4 条）。
+- **本轮自查修正 1 处验证脚本缺陷**：Step 6 套件的整局循环用全局 `infoLogs().find(...)` 取「本次交换」的日志，实际命中的是本局**第一条**交换日志 → 按错误的级联层数估算等待 → 动画未播完就再滑动 → 被输入锁吞掉（输入锁本身是设计行为，不是 bug）→ 循环提前耗尽、走不到「游戏结束」。已改为「标记 + 切片」。
+
+### 遗留问题
+
+- 真机（iOS/Android）跑一局 + 色盲模拟确认仍**待你执行**；视觉观感（形状/节奏/重排动画是否好看）也无法由我目视确认。
+- D018 第 6 条登记的「死局且重排失败 → 结束流程」接线仍无可执行测试（原因与替代验证见该条）。
+- 关卡目标（3.6）、三星评分（3.7）、剩余步数转化接入属 Step 12；障碍物属 Step 11/13。
+
+### 下一步
+
+- 第一阶段（核心可玩版，Step 0-6）功能已齐：8×8 棋盘、滑动交换、3/4/5 连与 L/T 识别、消除下落填充级联、计分步数结束最高分、动画与色盲友好、死局重排**全部落地并验证**。可由你验收第一阶段并确认是否打 `phase-1-done` 标签。
+- 第二阶段自 **Step 7（条纹糖果）** 开始：允许改 `special.js`、`match.js`、`board.js`、`game.js`、`app.js`、`config.js`、`tests/special.test.js`；`matchShapeToSpecial`（4.2 已登记、Step 2 起一直留空）届时落地；注意 D014 第 1 条已定：**本项目条纹方向 = 匹配方向**（与参考实现相反，以宪法 3.2 为准）。
+
+---
+
 ## 2026-09-19（Step 5 补完：hud.js/timeline.js 拆分 + 宪法 v1.5 + Step 6：死局检测与重排）
 
 ### 一、Step 5 补完（按你批准的顺序执行）

@@ -14,7 +14,7 @@ import {
 } from './assert.js';
 import { CONFIG, OBSTACLE_TYPE } from '../config.js';
 import { createGame, getState, resolveBoard, trySwap } from '../game.js';
-import { hasPossibleMove } from '../board.js';
+import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
 
 const SIZE = CONFIG.BOARD_SIZE;
