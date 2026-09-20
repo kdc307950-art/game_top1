@@ -5,7 +5,7 @@
 ## 当前阶段
 
 第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）。
-当前进度：Step 4 计分、步数、游戏结束、最高分已完成（有效交换扣 1 步、3.5 计分与连消加分、Canvas HUD 常驻显示、步数用尽弹出页面内结束面板、最高分写入 `localStorage`），下一步为 Step 5 移动端适配 + 动画打磨（开工前先按已批准计划拆分 `app.js`），详见 `PROGRESS.md`。
+当前进度：Step 5 移动端适配 + 动画打磨已完成（`app.js` 按宪法 v1.4 拆为 `app.js` + `render.js` + `input.js`；消除/下落/级联动画时长全部取自 `ANIMATION_CONFIG`；6 色改为 6 种可辨识形状以支持色盲；跟随系统「减少动效」），下一步为 Step 6 死局检测与重排，详见 `PROGRESS.md`。
 
 ## 快速开始
 

@@ -45,4 +45,19 @@ body {
   max-width: 720px;
   border-radius: 14px;
   background: #1b1830;
+  -webkit-user-drag: none;
+}
+
+/* AGENTS.md 5.4 / Step 5：跟随系统「减少动效」。
+   Canvas 内的动画时长由 app.js 读 ANIMATION_CONFIG 与 prefersReducedMotion() 决定；
+   这里把 CSS 侧可能出现的过渡/动画一并关掉，避免以后新增 CSS 动效时漏掉该偏好。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

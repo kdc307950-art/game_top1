@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.3
+> 版本：v1.4
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.3 → v1.4 关键变更）
+
+本次修订把 Step 2-4 落地过程中产生的**契约扩展与规则口径**正式写入宪法（此前只记在 `DECISIONS.md`），并为 Step 5 的模块拆分登记目录与边界。不改动任何既有游戏规则数值。
+
+1. **4.2 补齐结构定义**：`GameState`、`SwapResult`（追加 `resolve` / `afterSwap`）、`ResolveResult`、`ResolveLevel`、`LevelScore`、`GameSnapshot`、`MoveRecord` 此前只有名字没有形状，现逐项写明；`createGame` 增加可选 `options.rng`，`refillBoard` / `resolveCascades` 增加可选 `rng`（只用于注入随机源，便于确定性测试）。
+2. **4.2 补 `board.resolveCascades` 与 `level.consumeStep`**：两者分别承担 4.2 未命名的「整条消除循环」与「步数消耗」（2.3 规定 level.js 的职责含步数消耗），`game.resolveBoard` / `game.trySwap` 在其上叠加计分与状态。
+3. **3.5 明确连消口径**：第 1 次消除（交换本身造成的消除）不计连消，自第 2 层起第 n 层加 `(n − 1) × 30`，依次 30、60、90、120。
+4. **2.2 / 2.3 登记 Step 5 的模块拆分**：`app.js` 拆为 `app.js`（编排/动画调度/存档）+ `render.js`（绘制与几何）+ `input.js`（手势与视口守卫），并写明三者的边界与「`localStorage` 仍只在 `app.js`」。
 
 ---
 
@@ -125,7 +136,9 @@
   score.js         # 计分系统、连消倍数
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
-  app.js           # Canvas 渲染、触摸输入、动画
+  app.js           # 应用编排：视图状态、动画调度、调用游戏逻辑、localStorage 读写
+  render.js         # Canvas 绘制与几何：画布尺寸/DPR、棋盘与 HUD 布局、6 色形状、结束面板
+  input.js          # 触摸/鼠标手势识别与视口守卫：只产出手势，不碰游戏状态
   tests/
     assert.js
     run-all.js
@@ -159,7 +172,9 @@
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
 - `level.js`：关卡配置、目标追踪、步数消耗、三星判定。
-- `app.js`：Canvas 绘制、触摸事件、动画、调用游戏逻辑、`localStorage` 读写。
+- `app.js`：应用编排——持有视图状态、调度动画时间线、调用游戏逻辑，并**唯一**允许读写 `localStorage`。
+- `render.js`：Canvas 绘制与几何计算（画布尺寸与 DPR、棋盘与 HUD 布局、形状与配色、结束面板）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档。
+- `input.js`：触摸与鼠标手势识别（滑动阈值、主轴锁定、视口守卫），只产出 `{ kind, x0, y0, x1, y1 }` 手势事件；不认识棋盘、不碰游戏状态与存档。
 - `index.html`：只放结构、viewport、引入脚本。
 - `styles.css`：移动端布局、禁止滚动、Canvas 样式。
 - `tests/`：各模块的算法单元测试与集成测试。
@@ -232,7 +247,7 @@
 
 障碍物得分：冰块每层 1000 分，雪块每层 1000 分，宝石 1500 分。
 
-连续消除（连消）加分：普通消除连消每次 +30 分，依次为 30、60、90、120 递增；冰块连消每次 +1000 分，依次叠加。
+连续消除（连消）加分：**第 1 次消除（交换本身造成的消除）不计连消**；自第 2 层起每次递增一档，第 n 层（n ≥ 2）加 `(n − 1) × 30` 分，依次为 30、60、90、120。冰块连消每次 +1000 分，同样自第 2 层起依次叠加。
 
 剩余步数转化：关卡结束时，每剩余一步约转化为 30 分连续消除加分。
 
@@ -308,18 +323,52 @@ board = cell[][]  // board[row][col]
 
 **game.js**
 
-- `createGame(levelConfig: LevelConfig): GameState`
+- `createGame(levelConfig: LevelConfig, options?: { rng?: () => number }): GameState`
 - `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`
-  - `SwapResult = { valid: boolean, cascades: number, scoreDelta: number, stepsLeft: number, gameOver: boolean }`
 - `resolveBoard(state: GameState): ResolveResult`（消除 → 下落 → 填充 → 级联，返回轨迹供动画使用）
-- `getState(state: GameState): GameSnapshot`（返回不可变的快照，供 UI 读取）
+- `getState(state: GameState): GameSnapshot`（返回**深拷贝并冻结**的不可变快照，供 UI 读取）
+
+结构定义（v1.4 补齐；此前只登记了函数名）：
+
+```js
+GameState = { level: Level, board: Board, gameOver: boolean, rng: () => number }
+// 分数不另存字段：统一读 level.currentScore（4.4），避免两处真相源。
+// rng 只用于「补充新格子」的随机源：生产为 Math.random，测试可注入确定性序列。
+
+SwapResult = {
+  valid: boolean, cascades: number, scoreDelta: number, stepsLeft: number, gameOver: boolean,
+  resolve: ResolveResult | null,   // 供 UI 分层回放；无效交换时为 null
+  afterSwap: Board | null          // 交换后、结算前的棋盘快照；无效交换时为 null
+}
+
+ResolveResult = {
+  cascades: number,
+  levels: ResolveLevel[],
+  cleared: Cell[],                 // 展平后的被消除格子（含 color，供计分）
+  spawned: Cell[],
+  capped: boolean,                 // 是否触发级联层数上限（上限 = 棋盘格数，见 ROADMAP Step 3）
+  scoreDelta: number,
+  levelScores: LevelScore[]        // 逐层计分明细，供 UI 与测试核对 3.5 公式
+}
+
+ResolveLevel = { level: number, groups: MatchGroup[], cleared: Cell[], moves: MoveRecord[], spawned: Cell[], board: Board }
+LevelScore   = { level: number, base: number, multiplier: number, bonus: number, gained: number }
+
+GameSnapshot = {
+  levelId: number, rows: number, cols: number, colorCount: number,
+  totalSteps: number, remainingSteps: number, currentScore: number, gameOver: boolean,
+  board: Board
+}
+```
 
 **board.js**
 
-- `createBoard(rows: number, cols: number, colorCount: number, obstacles?: ObstacleSpec[]): Board`
+- `createBoard(rows: number, cols: number, colorCount: number, obstacles?: ObstacleSpec[]): Board`（保证无初始三连且至少存在一个可行交换）
 - `swapCells(board: Board, a: Pos, b: Pos): void`（原地交换）
-- `applyGravity(board: Board): MoveRecord[]`（返回下落轨迹，供动画使用）
-- `refillBoard(board: Board, colorCount: number): Cell[]`（返回新生成格子）
+- `applyGravity(board: Board): MoveRecord[]`（原地压缩并返回下落轨迹，供动画使用）
+  - `MoveRecord = { id: number, from: Pos, to: Pos, color: number }`（只记录真正发生位移的格子；`id` 对应 4.1 的 `cell.id`，供动画追踪）
+- `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子）
+- `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
 - `hasPossibleMove(board: Board): boolean`
 - `shuffleBoard(board: Board): boolean`（返回是否成功）
 - `isCellMovable(board: Board, r: number, c: number): boolean`
@@ -355,7 +404,8 @@ board = cell[][]  // board[row][col]
 
 **level.js**
 
-- `createLevel(config: LevelConfig): Level`
+- `createLevel(config: LevelConfig): Level`（按 4.4 校验 `goal` 必填、`starThresholds` 为三元组且非递减）
+- `consumeStep(level: Level): number`（扣 1 步并返回剩余步数，已为 0 时保持 0；4.3.3 的调用点在 `game.trySwap`）
 - `checkGoal(level: Level, board: Board, score: number, collected: Record<string, number>): boolean`
 - `calcStars(score: number, thresholds: [number, number, number]): 0 | 1 | 2 | 3`
 - `getRemainingStepBonus(stepsLeft: number): number`
@@ -617,6 +667,7 @@ node tests/integration.test.js
 | v1.1 | （本次） | Agent  | 统一数据结构、补全禁止项、新增术语表与配置项表、强化可执行性 | 全文                     |
 | v1.2 | 2026-09-18 | Agent  | 补全 game.js 接口与 4.4 关卡契约、与 ROADMAP 双向引用、清理附录 B 残渣 | 4.2、4.4、12、17、附录 B |
 | v1.3 | 2026-09-18 | Agent  | 补齐 REFERENCES.md 的宪法地位（六处）、2.2 节目录补 package.json 与 assets/、第 0 节优先级纳入 REFERENCES.md、附录 B 补 9 键并新增 B-2 字符串常量表、通篇移除不可见字符与格式缺陷 | 2.2、第 0 节、第 8 节、8.1、8.3、12、17、附录 B、附录 B-2、修订记录 |
+| v1.4 | 2026-09-19 | Agent  | 把 Step 2-4 的契约扩展与规则口径写入宪法：4.2 补齐 GameState/SwapResult/ResolveResult/ResolveLevel/LevelScore/GameSnapshot/MoveRecord 结构并登记 `options.rng`、`board.resolveCascades`、`level.consumeStep`；3.5 明确连消自第 2 层起计；2.2/2.3 登记 Step 5 的 `render.js`/`input.js` 拆分 | 2.2、2.3、3.5、4.2、11 |
 
 ---
 
