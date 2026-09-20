@@ -4,9 +4,9 @@
 
 ## 当前阶段
 
-第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）已完成；第二阶段目前已实现 Step 7 条纹糖果（4 连生成横/竖条纹、激活消整行/列、按 3.5 计 1.5 倍）。糖果外观采用用户批准的程序化绘制方案，界面层已拆为 `app.js`、`render.js`、`candy.js`、`hud.js`、`input.js`、`timeline.js`。
+第一阶段：核心可玩版（对应 `ROADMAP.md` Step 0 - Step 6）已完成；第二阶段目前已实现 Step 7 条纹糖果（4 连生成横/竖条纹、激活消整行/列、按 3.5 计 1.5 倍）与 Step 8 包装糖果（L/T 型 5 连在**交叉点**生成、激活消周围 3×3 且贴边裁剪、按 3.5 计 2.0 倍）。糖果外观采用用户批准的程序化绘制方案，界面层已拆为 `app.js`、`render.js`、`candy.js`、`hud.js`、`input.js`、`timeline.js`。
 
-**当前暂停点不是 Step 8。** 在开始包装糖果前，必须先完成 `ROADMAP.md` §0.1 的扩展前 Bug Audit Gate：自动回归、静态一致性、HTTP 浏览器冒烟、移动交互检查、缺陷分级与证据归档。最终是否允许进入 Step 8，以 `PROGRESS.md` 的最新审计记录为准；README 不替代测试证据。
+**扩展前 Bug Audit Gate（`ROADMAP.md` §0.1）已通过**：L1 自动回归 98 用例 / 840 断言、L2 浏览器冒烟 49 项、L3 窄屏触摸模拟，P0/P1 清零，P3 已登记（见 `PROGRESS.md` 与 `DECISIONS.md` D022）。**当前暂停点：Step 9 开始前需再跑一次同样的门禁并归档证据**；README 不替代测试证据。
 
 当前已实现、仅代码审查、仅测试夹具通过、真机未验证和延期能力必须分开表述。特别是 Android/iOS 包装、真实设备性能、iOS Safari/WebView、音频/震动、色盲与控制台检查，未实际验证前均不得写成“已支持”或“可发布”。
 

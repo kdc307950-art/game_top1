@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-09-20（Step 8：包装糖果 —— 完成并验证）
+
+### 完成项
+
+- **`match.js`**：`matchShapeToSpecial` 增加 `L`/`T` → `wrapped`；`line5` 仍返回 `null`（魔力鸟属 Step 9）。
+- **`special.js`**（65 行纯代码）：`getSpecialAffectedCells` 增加包装分支（以自身为中心的 3×3，越界裁剪）；`createSpecial` 按形状选择落点 —— 4 连取靠近中间、L/T 取**交叉点**；新增 `isInside` 防御（中心越界返回空集）。
+- **`candy.js`**：新增 `paintWrappedCandy`（径向渐变光晕 + 四角白结，光晕 1.25r = 0.45 格边长，不溢出）；精灵图集 3 种/色 → **4 种/色（24 张）**。
+- **`render.js`**：`spriteFor` 增加包装糖果分支。
+- **`app.js`**：日志「触发条纹 N」→「触发特效 N」（统计 `cleared` 中 `type !== normal`）。
+- **未改动**：`config.js`（无新增键）、`board.js`、`timeline.js`、`hud.js`、`shuffle.js` —— Step 7 建立的 `spawnKeys` / 链式清除 / 消除阶段补丁机制对包装糖果**直接通用**。
+
+### 验证方式（可复现）
+
+- `node tests/run-all.js` → **98 用例 / 840 断言 / 0 失败 / 0 加载错误 / exit 0**（Step 7 时 89/803）。新增：`tests/special.test.js` 8 例、`tests/game.test.js` 2 例；`tests/integration.test.js` 的 Step 3 老用例按本步契约更新。
+- **浏览器 `_build/verify-step8.mjs` → 34/34 PASS**（`_build/verify-step8.log` 留证）：精灵图集 24 张；包装糖果有光晕环（5432 px，内 965 / 外 2387，均值内 > 外 → 确实是径向渐变）；四角白结四象限均 ≥4 px，而普通糖果的近白像素**只在左上高光象限**（383/0/0/0）；真实 renderer 画出的包装格墨迹多于普通格（1284 vs 1099）且非高光象限有白点（普通格为 0）；真实 `trySwap` 造出 L 型 5 连 → 交叉点留下包装糖果、本层只消 4 格、该层 2.0 倍（40 → 80）、生成的特效不属于被消除集合（按 `cell.id` 判定）、消除阶段即按特效贴图；包装糖果被 3 连触发 → 清 9 格；角落触发 → 裁剪后共 5 格；20 次真实滑动全程无异常。
+- **既有套件回归**：`verify-step5` 30/30、`verify-step6` 25/25、`verify-step7` 39/39（图集断言按 4 种/色更新）、Gate 0.1 的 `audit-gate-step7` 49/49 —— **全部通过**。
+
+### 缺陷与脚本问题
+
+- **产品缺陷：0**（自动化 L1 与浏览器 L2/L3 全绿）。
+- **脚本缺陷 4 处（产品未动）**：① 普通糖果的「近白像素」判据被左上高光污染（红底高光 min ≈ 216），改为「非高光象限是否也有近白像素」；②③ 把「重力后坐标」当成「重力前坐标」（消除键与消除阶段补丁都在重力前空间），改用 `cell.id` 判定；④ 同源的消除键计数断言改为「键数 = 被消除格数」。
+
+### 功能边界（本步结束时的如实状态）
+
+- **已实现且已验证（L1+L2+L3）**：条纹糖果（Step 7）与包装糖果（Step 8）的生成、触发、链式连锁、计分倍数、外观与动画。
+- **未实现（禁止预设为可用）**：魔力鸟（Step 9）、组合效果（Step 10）、障碍物与关卡目标（Step 11-12）、音效/粒子（Step 16-17）、原生打包（Step 18）。
+- **未验证**：真机 iOS/Android、真实刘海屏安全区、其它浏览器（Safari/Firefox/微信）、长会话内存、离线、平台构建与签名。
+
+### 下一步
+
+- 按 ROADMAP 进入 **Step 9（魔力鸟）**：5 连直线 → `magic`；与任意普通色块交换消除全屏同色；禁止实现组合效果。仍需先过 0.1 门禁（本轮已把审计脚本与套件准备好，只需重跑并归档）。
+- 待你决定的两件文档事项见本轮汇报末尾（宪法版本对齐 P3-1、`candy.js` 描述是否补「包装特效」）。
+
+---
+
+## 2026-09-20（Step 8 执行卡：包装糖果）
+
+> 按 ROADMAP §0.5「每个 Step 的统一执行卡」在开工前逐项填写；DoR 见 §0.6。
+
+1. **开始前置条件**：Step 7 已验收（tag `step7-done`）、Gate 0.1 已通过（tag `gate-0.1-pass`）；本步起点 = tag **`step8-start`（0abae83）**，工作区干净。相关章节：AGENTS 3.2（L/T 型 5 连 → 包装糖果，消周围 3×3）、4.2（`matchShapeToSpecial` / `createSpecial` / `activateSpecial` / `getSpecialAffectedCells` 四个签名**无需新增**）、4.3.5/4.3.13、5.4（必须与普通糖果有明显视觉区分）、附录 A；ROADMAP Step 8；`REFERENCES.md` §2.2 Step 8。最近决策 D020（Step 7 口径）、D022（审计与放行）。未解决缺陷：P3-1/P3-2/P3-3（均不阻塞，见同日审计记录）。
+2. **允许修改范围**：`special.js`、`match.js`、`game.js`、`app.js`、`tests/special.test.js`、`tests/game.test.js`；**视觉必需**的 `candy.js` + `render.js`（5.4 要求包装糖果有可辨外观；方案沿用 Step 7 用户已批准的 `_build/candy-preview.html` 里的包装糖果原型：径向渐变光晕 + 四角包装结）。**禁止触碰**：`config.js`（不新增配置键）、`board.js`（Step 7 的 `spawnKeys` + 链式清除机制已对所有特效通用）、`index.html`、`styles.css`，以及 Step 9/10 能力（魔力鸟、组合效果）。
+3. **执行顺序**：执行卡与 DoR → 契约确认与夹具 → 实现（`match.js` 映射 → `special.js` 落点与影响范围 → `candy.js`/`render.js` 外观 → `app.js` 日志口径）→ 失败用例 → 修复 → 自动回归 → 浏览器验证 → 文档与提交。
+4. **必须产物**：源码 diff；`node tests/run-all.js` 结果；`_build/verify-step8.mjs` 结果（含像素取证）；`DECISIONS.md` D023；`[step8]` 提交 + `step8-done` tag。
+5. **自动化测试**：`node tests/run-all.js`（目标：用例/断言数增长且 0 失败、exit 0）；`node tests/special.test.js` 单跑。
+6. **手动/浏览器测试**：390×844@DPR3 与 200×640@DPR2；用 CDP 脚本驱动真实页面，断言 L/T 匹配生成 `wrapped`、落点=交叉点、激活清除 3×3 且边界裁剪、像素上包装糖果与普通/条纹糖果可区分。
+7. **证据等级**：L1（单测/集成）+ L2（桌面浏览器主流程）+ L3（窄屏触摸模拟）；真机、Android/iOS、发布一律**未验证**。
+8. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step8-start` = `0abae83`；若实现失败或测试连续 2 次原因不明，回到该点并如实汇报（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（L/T→3×3）与非目标（不实现魔力鸟/组合）明确；前置 Step 7 与 Gate 0.1 均已验收；允许修改文件已列出；4.2 契约已确认无需扩展；夹具与验收路径可执行（`detectMatchShape` 已能返回 `L`/`T`）；风险、依赖与回滚点已登记 → **通过**。
+
+---
+
 ## 2026-09-20（Gate 0.1 扩展前 Bug Audit：独立审计通过，放行 Step 8）
 
 ### 一、审计对象与环境

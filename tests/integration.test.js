@@ -12,7 +12,7 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CONFIG, OBSTACLE_TYPE } from '../config.js';
+import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
 import {
   applyGravity,
   createBoard,
@@ -244,14 +244,18 @@ test('随机源持续产生匹配时，级联被层数上限截断（不会无�
   assertEqual(result.cleared.length, SIZE * SIZE * SIZE * SIZE, '每层都清空整盘');
 });
 
-test('L 型 5 连：一次消除 5 格，不因横竖两段重复计数', () => {
+test('L 型 5 连：合并后只算 1 组 5 格，交叉点生成包装糖果（Step 8）', () => {
   const board = fixture((b) => paint(b, [[0, 0], [0, 1], [0, 2], [1, 0], [2, 0]], 2));
 
   const result = resolveCascades(board, COLORS, { rng: noCascadeRng() });
+  const first = result.levels[0];
 
-  assertEqual(result.levels[0].groups.length, 1, '合并后应只算 1 组');
-  assertEqual(result.levels[0].cleared.length, 5, '消除 5 格（不是 6 格）');
-  assertEqual(result.levels[0].moves.length, 0, '空洞在列顶部，无需下落');
+  assertEqual(first.groups.length, 1, '合并后应只算 1 组');
+  assertEqual(first.groups[0].cells.length, 5, '横竖两段共享交叉点，去重后是 5 格（不是 6 格）');
+  assertEqual(first.cleared.length, 4, '交叉点留下来变成包装糖果，本层只消除其余 4 格（Step 8 起）');
+  // 同列的 (1,0)(2,0) 被消除后，幸存的交叉点被重力压到第 2 行
+  assertEqual(first.board[2][0].type, CELL_TYPE.WRAPPED, '包装糖果留在第 0 列（下落后第 2 行）');
+  assertTrue(first.moves.length > 0, '第 0 列出现空洞，需要下落');
 });
 
 test('纯障碍格不会被消除或替换（雪块保留）', () => {

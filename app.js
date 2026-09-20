@@ -233,14 +233,14 @@ function attemptSwap(a, b) {
   if (result.resolve.capped) {
     log('warn', `级联达到层数上限（${result.cascades} 层）后强制结束，请检查随机源或色数设置`);
   }
-  // Step 7 的日志摘要：本步触发了多少颗条纹糖果（4.3.8），配合上面的形状列表即可核对 3.2 的生成
-  const stripedTriggered = result.resolve.cleared.filter((cell) => cell.type === CELL_TYPE.STRIPED).length;
+  // Step 7/8 的日志摘要：本步触发了多少颗特殊元素（4.3.8），配合上面的形状列表即可核对 3.2 的生成
+  const specialsTriggered = result.resolve.cleared.filter((cell) => cell.type !== CELL_TYPE.NORMAL).length;
   log(
     'info',
     `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${firstLevelGroups.length} 组匹配` +
       `[${firstLevelGroups.map((group) => group.shape).join(', ')}]，级联 ${result.cascades} 层，` +
       `共消除 ${result.resolve.cleared.length} 格，新生成 ${result.resolve.spawned.length} 格，` +
-      `触发条纹 ${stripedTriggered}，` +
+      `触发特效 ${specialsTriggered}，` +
       `本步 +${result.scoreDelta} 分（本局 ${result.scoreDelta + scoreBefore}），剩余步数 ${result.stepsLeft}`
   );
 

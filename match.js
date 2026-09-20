@@ -8,8 +8,8 @@
 //     不需要额外 Set，扫描仍然是 O(rows × cols)。
 //
 // 4.2 的 `matchShapeToSpecial` 把形状映射到特殊元素类型（条纹/包装/魔力鸟）。
-// 【Step 7】只实现 4 连 → 条纹：「包装糖果（L/T 型）」属 Step 8、「魔力鸟（5 连直线）」属 Step 9，
-// 两处都明确禁止在本步实现，故此处返回 null；Step 8/9 会在本函数内补上对应分支。
+// 【Step 7】4 连直线 → 条纹；【Step 8】L/T 型 → 包装糖果；「魔力鸟（5 连直线）」属 Step 9，
+// 本步明确禁止实现，故 line5 仍返回 null。
 
 import { CELL_TYPE, DIRECTION, MATCH_SHAPE } from './config.js';
 
@@ -114,13 +114,17 @@ export function findAllMatchGroups(board) {
 
 /**
  * 4.2：matchShapeToSpecial(shape, direction) —— 形状 → 特殊元素类型。
- * 【Step 7】只实现「4 连直线 → 条纹糖果」（3.2 / 附录 A）。方向不入参判定：
- * 3.2 规定「横向四连生成横向条纹（消除整行），纵向四连生成纵向条纹（消除整列）」，
- * 即**条纹方向 = 匹配方向**（与参考实现相反，见 D014 第 1 条），所以 `direction` 原样沿用。
- * line5（魔力鸟）与 L/T（包装糖果）属 Step 8/9，本步返回 null。
+ *   4 连直线 → 条纹糖果（3.2 / 附录 A）。方向不入参判定：3.2 规定
+ *   「横向四连生成横向条纹（消除整行），纵向四连生成纵向条纹（消除整列）」，
+ *   即**条纹方向 = 匹配方向**（与参考实现相反，见 D014 第 1 条），所以 `direction` 原样沿用。
+ *   L/T 型 → 包装糖果（Step 8，3.2「五个同色糖果排成 T 型或 L 型」）。
+ *   line5（魔力鸟）属 Step 9，本步禁止实现，返回 null。
+ * 一次消除同时满足多种形状时按 3.2 的优先级只生成一种，优先级在 game.multiplierForLevel 与
+ * board.resolveCascades 的逐组处理中体现（同一层多组各生成各的，互不覆盖）。
  */
 export function matchShapeToSpecial(shape, direction) {
   if (shape === MATCH_SHAPE.LINE4) return CELL_TYPE.STRIPED;
+  if (shape === MATCH_SHAPE.L || shape === MATCH_SHAPE.T) return CELL_TYPE.WRAPPED;
   return null;
 }
 

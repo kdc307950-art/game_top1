@@ -233,6 +233,39 @@ test('resolveBoard：3 连触发已有条纹的那一层也按 1.5 倍计（4.3.
   assertEqual(first.gained, 120, '80 × 1.5');
 });
 
+test('resolveBoard：L 型生成包装糖果的那一层按 3.5 计 2.0 倍（Step 8 接入）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    // L 型 5 连：第 3 行 2..4 列 + 第 4 列 3..5 行，交叉点 (3,4)
+    for (const [r, c] of [[3, 2], [3, 3], [3, 4], [4, 4], [5, 4]]) b[r][c].color = 3;
+  });
+
+  const result = resolveBoard(game);
+  const first = result.levelScores[0];
+
+  assertEqual(result.levels[0].groups[0].shape, 'L', '被识别为 L 型');
+  assertEqual(result.levels[0].cleared.length, 4, '交叉点留下包装糖果，本层消除 4 格');
+  assertEqual(first.base, 4 * SCORE.basePerCell, '基础分 40');
+  assertEqual(first.multiplier, SCORE.specialMultipliers.wrapped, '包装糖果倍数 2.0');
+  assertEqual(first.gained, 80, '40 × 2.0');
+});
+
+test('resolveBoard：3 连触发已有包装糖果的那一层也按 2.0 倍计（4.3.8 + 3.5）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    for (const c of [1, 2, 3]) b[3][c].color = 3; // 3 连，其中 (3,2) 是包装糖果
+    b[3][2].type = CELL_TYPE.WRAPPED;
+  });
+
+  const result = resolveBoard(game);
+  const first = result.levelScores[0];
+
+  assertEqual(result.levels[0].cleared.length, 9, '包装糖果激活 → 清除周围 3×3 共 9 格');
+  assertEqual(first.base, 9 * SCORE.basePerCell, '基础分 90');
+  assertEqual(first.multiplier, SCORE.specialMultipliers.wrapped, '包装糖果触发倍数 2.0');
+  assertEqual(first.gained, 180, '90 × 2.0');
+});
+
 test('getState：返回不可变快照，与内部状态互相隔离', () => {
   const game = createGame({ steps: 30 });
   const snapshot = getState(game);

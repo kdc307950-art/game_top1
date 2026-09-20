@@ -20,6 +20,8 @@ const MOTIF_ALPHA = 0.72;
 const HIGHLIGHT_COLOR = 'rgba(255, 255, 255, 0.5)';
 const STRIPE_COLOR = 'rgba(255, 255, 255, 0.88)';
 const ARROW_COLOR = 'rgba(255, 255, 255, 0.92)';
+const WRAPPED_HALO = 1.25; // 包装糖果光晕半径 / 糖果半径（仍在格子内：0.36 × 1.25 = 0.45 < 0.5）
+const WRAPPED_KNOTS = [[-1, -1], [1, -1], [-1, 1], [1, 1]]; // 四角「包装结」的相对方位
 
 // 颜色索引（0-5）→ 调色板。顺序对应 CONFIG.COLOR_NAMES，改动顺序等于改动视觉语义。
 export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff', '#a06bff'];
@@ -35,9 +37,9 @@ const SHAPES = [
 ];
 
 /**
- * 糖果精灵图集：每个颜色 3 张（普通 / 横向条纹 / 纵向条纹），共 18 张。
+ * 糖果精灵图集：每个颜色 4 张（普通 / 横向条纹 / 纵向条纹 / 包装），共 24 张。
  * 形状与颜色一一对应（5.4），故形状只需按 color 索引取，不需要 6×6 全组合。
- * 返回 [color] = { normal, stripedH, stripedV }，每张精灵正好覆盖一格（红线 2）。
+ * 返回 [color] = { normal, stripedH, stripedV, wrapped }，每张精灵正好覆盖一格（红线 2）。
  */
 export function buildSpriteAtlas(cellCss, dpr) {
   const px = Math.max(8, Math.round(cellCss * dpr));
@@ -54,7 +56,8 @@ export function buildSpriteAtlas(cellCss, dpr) {
     return {
       normal: bake((ctx, cx, cy, r) => paintCandy(ctx, cx, cy, r, base, shape)),
       stripedH: bake((ctx, cx, cy, r) => paintStripedCandy(ctx, cx, cy, r, base, shape, DIRECTION.H)),
-      stripedV: bake((ctx, cx, cy, r) => paintStripedCandy(ctx, cx, cy, r, base, shape, DIRECTION.V))
+      stripedV: bake((ctx, cx, cy, r) => paintStripedCandy(ctx, cx, cy, r, base, shape, DIRECTION.V)),
+      wrapped: bake((ctx, cx, cy, r) => paintWrappedCandy(ctx, cx, cy, r, base, shape))
     };
   });
 }
@@ -179,8 +182,31 @@ function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
   ctx.fill();
 }
 
-/** 生成形状路径：圆 / 圆角方 / 正多边形（可纵向压扁）/ 星形，全部闭合。 */
-function shapePath(ctx, shape, cx, cy, r) {
+/**
+ * 包装糖果：普通糖果 + 径向渐变光晕 + 四个「包装结」。
+ * 5.4 要求特殊元素有明显视觉区分；光晕用径向渐变而不是阴影模糊（红线 1，REFERENCES §3.5）。
+ * 光晕半径 1.25r 仍在格子内（r = 0.36 格边长 → 1.25r = 0.45 格边长），不会溢出到相邻格。
+ */
+function paintWrappedCandy(ctx, cx, cy, radius, base, shape) {
+  const halo = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius * WRAPPED_HALO);
+  halo.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+  halo.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * WRAPPED_HALO, 0, Math.PI * 2);
+  ctx.fill();
+
+  paintCandy(ctx, cx, cy, radius, base, shape);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  for (const [dx, dy] of WRAPPED_KNOTS) {
+    ctx.beginPath();
+    ctx.arc(cx + dx * radius * 0.62, cy + dy * radius * 0.62, radius * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** 生成形状路径：圆 / 圆角方 / 正多边形（可纵向压扁）/ 星形，全部闭合。 */function shapePath(ctx, shape, cx, cy, r) {
   if (shape.kind === 'circle') {
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);

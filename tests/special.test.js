@@ -59,13 +59,13 @@ const stripedAt = (board) => {
   return found;
 };
 
-test('matchShapeToSpecial：4 连直线 → 条纹糖果；其余形状本步返回 null（Step 8/9）', () => {
+test('matchShapeToSpecial：4 连 → 条纹、L/T 型 → 包装（Step 8）；其余形状返回 null', () => {
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE4, DIRECTION.H), CELL_TYPE.STRIPED, '横向 4 连');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE4, DIRECTION.V), CELL_TYPE.STRIPED, '纵向 4 连');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE3, DIRECTION.H), null, '3 连不产生特殊元素');
   assertEqual(matchShapeToSpecial(MATCH_SHAPE.LINE5, DIRECTION.H), null, '5 连直线属 Step 9（魔力鸟）');
-  assertEqual(matchShapeToSpecial(MATCH_SHAPE.L, null), null, 'L 型属 Step 8（包装糖果）');
-  assertEqual(matchShapeToSpecial(MATCH_SHAPE.T, null), null, 'T 型属 Step 8（包装糖果）');
+  assertEqual(matchShapeToSpecial(MATCH_SHAPE.L, null), CELL_TYPE.WRAPPED, 'L 型 → 包装糖果（3.2）');
+  assertEqual(matchShapeToSpecial(MATCH_SHAPE.T, null), CELL_TYPE.WRAPPED, 'T 型 → 包装糖果（3.2）');
 });
 
 test('getSpecialAffectedCells：横向条纹波及整行，纵向条纹波及整列（3.2）', () => {
@@ -82,8 +82,26 @@ test('getSpecialAffectedCells：横向条纹波及整行，纵向条纹波及整
   assertEqual(getSpecialAffectedCells(board, 0, 0, CELL_TYPE.STRIPED, DIRECTION.H).length, SIZE, '首行');
   assertEqual(getSpecialAffectedCells(board, 7, 7, CELL_TYPE.STRIPED, DIRECTION.V).length, SIZE, '末列');
 
-  // 非条纹类型：波及的就是它自己（包装/魔力鸟属 Step 8/9）
+  // 非条纹类型：普通格「波及」的就是它自己（魔力鸟属 Step 9）
   assertDeepEqual(getSpecialAffectedCells(board, 2, 2, CELL_TYPE.NORMAL, null), [{ r: 2, c: 2 }], '普通格');
+});
+
+test('getSpecialAffectedCells：包装糖果波及 3×3 共 9 格，贴边与角落按棋盘裁剪（Step 8 验收项）', () => {
+  const board = fixture();
+
+  const center = getSpecialAffectedCells(board, 3, 4, CELL_TYPE.WRAPPED, null);
+  assertEqual(center.length, 9, '棋盘内部 = 3×3 共 9 格');
+  const expected = [];
+  for (let r = 2; r <= 4; r += 1) for (let c = 3; c <= 5; c += 1) expected.push({ r, c });
+  assertDeepEqual(center, expected, '以内侧为中心（按行优先顺序）恰好覆盖周围 9 格');
+
+  assertEqual(getSpecialAffectedCells(board, 0, 0, CELL_TYPE.WRAPPED, null).length, 4, '左上角被裁剪为 4 格');
+  assertEqual(getSpecialAffectedCells(board, 0, 4, CELL_TYPE.WRAPPED, null).length, 6, '上边缘被裁剪为 6 格');
+  assertEqual(getSpecialAffectedCells(board, 7, 7, CELL_TYPE.WRAPPED, null).length, 4, '右下角被裁剪为 4 格');
+  assertEqual(getSpecialAffectedCells(board, 7, 3, CELL_TYPE.WRAPPED, null).length, 6, '下边缘被裁剪为 6 格');
+
+  // 越界坐标不应该返回任何格子（防御性：调用方传入非法坐标时不能凭空产生格子）
+  assertEqual(getSpecialAffectedCells(board, -1, -1, CELL_TYPE.WRAPPED, null).length, 0, '越界坐标');
 });
 
 test('createSpecial：4 连在靠近中间的落点生成条纹糖果，方向 = 匹配方向（3.2 / D014）', () => {
@@ -129,6 +147,100 @@ test('activateSpecial：条纹返回整行/整列；普通格返回空（无特�
   board[5][5].direction = DIRECTION.V;
   assertEqual(activateSpecial(board, 5, 5).length, SIZE, '纵向条纹 → 整列');
   assertDeepEqual(activateSpecial(board, 0, 0), [], '普通格没有可激活的特效');
+});
+
+// ---------------------------------------------------------------- Step 8：包装糖果
+
+/** L 型夹具：第 3 行 2..4 列 + 第 4 列 3..5 行，交叉点 (3,4) 同时是两条臂的端点。 */
+const L_CELLS = [{ r: 3, c: 2 }, { r: 3, c: 3 }, { r: 3, c: 4 }, { r: 4, c: 4 }, { r: 5, c: 4 }];
+/** T 型夹具：第 3 行 2..4 列 + 第 3 列 2..4 行，交叉点 (3,3) 在横臂中间、竖臂中间。 */
+const T_CELLS = [{ r: 2, c: 3 }, { r: 3, c: 2 }, { r: 3, c: 3 }, { r: 3, c: 4 }, { r: 4, c: 3 }];
+
+function wrappedAt(board) {
+  const found = [];
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) {
+      if (board[r][c].type === CELL_TYPE.WRAPPED) found.push({ r, c, direction: board[r][c].direction });
+    }
+  }
+  return found;
+}
+
+test('createSpecial：L 型 5 连在交叉点生成包装糖果，direction 为 null（3.2 / 4.1）', () => {
+  const board = fixture();
+  const group = { cells: L_CELLS, shape: MATCH_SHAPE.L, direction: null };
+  const idBefore = board[3][4].id;
+
+  const pos = createSpecial(board, group);
+
+  assertDeepEqual(pos, { r: 3, c: 4 }, '落点 = 交叉点（两条臂的公共格）');
+  assertEqual(typeAt(board, 3, 4), CELL_TYPE.WRAPPED, '类型变为包装糖果');
+  assertEqual(board[3][4].direction, null, '包装糖果没有方向（4.1）');
+  assertEqual(board[3][4].id, idBefore, '沿用原格子（id 不变）');
+  assertEqual(typeAt(board, 3, 3), CELL_TYPE.NORMAL, '同组其他格子不受影响');
+});
+
+test('createSpecial：T 型 5 连同样在交叉点生成包装糖果', () => {
+  const board = fixture();
+  assertDeepEqual(createSpecial(board, { cells: T_CELLS, shape: MATCH_SHAPE.T, direction: null }), { r: 3, c: 3 }, '落点 = 交叉点');
+  assertEqual(typeAt(board, 3, 3), CELL_TYPE.WRAPPED, '类型为包装糖果');
+});
+
+test('createSpecial：交叉点已是特殊元素时不覆盖；非法交叉形状不生成', () => {
+  const board = fixture();
+  board[3][4].type = CELL_TYPE.STRIPED;
+  board[3][4].direction = DIRECTION.H;
+  assertEqual(createSpecial(board, { cells: L_CELLS, shape: MATCH_SHAPE.L, direction: null }), null, '不覆盖已有特效');
+  assertEqual(board[3][4].type, CELL_TYPE.STRIPED, '原有类型保持不变');
+
+  // 交叉点缺失（只有一条臂）→ 不生成（防御性：crossCenter 返回 null）
+  const broken = { cells: [{ r: 3, c: 2 }, { r: 3, c: 3 }, { r: 3, c: 4 }], shape: MATCH_SHAPE.L, direction: null };
+  assertEqual(createSpecial(fixture(), broken), null, '交叉点缺失时跳过生成');
+});
+
+test('resolveCascades：L 型 5 连消除 4 格、在交叉点留下 1 颗包装糖果（验收项）', () => {
+  const board = fixture((b) => {
+    for (const pos of L_CELLS) b[pos.r][pos.c].color = 3;
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, { rng: cycleRng(STEADY_COLORS) });
+  const first = result.levels[0];
+
+  assertEqual(first.groups.length, 1, '恰好 1 组匹配');
+  assertEqual(first.groups[0].shape, MATCH_SHAPE.L, '被识别为 L 型');
+  assertEqual(first.cleared.length, 4, 'L 型 5 连只消除 4 格（交叉点留下来变成特效）');
+  // 交叉点 (3,4) 生成包装糖果；本层又消掉了同列的 (4,4)(5,4)，幸存格被重力压到底部，
+  // 因此快照里它在第 5 行（与 Step 7 纵向 4 连同理：位置按快照读，而不是按生成时的坐标猜）。
+  assertDeepEqual(wrappedAt(first.board), [{ r: 5, c: 4, direction: null }], '同列留下 1 颗包装糖果（下落后第 5 行）');
+  assertFalse(result.capped, '不该触发级联上限');
+});
+
+test('resolveCascades：包装糖果被 3 连触发时消除周围 3×3（4.3.8）', () => {
+  const board = fixture((b) => {
+    for (const c of [1, 2, 3]) b[3][c].color = 3;
+    b[3][2].type = CELL_TYPE.WRAPPED; // 包装糖果在 3 连之内 → 被带上触发
+    b[3][2].direction = null;
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, { rng: cycleRng(STEADY_COLORS) });
+  const first = result.levels[0];
+
+  // 3 连本身 ⊂ 3×3（第 2..4 行 × 第 1..3 列），因此本层恰好清 9 格
+  assertEqual(first.cleared.length, 9, '包装糖果波及 3×3 = 9 格');
+  assertEqual(first.cleared.filter((cell) => cell.type === CELL_TYPE.WRAPPED).length, 1, '其中包含那颗包装糖果');
+  assertEqual(wrappedAt(first.board).length, 0, '本层不再生成新的包装糖果');
+});
+
+test('resolveCascades：角落的包装糖果按棋盘裁剪（角落 3×3 → 4 格）', () => {
+  const board = fixture((b) => {
+    for (const c of [0, 1, 2]) b[0][c].color = 3;
+    b[0][0].type = CELL_TYPE.WRAPPED;
+  });
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, { rng: cycleRng(STEADY_COLORS) });
+
+  // 角落 (0,0) 的 3×3 被裁剪为 4 格 {(0,0),(0,1),(1,0),(1,1)}，并入 3 连 {(0,0),(0,1),(0,2)} → 5 格
+  assertEqual(result.levels[0].cleared.length, 5, '角落裁剪后共 5 格');
 });
 
 test('resolveCascades：横向 4 连消除 3 格并留下 1 颗横向条纹（验收项）', () => {

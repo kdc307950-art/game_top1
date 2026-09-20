@@ -943,7 +943,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 
 - [x] Step 7：条纹糖果（4 连生成 + 激活消整行/列，含 `candy.js` 外观拆分，见 DECISIONS D020）
 - [x] Gate 0.1：Step 7 完成后的 Bug Audit —— **2026-09-20 通过**（L1 自动回归 89 用例/803 断言/exit 0；L2 浏览器冒烟 49 项；L3 窄屏触摸模拟；P0/P1=0，P3 已登记，详见 `PROGRESS.md` 同日审计记录与 DECISIONS D022）
-- [ ] Step 8：包装糖果
+- [x] Step 8：包装糖果（L/T 型 5 连 → 消周围 3×3，2.0 倍；落点=交叉点、边界裁剪、24 张精灵，见 DECISIONS D023）
 - [ ] Step 9：魔力鸟
 - [ ] Step 10：特殊元素组合
 - [ ] Step 11：冰块与雪块
