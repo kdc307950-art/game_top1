@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-09-20（Step 11 执行卡：冰块与雪块）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。三项口径已获用户批准（见 D027）。
+
+1. **开始前置条件**：Step 10 已验收（`step10-done`）、Gate 0.1 第四轮已通过（`gate-0.1-step10-pass`，**允许开始 Step 11**）；起点 = tag **`step11-start`（a65b71b）**，工作区干净。相关章节：AGENTS 3.4（冰块 1-3 层：冰内动物可移动并消除、消除其上动物连带 −1 层、每层 1000 分；雪块 1-5 层：消除旁边动物 −1 层、特效亦可；障碍物不参与匹配、占据格子、影响下落与交换）、3.5（冰块/雪块每层 1000、冰块连消 +1000/档）、4.1（`cell.obstacle`/`obstacleLayers`）、4.2（`obstacles.js` 四个契约）、4.3.10、5.4（层数显示）；ROADMAP Step 11；`REFERENCES.md` §2.2 Step 11。前置决策：**D014 第 5 条**（`ice`/`vine` 保留 `color`，`snow`/`choc` 占格无动物）、D015（洞/屏障词汇与重力分段）、D020/D023（外观常量放绘制模块的先例）。
+2. **允许修改范围**：`obstacles.js`、`board.js`、`game.js`、`app.js`、`score.js`、`render.js`、`candy.js`、`config.js`（如确需新键）、`tests/obstacles.test.js`、`tests/board.test.js`、`tests/game.test.js`、`tests/integration.test.js`；**AGENTS.md v1.12（已获批准）**：3.4 口径细化 + 4.2 三条纯追加 + 第 11 节记录。**范围缺口说明**：ROADMAP Step 11 的「范围」未列 `render.js`/`candy.js`，但 5.4 要求「障碍物必须有清晰的层数显示（冰块半透明叠加、雪块白色覆盖）」，而第 9 节禁止逻辑模块碰 Canvas —— 故本步**必须**扩展到这两个绘制模块，按 Step 10 的同类先例登记。`match.js`/`special.js` 列在范围内，但预计**零改动**（`snow` 格 `color === null` 天然不参与匹配）。**禁止**：实现藤蔓、巧克力（Step 13）；改动 3.3 组合与既有倍数；在逻辑模块里操作 Canvas。
+3. **执行顺序**：执行卡与 DoR → 宪法 v1.12 登记 → `obstacles.js` 四个契约 → `board.js`（覆层障碍的洞/屏障判定修正 → 补位保留障碍物 → 逐层施加减层并产出明细）→ `game.js`/`score.js` 计分接入 → `candy.js`/`render.js` 外观与层数 → `app.js` 关卡放障碍物 → 失败用例 → 修复 → 自动回归 → 浏览器验证 → 文档与提交。
+4. **必须产物**：源码 diff；`node tests/run-all.js` 结果；`_build/verify-step11.mjs` 结果（含像素与真实滑动取证）；`DECISIONS.md` D027；`[step11]` 提交 + `step11-done` tag；五份文档同步。
+5. **自动化测试**：`node tests/run-all.js`（用例/断言数增长且 0 失败、exit 0）；`node tests/obstacles.test.js`、`tests/board.test.js`、`tests/game.test.js`、`tests/integration.test.js` 单跑。
+6. **手动/浏览器测试**：390×844@DPR3；用 CDP 驱动真实页面，断言冰块格呈现「动物 + 半透明覆层」、雪块格为不透明占格、层数角标随受损变化、冰块内的动物被消除后该格**补位且冰仍在**、雪块受损后层数减少、层数分按 1000/层入账；真实滑动回归。
+7. **证据等级**：L1 + L2 + L3；真机、Android/iOS、发布**未验证**。
+8. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step11-start` = `a65b71b`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（冰块 1-3 层与雪块 1-5 层的创建/受损/得分；不参与匹配；影响下落与交换）与非目标（不实现藤蔓/巧克力；不改组合与倍数）明确；前置 Step 10 与 Gate 0.1 已验收；允许修改文件已列出（含 `render.js`/`candy.js` 的范围缺口说明）；**契约与口径已确认** —— 用户批准三条纯追加（`Obstacle`、`ResolveLevel/ResolveResult.damaged`、`LevelScore.obstacle`）与两条行为口径（冰块内的动物被消除后从上方补位且冰层 −1；同一级联层内每格障碍物最多 −1 层）、一条计分口径（层数分另算、不参与特效倍数）；夹具（冰块/雪块在棋盘中央与边缘、贴角 4 邻域边界、多层叠冰）与验收路径可执行；风险（`clearCells` 的既有 `color=null` 会让冰块格被误判为屏障，属潜伏缺陷，必须先修）与回滚点已登记 → **通过**。
+
+---
+
 ## 2026-09-20（Gate 0.1 第四轮：Step 10 → Step 11 门禁证据）
 
 ### 一、审计对象与环境
