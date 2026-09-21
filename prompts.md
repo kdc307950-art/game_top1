@@ -214,6 +214,16 @@
 参考：REFERENCES.md §2.2 Step 10
 ```
 
+**Step 10 实战记录（2026-09-20）**
+
+- **本步不需要新的契约**：`resolveSpecialCombo(board, a, b)` 已在 Step 9 一并登记进 4.2（v1.11），`board.resolveCascades` 的 `initialClear` 也已存在。因此提示词里应该直接写明「复用既有入口、不新增契约」，避免又发明一套组合专用的清除 API。三步走完全够用：`trySwap` 判两侧都是特效 → `resolveSpecialCombo` 就地改造并返回清除坐标 → `resolveBoard(state, { initialClear })` 清除并级联。
+- **最关键的一条设计是「`initialClear` 同时充当激活种子」**：3.3 里「条纹 + 魔力鸟 → 全屏同色变条纹并立即触发」「包装 + 魔力鸟 → 同色变包装并触发」「条纹 + 包装 → 区域内再触发包装爆炸」这三条**都不需要单独实现爆炸** —— 把要变形的格子就地改好、把坐标丢进清除集合，board 的种子链会让它们各自按 4.3.8 展开。若按直觉在 `special.js` 里再写一套二次爆炸，就会出现两处口径，迟早漂移。
+- **倍数不要杜撰**：3.5 的倍数表只有四种「双方同类」组合；「条纹/包装 + 魔力鸟」按已有的魔力鸟 2.5 回落。`COMBO_TYPES` 的值与 `SCORE_CONFIG.specialMultipliers` 的组合键同名，`multiplierForLevel` 直接查表即可。
+- **`multiplierForLevel` 只能看到逐层被清除的格子，看不到组合的双方是谁**，所以「级联里恰好清掉 2 颗条纹」会被记为 3.0、「恰好清掉 1 颗魔力鸟 + 别的特效」会按 2.5。规则顺序（magic ≥ 2 → 包+包 → 条+包 → 条+条）刻意对齐 3.3 的优先级；这条简化必须写进 `PROGRESS.md`/`DECISIONS.md`，不要假装精确。
+- **组合会瞬间制造大面积空洞**（条+条 15 格、魔+魔 64 格），值得单独做一条渲染取证：真实 `render.js` 在空洞格不画糖果、不抛异常。
+- **验证脚本的缓存问题（P3-6）**：`index.html` 用 `?t=` 破缓存，但它 `import` 的 `./special.js` 等子资源不带查询串，浏览器会复用上一轮的旧模块 —— 第一次跑 Step 10 验证时页面里根本没有 `COMBO_TYPES`，等于**拿旧代码当新代码验**。所有验证脚本此后都要加 `Network.enable` + `Network.setCacheDisabled({ cacheDisabled: true })`。
+- **时序类脚本要把输入锁算进去**：组合/长级联会让动画变长，`verify-step5` 的「越界滑动」用例因为触摸落在输入锁窗口内而丢日志。修法是等动画结束后重投（输入锁吞掉的触摸不算产品缺陷）。
+
 ## Step 11：冰块与雪块
 
 ```text

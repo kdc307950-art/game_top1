@@ -15,7 +15,8 @@ import {
   activateSpecial,
   createSpecial,
   getMagicTargets,
-  getSpecialAffectedCells
+  getSpecialAffectedCells,
+  resolveSpecialCombo
 } from '../special.js';
 import { matchShapeToSpecial } from '../match.js';
 import { buildPhases, motionDurations } from '../timeline.js';
@@ -450,6 +451,120 @@ test('resolveCascades：initialClear 与同层匹配组一起生效（互不覆�
 
   assertEqual(first.groups.length, 1, '该层有 1 个匹配组');
   assertEqual(first.cleared.length, 4, '3 连（3 格）+ initialClear（1 格）');
+});
+
+// ---------------------------------------------------------------- Step 10：组合效果（3.3 六种）
+
+/** 把某格直接改成特效（组合用例的夹具）。 */
+function put(board, r, c, type, direction = null, color = 3) {
+  board[r][c].type = type;
+  board[r][c].direction = direction;
+  board[r][c].color = color;
+}
+
+const keySet = (positions) => [...new Set(positions.map((pos) => `${pos.r},${pos.c}`))].sort();
+const rowKeys = (r) => Array.from({ length: SIZE }, (_, c) => `${r},${c}`);
+const colKeys = (c) => Array.from({ length: SIZE }, (_, r) => `${r},${c}`);
+
+test('resolveSpecialCombo：条纹 + 条纹 → 十字形（两行两列按各自方向展开）', () => {
+  const board = fixture();
+  put(board, 3, 3, CELL_TYPE.STRIPED, DIRECTION.H);
+  put(board, 3, 4, CELL_TYPE.STRIPED, DIRECTION.V);
+
+  const clear = resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  assertDeepEqual(keySet(clear), [...new Set([...rowKeys(3), ...colKeys(4)])].sort(), '第 3 行 ∪ 第 4 列');
+  assertEqual(keySet(clear).length, 15, '8 + 8 − 1（交叉点重复）');
+});
+
+test('resolveSpecialCombo：条纹 + 包装 → 整行/列 + 包装糖自身（二次爆炸交给链式）', () => {
+  const board = fixture();
+  put(board, 2, 2, CELL_TYPE.STRIPED, DIRECTION.H);
+  put(board, 2, 3, CELL_TYPE.WRAPPED);
+
+  const clear = resolveSpecialCombo(board, { r: 2, c: 2 }, { r: 2, c: 3 });
+
+  assertEqual(keySet(clear).length, SIZE, '整行 8 格（包装糖就在行内，不额外增加格子）');
+  assertTrue(keySet(clear).includes('2,3'), '包含那颗包装糖（它会被 seeds 机制继续引爆）');
+});
+
+test('resolveSpecialCombo：包装 + 包装 → 两个 5×5 范围（重叠去重）', () => {
+  const board = fixture();
+  put(board, 3, 3, CELL_TYPE.WRAPPED);
+  put(board, 3, 4, CELL_TYPE.WRAPPED);
+
+  const clear = resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  // 两个 5×5 各 25 格，重叠 rows1..5 × cols2..5 = 20 → 并集 30
+  assertEqual(keySet(clear).length, 30, '两个 5×5 的并集');
+  assertTrue(keySet(clear).includes('1,1') && keySet(clear).includes('5,6'), '覆盖到 ±2 的边缘');
+});
+
+test('resolveSpecialCombo：魔力鸟 + 魔力鸟 → 全屏所有糖果（64 格）', () => {
+  const board = fixture();
+  put(board, 3, 3, CELL_TYPE.MAGIC, null, 0);
+  put(board, 3, 4, CELL_TYPE.MAGIC, null, 1);
+
+  const clear = resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  assertEqual(keySet(clear).length, SIZE * SIZE, '整盘 64 格');
+});
+
+test('resolveSpecialCombo：条纹 + 魔力鸟 → 全屏同色变条纹并引爆（方向按行列奇偶交替）', () => {
+  const board = fixture((b) => {
+    b[0][0].color = 3; // 与条纹同色的普通糖果
+    b[0][1].color = 3;
+    b[6][6].color = 3;
+  });
+  put(board, 3, 3, CELL_TYPE.STRIPED, DIRECTION.H, 3);
+  put(board, 3, 4, CELL_TYPE.MAGIC, null, 1);
+
+  const clear = resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  assertEqual(board[0][0].type, CELL_TYPE.STRIPED, '同色普通糖果变成条纹');
+  assertEqual(board[0][0].direction, DIRECTION.H, '(0+0) 偶数 → 横向');
+  assertEqual(board[0][1].direction, DIRECTION.V, '(0+1) 奇数 → 纵向');
+  assertEqual(board[6][6].type, CELL_TYPE.STRIPED, '远处同色格同样被改造');
+  assertEqual(board[3][4].type, CELL_TYPE.MAGIC, '魔力鸟自身不被改造（只被清除）');
+  assertTrue(keySet(clear).includes('0,0') && keySet(clear).includes('0,1') && keySet(clear).includes('3,3'), '改造后的格子与两颗特效都在清除集合里');
+});
+
+test('resolveSpecialCombo：包装 + 魔力鸟 → 全屏同色变包装并引爆', () => {
+  const board = fixture((b) => {
+    b[6][0].color = 4;
+    b[6][1].color = 4;
+  });
+  put(board, 5, 5, CELL_TYPE.WRAPPED, null, 4);
+  put(board, 5, 6, CELL_TYPE.MAGIC, null, 2);
+
+  resolveSpecialCombo(board, { r: 5, c: 5 }, { r: 5, c: 6 });
+
+  assertEqual(board[6][0].type, CELL_TYPE.WRAPPED, '同色普通糖果变成包装糖果');
+  assertEqual(board[6][0].direction, null, '包装糖果没有方向');
+  assertEqual(board[5][6].type, CELL_TYPE.MAGIC, '魔力鸟保持原类型');
+});
+
+test('resolveSpecialCombo：普通格参与时不是组合（返回空数组）', () => {
+  const board = fixture();
+  put(board, 3, 3, CELL_TYPE.STRIPED, DIRECTION.H);
+  assertDeepEqual(resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 3, c: 4 }), [], '另一侧是普通格');
+  assertDeepEqual(resolveSpecialCombo(board, { r: 3, c: 3 }, { r: 9, c: 9 }), [], '越界坐标');
+});
+
+test('resolveCascades：initialClear 里的特效会继续链式展开（3.3 的二次爆炸）', () => {
+  const board = fixture();
+  put(board, 4, 4, CELL_TYPE.STRIPED, DIRECTION.H);
+  put(board, 4, 6, CELL_TYPE.WRAPPED); // 位于第 4 行内 → 会被条纹扫到并继续 3×3 爆炸
+
+  const result = resolveCascades(board, CONFIG.COLOR_COUNT, {
+    rng: cycleRng(STEADY_COLORS),
+    initialClear: [{ r: 4, c: 4 }]
+  });
+  const first = result.levels[0];
+
+  // 第 4 行（8 格）+ 包装糖的 3×3（rows3..5 × cols5..7 = 9）− 重叠 3 格 = 14
+  assertEqual(first.cleared.length, 14, '条纹扫到包装糖后二次爆炸');
+  assertTrue(first.cleared.filter((cell) => cell.type === CELL_TYPE.WRAPPED).length === 1, '包装糖确实被引爆');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

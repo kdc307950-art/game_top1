@@ -9,13 +9,27 @@
 //   那条 4.2 签名没有「目标颜色」参数；改用专门的 getMagicTargets(board, color)，
 //   由 game.trySwap 计算 initialClear 交给 board.resolveCascades（v1.11 登记的两条纯追加）。
 //   被其它特效波及时（例如被条纹扫到）不额外触发全屏清除，只按普通格子被消除（保守口径，见 D025）。
-// 【Step 10】resolveSpecialCombo（相邻特效交换的组合效果）仍留待下一步，故不建空壳函数。
+// 【Step 10】resolveSpecialCombo：两颗相邻特殊元素交换的组合效果（3.3 六种）。
+//   本函数只负责「就地改造需要变形的格子」+「返回要清除的坐标」；扣步数与计分都在 game.js，
+//   波及范围内的其它特效由 board.resolveCascades 的 seeds 机制继续链式展开（见 D026）。
 
 import { CELL_TYPE, DIRECTION } from './config.js';
 import { matchShapeToSpecial } from './match.js';
 
 const MIN_ARM = 3; // 3.2：L/T 型的两条臂各至少 3 格（3+3−1 = 5 连）
 const WRAPPED_SPAN = 1; // 3.2：包装糖果消除周围 3×3，即以自身为中心 ±1 格
+const COMBO_SPAN = 2; // 3.3：包装 + 包装「范围约 5×5」，即以各自为中心 ±2 格
+
+/**
+ * 3.3 的四个「有倍数登记」的组合键，与 `CONFIG.SCORE_CONFIG.specialMultipliers` 的键一一对应
+ * （3.5 倍数表）。集中定义在这里供 special.js 与 game.js 共用，避免两处各写一份字符串。
+ */
+export const COMBO_TYPES = Object.freeze({
+  STRIPED_STRIPED: 'stripedStriped',
+  STRIPED_WRAPPED: 'stripedWrapped',
+  WRAPPED_WRAPPED: 'wrappedWrapped',
+  MAGIC_MAGIC: 'magicMagic'
+});
 
 /** 4.2：getSpecialAffectedCells(board, r, c, type, direction) —— 该特效波及的格子集合。 */
 export function getSpecialAffectedCells(board, r, c, type, direction) {
@@ -77,6 +91,93 @@ export function activateSpecial(board, r, c) {
   return getSpecialAffectedCells(board, r, c, cell.type, cell.direction);
 }
 
+/**
+ * 4.2：resolveSpecialCombo(board, a, b) —— 两颗相邻特殊元素交换后的组合效果（3.3 六种）。
+ *
+ * 调用点：`game.trySwap` 在 `swapCells` **之后**、且确认 a/b 两侧都是特殊元素时调用（4.3.9）。
+ * 职责：① 就地改造需要变形的格子（3.3 的「全屏同色变条纹/包装」）；② 返回要清除的坐标集合，
+ * 由调用方作为 `resolveCascades({ initialClear })` 传入 —— 波及范围内的其它特效会继续**链式展开**
+ * （board.js 的 seeds 机制），因此「条纹 + 包装」要求的二次爆炸不需要在这里重复实现（见 D026）。
+ * 扣步数、计分、死局检测都在 game.js，本函数不碰它们。返回空数组表示这不是有效组合。
+ */
+export function resolveSpecialCombo(board, a, b) {
+  const cellA = board[a.r]?.[a.c];
+  const cellB = board[b.r]?.[b.c];
+  if (!cellA || !cellB) return [];
+  if (cellA.type === CELL_TYPE.NORMAL || cellB.type === CELL_TYPE.NORMAL) return [];
+
+  const combo = comboKeyOf(cellA.type, cellB.type);
+  const stripedAt = cellA.type === CELL_TYPE.STRIPED ? a : cellB.type === CELL_TYPE.STRIPED ? b : null;
+  const wrappedAt = cellA.type === CELL_TYPE.WRAPPED ? a : cellB.type === CELL_TYPE.WRAPPED ? b : null;
+
+  if (combo === COMBO_TYPES.STRIPED_STRIPED) {
+    // 3.3：同时触发两个直线爆破 → 十字形清除（各自按自己的方向展开）
+    return [...stripedCells(board, a.r, a.c, cellA.direction), ...stripedCells(board, b.r, b.c, cellB.direction)];
+  }
+  if (combo === COMBO_TYPES.STRIPED_WRAPPED) {
+    // 3.3：条纹方向全行/列清除，并对清除区域内再触发包装糖 3×3 爆炸
+    const striped = stripedAt === a ? cellA : cellB;
+    return [...stripedCells(board, stripedAt.r, stripedAt.c, striped.direction), { r: wrappedAt.r, c: wrappedAt.c }];
+  }
+  if (combo === COMBO_TYPES.WRAPPED_WRAPPED) {
+    // 3.3：两个包装糖果各触发一次强化爆炸，范围约 5×5
+    return [...wrappedCells(board, a.r, a.c, COMBO_SPAN), ...wrappedCells(board, b.r, b.c, COMBO_SPAN)];
+  }
+  if (combo === COMBO_TYPES.MAGIC_MAGIC) {
+    // 3.3：清除游戏面板上所有糖果
+    return allAnimalCells(board);
+  }
+
+  // 条纹 + 魔力鸟 / 包装 + 魔力鸟：把「与那颗特效同色」的普通糖果全部变成对应特效再引爆（3.3）。
+  // 目标色取**那颗条纹/包装糖果的颜色**（与 D025 第 3 条「目标色来自被交换的另一颗」一致）。
+  const partnerAt = stripedAt ?? wrappedAt;
+  const partner = partnerAt === a ? cellA : cellB;
+  if (!partnerAt || partner.color === null || partner.color === undefined) return [];
+  const type = stripedAt ? CELL_TYPE.STRIPED : CELL_TYPE.WRAPPED;
+  const transformed = transformColor(board, partner.color, type);
+  // 两颗参与交换的特效本身也要被清除（变形只覆盖普通糖果）
+  return [...transformed, { r: partnerAt.r, c: partnerAt.c }, { r: a.r, c: a.c }, { r: b.r, c: b.c }];
+}
+
+/** 3.3：由两颗特效的类型推出组合键；不是组合（含任一侧为普通格）时返回 null。 */
+function comboKeyOf(typeA, typeB) {
+  const has = (type) => typeA === type || typeB === type;
+  const both = (type) => typeA === type && typeB === type;
+  if (both(CELL_TYPE.MAGIC)) return COMBO_TYPES.MAGIC_MAGIC;
+  if (both(CELL_TYPE.WRAPPED)) return COMBO_TYPES.WRAPPED_WRAPPED;
+  if (has(CELL_TYPE.STRIPED) && has(CELL_TYPE.WRAPPED)) return COMBO_TYPES.STRIPED_WRAPPED;
+  if (both(CELL_TYPE.STRIPED)) return COMBO_TYPES.STRIPED_STRIPED;
+  if (has(CELL_TYPE.MAGIC) && has(CELL_TYPE.STRIPED)) return 'magicStriped';
+  if (has(CELL_TYPE.MAGIC) && has(CELL_TYPE.WRAPPED)) return 'magicWrapped';
+  return null;
+}
+
+/** 3.3：把全屏该颜色的**普通糖果**变成指定特效（已是特效的格子不动），返回这些坐标。 */
+function transformColor(board, color, type) {
+  const positions = [];
+  board.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (!cell || cell.color !== color || cell.type !== CELL_TYPE.NORMAL) return;
+      cell.type = type;
+      // 条纹需要方向：按行列奇偶交替，保证结果确定且可测（3.3 未规定朝向）
+      cell.direction = type === CELL_TYPE.STRIPED ? ((r + c) % 2 === 0 ? DIRECTION.H : DIRECTION.V) : null;
+      positions.push({ r, c });
+    });
+  });
+  return positions;
+}
+
+/** 3.3（魔力鸟 + 魔力鸟）：棋盘上所有带动物的格子。 */
+function allAnimalCells(board) {
+  const positions = [];
+  board.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (cell && cell.color !== null && cell.color !== undefined) positions.push({ r, c });
+    });
+  });
+  return positions;
+}
+
 /** 中心格是否在棋盘内（越界时不产生任何波及格子，避免凭空造出坐标）。 */
 function isInside(board, r, c) {
   const rows = board.length;
@@ -85,7 +186,8 @@ function isInside(board, r, c) {
 }
 
 /** 3.2：条纹糖果消除一整行（横向）或一整列（纵向）。 */
-function stripedCells(board, r, c, direction) {  const rows = board.length;
+function stripedCells(board, r, c, direction) {
+  const rows = board.length;
   const cols = rows > 0 ? board[0].length : 0;
   const affected = [];
   if (direction === DIRECTION.V) {
@@ -96,13 +198,13 @@ function stripedCells(board, r, c, direction) {  const rows = board.length;
   return affected;
 }
 
-/** 3.2：包装糖果消除周围 3×3 共 9 格；贴边（含角落）时按棋盘范围裁剪。 */
-function wrappedCells(board, r, c) {
+/** 3.2：包装糖果消除周围 (2×span+1)² 格（默认 3×3）；贴边（含角落）时按棋盘范围裁剪。 */
+function wrappedCells(board, r, c, span = WRAPPED_SPAN) {
   const rows = board.length;
   const cols = rows > 0 ? board[0].length : 0;
   const affected = [];
-  for (let y = r - WRAPPED_SPAN; y <= r + WRAPPED_SPAN; y += 1) {
-    for (let x = c - WRAPPED_SPAN; x <= c + WRAPPED_SPAN; x += 1) {
+  for (let y = r - span; y <= r + span; y += 1) {
+    for (let x = c - span; x <= c + span; x += 1) {
       if (y < 0 || x < 0 || y >= rows || x >= cols) continue;
       affected.push({ r: y, c: x });
     }

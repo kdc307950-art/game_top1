@@ -6,6 +6,26 @@
 
 ---
 
+## D026：Step 10 组合效果的实现口径、种子机制与验证
+
+- 日期：2026-09-20
+- 背景：3.3 与附录 A 规定了六种特殊元素组合。Step 9 收尾时已把 `resolveSpecialCombo(board, a, b)` 登记进 4.2（v1.11 追加），并在 D025 第 4 条写明「与另一颗特效的交换在 Step 10 才算组合」。开始 Step 10 前用户批准三项口径：① 复用已登记的 `resolveSpecialCombo` + `initialClear` 做**就地改造**，不新增契约、不改宪法；② 3.5 倍数表**未登记**的两种魔力鸟混搭组合按已有的「魔力鸟 2.5」回落，不杜撰新数值；③ `initialClear` 里的格子**同时充当激活种子**（链式展开）。
+- 决策：
+  1. **触发条件与位置**：`game.trySwap` 在 `swapCells` 之后先判「a、b 两侧都是 `type !== normal` 的特效」→ `special.resolveSpecialCombo(board, a, b)`；返回非空即组合生效（4.3.9：不做普通匹配检测），`consumeStep` 扣 1 步；返回空数组则回落普通匹配路径。组合判定**先于** Step 9 的「魔力鸟 + 普通格」判定，否则「条纹 + 魔力鸟」会被单魔力鸟分支截走（3.3 优先级：魔力鸟相关组合 > 单魔力鸟交换）。
+  2. **不新增契约、不动宪法**：六种组合全部由既有入口表达 —— `resolveSpecialCombo` 只做两件事（「就地改造需要变形的格子」与「返回要清除的坐标集合」），清除与级联仍由 `resolveBoard(state, { initialClear })` → `board.resolveCascades` 完成。守住 2.3 的边界：**清除棋盘永远是 board.js 的职责**。故本步未产生宪法修订。
+  3. **「全屏同色变形并触发」用「就地改造 + 链式种子」实现（本步核心设计）**：3.3 的「条纹 + 魔力鸟 → 所有同色糖果变条纹并立即触发」与「包装 + 魔力鸟 → 同色变包装并触发」不另写爆炸逻辑：`transformColor` 把同色**普通**糖果就地改成对应特效并放进返回集合，`board.js` 的 `collectClearKeys` 把这些 `initialClear` 坐标**入队为种子**（`push(keyToPos(key))`），于是每个被改造的条纹/包装都会按 4.3.8 触发自己的整行/整列或 3×3。同理，「条纹 + 包装」的「对清除区域内再触发包装糖 3×3 爆炸」也只把包装糖坐标放进集合 —— 二次爆炸由同一条种子链给出，不在 `special.js` 里重复实现。这条决定让「组合语义」只有一处实现，避免两个模块各写一套必然漂移的口径。
+  4. **种子机制顺带修正一个潜在漏判**：Step 9 的 `initialClear` 只并入消除集合、不触发特效激活。Step 10 打开种子后：被组合波及的**另一颗特效**会正确展开；而魔力鸟自身的行为不变（`getSpecialAffectedCells(..., 'magic', ...)` 仍只返回自身，D025 第 5 条的保守口径），所以 Step 9 的既有用例与浏览器取证结论不变 —— 两侧都被测试钉住（`tests/special.test.js` 的种子链用例、`tests/game.test.js` 的六种组合用例）。
+  5. **倍数口径（用户批准，不杜撰数值）**：3.5 的倍数表只登记四种「双方同类」组合；`config.js` **不新增键**，两种魔力鸟混搭按 `specialMultipliers.magic`（2.5）回落。`COMBO_TYPES` 的四个值（`stripedStriped` / `stripedWrapped` / `wrappedWrapped` / `magicMagic`）刻意与 `SCORE_CONFIG.specialMultipliers` 的组合键同名，`multiplierForLevel` 因此能直接按组合键取值，不需要第二张映射表。
+  6. **已记录的简化（诚实边界）**：`multiplierForLevel` 只看得到「本层被清除的格子」，看不到「这一层由哪两颗特效组成」。因此 (a) 一次级联里恰好消掉 2 颗条纹会被记为「条纹 + 条纹」3.0；(b) 任一层只要恰好清掉 1 颗魔力鸟且另有特效被清，就按 2.5 计。规则顺序（magic ≥ 2 → `magicMagic`；magic === 1 且有其它特效 → `magic`；wrapped ≥ 2 → `wrappedWrapped`；striped 与 wrapped 并存 → `stripedWrapped`；striped ≥ 2 → `stripedStriped`；否则按单类型）刻意编码 3.3 的组合优先级，使最常见情形落在正确档位。两条简化写入 `PROGRESS.md` 的简化/未验证边界。
+  7. **3.8 的口径后果（有意保留，D025 第 6 条的延续）**：`hasPossibleMove` 仍只认「交换后形成至少一组三消」。若盘面上只剩两颗相邻特效可换，按 3.8 的字面定义即为死局并触发重排 —— 而该交换实际上是有效组合。不为组合开例外（避免自行发明规则）；`tests/game.test.js` 增加了一条用例把这个边界连同理由固定下来，`trySwap` 本身仍正常生效。
+  8. **外观与渲染零改动**：组合只涉及「清除」与「就地改造」，没有新的糖果形态，`candy.js` / `render.js` **未改动**。但组合会瞬间制造 15～64 个空洞（`魔+魔` 为全盘），故验证里专门补了「大面积空洞帧」取证：真实 `render.js` 在空洞格不画糖果且不抛异常。
+  9. **验证**：L1 由 112 用例 → **128 用例 / 937 断言 / 0 失败**（`tests/special.test.js` 新增六种组合 + 非组合 + `initialClear` 种子链共 7 例；`tests/game.test.js` 新增六种组合的集成用例、「特效 + 普通格仍走普通匹配」与上面第 7 条的边界例）；L2/L3 由 `_build/verify-step10.mjs` **36/36**（六种组合的清除格数 15/14/30/64/16/13、倍数 3.0/3.5/4.0/5.0/2.5、只扣 1 步、`groups === 0`、真实 24 次滑动回归并自然产出 4 连）。既有 verify-step5..9 与 audit-gate-step9 全部复跑通过（产品代码未因旧脚本回退改动一行）。
+  10. **一处工具链缺陷（P3-6，教训比缺陷本身重要）**：首次跑 Step 10 浏览器验证时**静默验证了旧代码** —— `index.html` 用 `?t=` 破缓存，但它 `import` 的 `./special.js` 等子资源不带查询串，浏览器复用了 Step 9 时代的模块（没有 `COMBO_TYPES`），直到报错才暴露。修法是所有验证脚本在 `Page.enable` 后加 `Network.enable` + `Network.setCacheDisabled({ cacheDisabled: true })`，并**回补** `verify-step2..9` 与 `audit-gate-step9`。它比「断言写错」更危险：断言错会立刻失败，缓存会拿旧代码冒充通过。已登记 P3-6，脚本内留有「为什么」的注释。
+- 影响：`special.js`（`COMBO_TYPES`、`resolveSpecialCombo`，私有 `comboKeyOf` / `transformColor` / `wrappedCells` / `stripedCells` / `allAnimalCells` / `keyToPos`）、`board.js`（`initialClear` 作为激活种子 + `keyToPos`）、`game.js`（组合分支、`multiplierForLevel` 的有序判定、`countSpecialCells`）、`tests/special.test.js`、`tests/game.test.js`、`DECISIONS.md`、`PROGRESS.md`、`ROADMAP.md`；`config.js`、`match.js`、`candy.js`、`render.js`、`AGENTS.md` **未改动**（无宪法修订）。`_build/verify-step*.mjs` 与 `audit-gate-step9.mjs` 只加了缓存禁用。
+- 替代方案：为两种魔力鸟混搭新增 3.5 表外的倍数键（否决：3.5 未登记该组合，用户明确要求不杜撰数值）；在 `special.js` 里为「条纹 + 包装」单独实现二次爆炸（否决：与 board.js 的种子机制重复实现同一件事，两处口径必然漂移）；保持 `initialClear`「只清不激活」而在组合里手工展开（否决：等于在 special.js 里重写激活规则，组合的链式清理由此脱离 board 的不变量保护）；让 `game.js` 直接改造棋盘（否决：破坏 2.3 边界）。
+
+---
+
 ## D025：Step 9 魔力鸟的实现口径、契约追加与验证
 
 - 日期：2026-09-20

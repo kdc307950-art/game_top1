@@ -178,10 +178,12 @@ export function resolveCascades(board, colorCount, options = {}) {
       if (pos) spawnKeys.add(posKey(pos.r, pos.c));
     }
 
-    // 4.3.8：特殊元素在消除时优先激活其效果（可链式），再进入下落与级联
-    const keys = collectClearKeys(board, groups, spawnKeys);
+    // 4.3.8：特殊元素在消除时优先激活其效果（可链式），再进入下落与级联。
+    // `forced`（initialClear）的格子同样作为**激活种子**进入队列（D026）：被波及的条纹/包装会继续
+    // 展开 —— 这正是 3.3「条纹 + 包装 → 清除区域内再触发包装糖爆炸」的实现方式。
+    const keys = collectClearKeys(board, groups, spawnKeys, forced);
     if (forced) {
-      // 外部指定要清除的格子（魔力鸟交换）；本层新生成的特效同样不被它消掉
+      // 外部指定要清除的格子（魔力鸟交换 / 特殊元素组合）；本层新生成的特效不被它消掉
       for (const key of forced) if (!spawnKeys.has(key)) keys.add(key);
     }
     const removed = clearCells(board, keys);
@@ -209,32 +211,35 @@ function keysOf(positions) {
 
 /**
  * 本层要清除的格子集合 = 匹配组 ∪ 组内特殊元素激活波及的格子（链式，直到没有新的）。
+ * `seeds`（initialClear，可选）也会进入队列：其中的特效会继续展开（3.3 的二次爆炸靠它实现）。
  * 本层新生成的特殊元素（spawnKeys）不参与清除，也不会立刻自我引爆。
  */
-function collectClearKeys(board, groups, spawnKeys) {
+function collectClearKeys(board, groups, spawnKeys, seeds) {
   const keys = new Set();
   const queue = [];
-  for (const group of groups) {
-    for (const pos of group.cells) {
-      const key = posKey(pos.r, pos.c);
-      if (spawnKeys.has(key) || keys.has(key)) continue;
-      keys.add(key);
-      queue.push(pos);
-    }
-  }
+  const push = (pos) => {
+    const key = posKey(pos.r, pos.c);
+    if (spawnKeys.has(key) || keys.has(key)) return;
+    keys.add(key);
+    queue.push(pos);
+  };
+
+  for (const group of groups) for (const pos of group.cells) push(pos);
+  if (seeds) for (const key of seeds) push(keyToPos(key));
 
   while (queue.length > 0) {
     const pos = queue.shift();
     const cell = board[pos.r]?.[pos.c];
     if (!cell || cell.type === CELL_TYPE.NORMAL) continue; // 普通格没有额外波及
-    for (const hit of activateSpecial(board, pos.r, pos.c)) {
-      const key = posKey(hit.r, hit.c);
-      if (keys.has(key) || spawnKeys.has(key)) continue;
-      keys.add(key);
-      queue.push(hit);
-    }
+    for (const hit of activateSpecial(board, pos.r, pos.c)) push(hit);
   }
   return keys;
+}
+
+/** `"r,c"` 键 → Pos（键由 posKey 生成，格式固定）。 */
+function keyToPos(key) {
+  const comma = key.indexOf(',');
+  return { r: Number(key.slice(0, comma)), c: Number(key.slice(comma + 1)) };
 }
 
 /** 按位置集合清除格子，返回被清除格子的快照（不保留棋盘内的活动引用，见 15 节）。 */

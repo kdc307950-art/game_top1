@@ -21,7 +21,8 @@ import {
 import { hasPossibleMove, isCellMovable, shuffleBoard } from './shuffle.js';
 import { findAllMatchGroups, matchShapeToSpecial } from './match.js';
 // Step 9：魔力鸟的全屏同色目标集合（v1.11 登记的纯追加函数）
-import { getMagicTargets } from './special.js';
+// Step 10：两颗相邻特效交换的组合效果（3.3 / 4.3.9）
+import { COMBO_TYPES, getMagicTargets, resolveSpecialCombo } from './special.js';
 import {
   calcBaseScore,
   calcCascadeBonus,
@@ -71,15 +72,19 @@ export function trySwap(state, a, b) {
   const snapshot = cloneBoard(state.board); // 4.2：cloneBoard 供回退使用
   swapCells(state.board, a, b);
 
+  // 4.3.9 / 3.3：两颗相邻特殊元素交换 → 触发组合效果，**不进行普通匹配检测**
+  const comboClear = comboClearTargets(state.board, a, b);
   // 3.2 / D025：魔力鸟 + 普通色块的对调本身就是一次有效交换（不需要形成匹配）
-  const magicClear = magicClearTargets(state.board, a, b);
-  if (!magicClear && findAllMatchGroups(state.board).length === 0) {
+  const magicClear = comboClear ? null : magicClearTargets(state.board, a, b);
+  const forced = comboClear ?? magicClear;
+
+  if (!forced && findAllMatchGroups(state.board).length === 0) {
     state.board = snapshot; // 4.3.2：回退到交换前，且不消耗步数
     return rejected;
   }
 
   const afterSwap = cloneBoard(state.board);
-  const resolve = magicClear ? resolveBoard(state, { initialClear: magicClear }) : resolveBoard(state);
+  const resolve = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
   consumeStep(state.level); // 4.3.3：只有有效交换才扣步数
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
@@ -147,13 +152,26 @@ function ensurePlayable(state) {
 }
 
 /**
- * 3.5：本层特效倍数。两种情形都算「条纹糖果（4 消）」：
- *   1. 本层生成了条纹 —— 匹配组形状经 4.2 的 matchShapeToSpecial 映射为 striped（即 4 连直线）；
- *   2. 本层触发了已存在的条纹 —— 被消除的格子里含 type !== normal（4.3.8 优先激活特效）。
- * 同时出现多种特效时按 3.2 的优先级取值（魔力鸟 > 包装糖果 > 条纹糖果）；
- * 组合效果（3.3）的倍数由 Step 10 传入 comboType，此处不预实现。
+ * 3.5 / 3.3：本层特效倍数。判定顺序**就是** 3.3 的组合优先级（魔力鸟相关 > 包装+包装 >
+ * 条纹+包装 > 条纹+条纹），再回落到单特效：
+ *   1. 本层清掉两颗魔力鸟 → 5.0（魔力鸟 + 魔力鸟）；
+ *   2. 本层清掉一颗魔力鸟且伴随其它特效 → 2.5（魔力鸟相关组合：3.5 表未登记其组合倍数，
+ *      按 3.2 优先级回落为魔力鸟自身的 2.5，见 D026）；
+ *   3. 两颗包装 → 4.0；条纹与包装同层 → 3.5；两颗条纹 → 3.0；
+ *   4. 其余按单特效：本层生成（组形状经 matchShapeToSpecial 映射）或触发（cleared 里带 type）
+ *      的条纹 1.5 / 包装 2.0 / 魔力鸟 2.5。
+ * 口径来源与「级联中恰好清掉两颗条纹也会按 3.0 计」这类简化见 D026。
  */
 function multiplierForLevel(level) {
+  const counts = countSpecialCells(level.cleared);
+  if (counts[CELL_TYPE.MAGIC] >= 2) return calcSpecialMultiplier(null, COMBO_TYPES.MAGIC_MAGIC);
+  if (counts[CELL_TYPE.MAGIC] === 1 && (counts[CELL_TYPE.STRIPED] > 0 || counts[CELL_TYPE.WRAPPED] > 0)) {
+    return calcSpecialMultiplier(CELL_TYPE.MAGIC, null);
+  }
+  if (counts[CELL_TYPE.WRAPPED] >= 2) return calcSpecialMultiplier(null, COMBO_TYPES.WRAPPED_WRAPPED);
+  if (counts[CELL_TYPE.STRIPED] > 0 && counts[CELL_TYPE.WRAPPED] > 0) return calcSpecialMultiplier(null, COMBO_TYPES.STRIPED_WRAPPED);
+  if (counts[CELL_TYPE.STRIPED] >= 2) return calcSpecialMultiplier(null, COMBO_TYPES.STRIPED_STRIPED);
+
   const types = [];
   for (const cell of level.cleared) {
     if (cell.type !== CELL_TYPE.NORMAL) types.push(cell.type);
@@ -172,6 +190,26 @@ function multiplierForLevel(level) {
 
 /** 3.2 优先级：魔力鸟 > 包装糖果 > 条纹糖果（Step 8/9 会让后两者真正出现）。 */
 const PRIORITY = [CELL_TYPE.MAGIC, CELL_TYPE.WRAPPED, CELL_TYPE.STRIPED];
+
+/** 4.3.9 / 3.3：判断这次交换是不是「两颗相邻特殊元素」，是则返回组合要清除的坐标集合。 */
+function comboClearTargets(board, a, b) {
+  const cellA = board[a.r]?.[a.c];
+  const cellB = board[b.r]?.[b.c];
+  if (!cellA || !cellB) return null;
+  if (cellA.type === CELL_TYPE.NORMAL || cellB.type === CELL_TYPE.NORMAL) return null; // 必须两侧都是特效
+  const cleared = resolveSpecialCombo(board, a, b); // 可能就地改造「全屏同色 → 条纹/包装」
+  return cleared.length > 0 ? cleared : null;
+}
+
+/** 统计本层被清掉的各类特效数量（用于按 3.3 优先级取倍数）。 */
+function countSpecialCells(cleared) {
+  const counts = {};
+  for (const cell of cleared) {
+    if (cell.type === CELL_TYPE.NORMAL) continue;
+    counts[cell.type] = (counts[cell.type] ?? 0) + 1;
+  }
+  return counts;
+}
 
 /**
  * 3.2 / D025：判断这次交换是不是「魔力鸟 + 普通色块」。

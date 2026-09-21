@@ -5,6 +5,112 @@
 
 ---
 
+## 2026-09-20（Step 10：特殊元素组合 —— 完成并验证）
+
+### 完成项
+
+- **`special.js`**：新增 `COMBO_TYPES`（四个组合键，**值**与 `SCORE_CONFIG.specialMultipliers` 的组合键同名：`stripedStriped` / `stripedWrapped` / `wrappedWrapped` / `magicMagic`）与 `resolveSpecialCombo(board, a, b)`（3.3 六种组合），私有 `comboKeyOf` / `transformColor` / `wrappedCells` / `stripedCells` / `allAnimalCells`。**组合的「二次爆炸」与「全屏同色变形并立即触发」不另写爆炸逻辑**：只做「就地改造」与「返回清除坐标集合」两件事。
+- **`board.js`**：`resolveCascades` 的 `options.initialClear` 由 Step 9 的「第一层并入消除集合」升级为「**同时入队为激活种子**」（`collectClearKeys` 里 `push(keyToPos(key))`），并新增 `keyToPos`。缺省行为不变（不传 `initialClear` 时循环条件与结果与 Step 9 完全一致）。这条改动是 3.3 三条「变形并触发」的组合能成立的关键：被改造的条纹/包装会按 4.3.8 展开自己的整行/整列或 3×3。
+- **`game.js`**：`trySwap` 新增组合分支 —— `swapCells` 之后先判「a、b 两侧都是 `type !== normal` 的特效」→ `special.resolveSpecialCombo`；返回非空即组合生效（4.3.9：不做普通匹配检测）、`consumeStep` 扣 **1 步**、按组合键取倍数；返回空数组回落普通匹配路径。组合判定**先于** Step 9 的单魔力鸟判定（3.3 优先级：魔力鸟相关组合 > 单魔力鸟交换）。`multiplierForLevel` 改为按 3.3 优先级的有序判定，新增 `countSpecialCells`。
+- **未改动**：`config.js`（**不新增倍数键与配置项**：两种魔力鸟混搭按已有的 2.5 回落）、`match.js`、`candy.js`、`render.js`、`app.js`、`hud.js`、`timeline.js`、`input.js`、`shuffle.js`、`AGENTS.md`（**本步无宪法修订** —— 复用的 `resolveSpecialCombo` 与 `initialClear` 都是 v1.11 已登记的契约）。
+- 备注：ROADMAP Step 10 的「范围」列了 `app.js` 与 `config.js`，本步实际不需要改：`app.js` 已有的「触发特效 N / 共消除 N 格 / 本步 +N 分」日志足以覆盖组合，`config.js` 的 3.5 倍数表已含四种组合键。
+
+### 验证方式（可复现）
+
+- `node tests/run-all.js` → **128 用例 / 937 断言 / 0 失败 / 0 加载错误 / exit 0**（Step 9 时 112/883）。新增：`tests/special.test.js` 7 例（六种组合 + 非组合 + `initialClear` 种子链）、`tests/game.test.js` 9 例（六种组合的集成断言、`4.3.9` 不做普通匹配检测、「特效 + 普通格仍走普通匹配」回归、3.8 边界例）。
+- **浏览器 `_build/verify-step10.mjs` → 37/37 PASS**（`_build/verify-step10.log` 留证）：六种组合的清除格数与倍数（条+条 15 格/3.0/450 分、条+包 14 格/3.5/490、包+包 30 格/4.0/1200、魔+魔 64 格/5.0/3200、条+魔 16 格/2.5/400、包+魔 13 格/2.5/325），组合触发只扣 1 步，`groups === 0`（4.3.9），「特效 + 普通格」仍走普通匹配（10 格/1.5），图集仍 6 色 × 5 种 = 30 张、魔力鸟外观未被破坏，**大面积空洞帧**（全盘 64 空洞与十字 15 空洞）在真实 `render.js` 下不画糖果且不抛异常，24 次真实滑动回归（其中自然产出 4 连交换）后棋盘 64 格补齐且无三连、控制台全程洁净。
+- **既有套件复跑（全部 0 失败）**：`verify-step5` **32/32**、`verify-step6` **30/30**、`verify-step7` **44/44**、`verify-step8` **34/34**、`verify-step9` **30/30**、`audit-gate-step9` **49/49**；`python _build/consistency_check.py` 全部通过；全部模块纯代码 ≤300 行（最大 `app.js` 296）。
+
+### 简化与未验证边界（如实记录）
+
+- **倍数的已知简化**：`multiplierForLevel` 只看得到「本层被清除的格子」，看不到组合的双方是谁。故 (a) 一次级联里恰好清掉 2 颗条纹会被记为「条纹 + 条纹」3.0；(b) 任一层恰好清掉 1 颗魔力鸟且另有特效被清，按 2.5 计。规则顺序刻意对齐 3.3 的优先级（见 D026 第 6 条）。
+- **3.8 的口径后果（有意保留）**：`hasPossibleMove` 仍只认「交换后形成至少一组三消」，因此「盘面上只剩两颗相邻特效可换」会被判为死局并重排 —— 而该交换实际上是有效组合。不为组合开例外（避免自行发明规则），`tests/game.test.js` 已用一条用例固定该边界与理由。
+- **未验证**：真机 iOS/Android、其它浏览器、真实刘海屏、长会话内存、离线、原生平台；**组合的真机观感未确认**（尤其 `魔力鸟 + 魔力鸟` 全盘清除的动画节奏与 `条纹 + 魔力鸟` 的变形式连锁，需用户实机判断）。L1 与 L2/L3 证据**不能**用于声明真机体验。
+
+### 缺陷与脚本问题（产品缺陷 0）
+
+- **P3-6（新，危险）**：验证脚本首次运行**静默验证了旧代码** —— `index.html` 用 `?t=` 破缓存，但它 `import` 的 `./special.js` 等子资源不带查询串，浏览器复用了 Step 9 时代的模块（页面里根本没有 `COMBO_TYPES`）。已在 `verify-step10` 与 `verify-step2..9`、`audit-gate-step9` 全部加上 `Network.enable` + `Network.setCacheDisabled({ cacheDisabled: true })`。
+- **P3-5 再次出现（时序面）**：`verify-step5` 的「越界滑动被忽略」失败 —— Step 10 起前一步斜滑可能触发组合，级联更长、动画更久，越界触摸落在输入锁窗口内被有意吞掉（5.4），因此没有提示日志。修法是等动画结束后**重投**（最多 4 次），恢复 32/32。**产品代码未改动**。
+- **环境面提醒**：`verify-step5` 默认 CDP 端口 **9339**（其余脚本默认 9342），本轮需 `XXL_CDP_PORT=9342` 才能连上当前 headless Chrome。
+
+### 下一步
+
+- 按 0.1，进入 **Step 11（冰块与雪块）** 前必须先跑一轮 Bug Audit Gate 并归档证据（本轮回归结果可直接复用）。
+
+---
+
+## 2026-09-20（Step 10 执行卡：特殊元素组合）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。三项口径已获用户批准（见 D026）。
+
+1. **开始前置条件**：Step 9 已验收（`step9-done`）、Gate 0.1 第三轮已通过（**允许开始 Step 10**）；起点 = tag **`step10-start`（293d0e5）**，工作区干净。相关章节：AGENTS 3.3（六种组合及其优先级）、3.5（组合倍数 3.0/3.5/4.0/5.0）、4.3.8/4.3.9/4.3.13、5.4（特效要有明显视觉区分）；ROADMAP Step 10；`REFERENCES.md` §2.2 Step 10。前置决策：D020（Step 7）、D023（Step 8）、D025（Step 9，第 4 条写明「与另一颗特效的交换在 Step 10 才算组合」）。
+2. **允许修改范围**：ROADMAP 列出 `special.js`、`game.js`、`app.js`、`config.js`、`tests/special.test.js`；本步额外需要 `board.js`（`initialClear` 作为激活种子）与 `tests/game.test.js`（集成与边界用例）。**禁止**：新增宪法未列出的组合类型（3.3 只有六种）；为 3.5 未登记的「条纹/包装 + 魔力鸟」杜撰新倍数；改动 `match.js`/`candy.js`/`render.js` 的外观与匹配行为；**修改宪法**（用户已批准不新增契约，故无宪法修订）。
+3. **执行顺序**：执行卡与 DoR → 组合常量与 `resolveSpecialCombo` → `board.js` 种子机制 → `game.js` 组合分支与倍数优先级 → 失败用例（先写组合断言再补齐实现）→ 修复 → 自动回归 → 浏览器验证 → 文档与提交。
+4. **必须产物**：源码 diff；`node tests/run-all.js` 结果；`_build/verify-step10.mjs` 结果（含像素与真实滑动取证）；`DECISIONS.md` D026；`[step10]` 提交 + `step10-done` tag；`PROGRESS.md`/`ROADMAP.md`/`README.md`/`prompts.md`/`REFERENCES.md` 同步。
+5. **自动化测试**：`node tests/run-all.js`（用例/断言数增长且 0 失败、exit 0）；`node tests/special.test.js`、`node tests/game.test.js` 单跑。
+6. **手动/浏览器测试**：390×844@DPR3；用 CDP 驱动真实页面，逐一断言六种组合的清除格数与倍数、只扣 1 步、组合层 `groups === 0`；真实滑动回归；大面积空洞帧渲染取证。
+7. **证据等级**：L1 + L2 + L3；真机、Android/iOS、发布**未验证**。
+8. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step10-start` = `293d0e5`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（3.3 六种组合、优先级、扣 1 步）与非目标（不新增组合类型、不杜撰魔力鸟混搭倍数、不改外观）明确；前置 Step 9 与 Gate 0.1 已验收；允许修改文件已列出；**契约已确认** —— 用户批准复用 `resolveSpecialCombo` + `initialClear`（不新增契约）、魔力鸟混搭按 2.5 回落、`initialClear` 充当激活种子；夹具（3.3 的六种相邻摆放）与验收路径可执行；风险（种子机制会改变 `initialClear` 的语义，需回归 Step 9 的魔力鸟用例）、依赖与回滚点已登记 → **通过**。
+
+---
+
+## 2026-09-20（Gate 0.1 第三轮：Step 9 → Step 10 门禁证据）
+
+### 一、审计对象与环境
+
+- **基线**：`293d0e5 [step9]`，工作区干净；本轮只改 `_build/` 下的验证脚本与本文档，**产品代码未动**。
+- **环境**：Windows、Node v24.19.0、Chrome 153.0.8010.48（headless，CDP 9342）、`python -m http.server 8000`（本轮发现旧服务器已停，已用托管后台任务重启并确认 200）、视口 390×844@DPR3 与 200×640@DPR2。
+- **证据等级**：L1 + L0/L1 + L2 + L3；真机与 L4/L5/L6 **未验证**。
+
+### 二、0.1 逐项结果
+
+1. **自动回归（L1）**：`node tests/run-all.js` → 8 个测试文件、**112 用例 / 883 断言 / 0 失败 / 0 加载错误 / exit 0**。
+2. **静态一致性（L0/L1）**：`python _build/consistency_check.py` → 全部通过；全模块纯代码 ≤300 行；`shadowBlur|shadowColor` 计数 **0**；逻辑模块无 DOM/Canvas/localStorage。
+3. **浏览器冒烟（L2）**：`_build/audit-gate-step9.mjs` → **49/49 PASS**（`_build/audit-gate-step9.log`）：首屏、有效/无效交换、消除下落补充、步数、结束面板、最高分、再来一局、极窄视口、安全区。
+4. **移动交互（L3）**：同一脚本的 390×844@DPR3 与 200×640@DPR2 断言全过。
+5. **功能边界**：见「四」。
+6. **缺陷分级**：**P0 = 0，P1 = 0**；P3 五项（见「五」）。
+7. **证据归档**：本记录 + `_build/*.log`。
+
+### 三、既有套件回归（本轮实测，以日志 PASS 计数为准）
+
+| 套件 | 结果 | 日志 |
+|---|---|---|
+| `_build/audit-gate-step9.mjs` | **49/49** | `_build/audit-gate-step9.log` |
+| `_build/verify-step9.mjs` | **30/30** | `_build/verify-step9.log` |
+| `_build/verify-step8.mjs` | **34/34** | `_build/verify-step8.log` |
+| `_build/verify-step7.mjs` | **44/44** | `_build/verify-step7.log` |
+| `_build/verify-step6.mjs` | **30/30** | `_build/verify-step6.log` |
+| `_build/verify-step5.mjs` | **32/32** | `_build/verify-step5.log` |
+
+**本轮唯一失败与根因（同一类问题的第三次出现）**：`verify-step5` 的「无效交换回退」失败 —— 它挑的「无效交换」样本可能是「魔力鸟 + 普通色块」，而 Step 9 起这种交换**必定有效**。这说明**验证脚本的棋盘模型必须跟着玩法一起升级**：Step 9 引入魔力鸟后，`verify-step6`、`audit-gate-step8`、`verify-step5` 三个脚本都需要「魔力鸟识别 + 匹配排除 + 不计入无效样本」。三个脚本已全部修好，产品代码未因此改动一行。
+- 修 `verify-step5` 时我自己还引入了两个脚本缺陷（`cellCenter` 元素是对象却按数组解构、半径用了不存在的 `cellPx`），两次都靠 Node 报错定位后修正 —— 记在这里以说明「脚本也要当成代码来测」。
+
+### 四、功能边界（Step 10 开工前）
+
+- **已实现且已验证（L1+L2+L3）**：核心可玩版全部功能 + 条纹（7）+ 包装（8）+ 魔力鸟（9）三种特殊元素的生成 / 触发 / 链式连锁 / 计分倍数 / 外观 / 动画。
+- **仅代码审查（L0）**：`state.gameOver = stuck`（死局且重排失败）的接线；「魔力鸟被其它特效波及时不额外触发」这条保守口径（只有单测与脚本级证据）。
+- **未验证**：真机、其它浏览器、真实刘海屏、长会话内存、离线、原生平台。
+- **明确延期（不得预设为可用）**：特殊元素组合（Step 10，**本步目标**）、障碍物与关卡目标（11-12）、音效/震动/粒子（16-17）、Capacitor 打包（18）。
+
+### 五、P3 登记
+
+- **P3-1（v1.9 vs v1.10 头部版本不一致）→ 已关闭**（宪法 v1.10 对齐）。
+- **P3-2（`verify-step5` 曾一次未留明细的 FAIL）→ 已关闭**：本轮起全部套件留日志，且本轮再次全绿。
+- **P3-3（`_build/` 不入版本控制）**：维持；证据 = 本文件记录 + 本机日志。
+- **P3-4（附录 B 与 `config.js` 仅抽检、非逐键比对）**：维持；Step 10 若需新增倍数档位就必须人工逐键核对。
+- **P3-5（新，重要）**：**验证脚本的棋盘模型会随玩法扩展而失效**（已发生三次：Step 8 的包装、Step 9 的魔力鸟，以及本轮 verify-step5）。负责人 = 每个玩法 Step 的实现者；回归计划 = 新增特殊元素时，同一提交内必须同步升级所有依赖「棋盘像素模型」的脚本（识别新元素 + 在匹配模拟中排除它），并重跑全套件。
+
+### 六、放行结论
+
+- 满足 0.1 的四条：**P0/P1 清零 + 自动回归通过 + 浏览器冒烟通过 + P2/P3 已登记** → **允许开始 Step 10（特殊元素组合）**。
+- Step 10 的契约口径需先确认（组合的执行方式、魔力鸟相关组合的倍数、`initialClear` 是否作为激活种子），见本轮汇报提问与 `DECISIONS.md` D026。
+
+---
+
 ## 2026-09-20（Step 9：魔力鸟 —— 完成并验证）
 
 ### 完成项

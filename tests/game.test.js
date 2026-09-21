@@ -338,20 +338,7 @@ test('trySwap：魔力鸟 + 空格 → 无效且不消耗步数（验收项：�
   assertDeepEqual(game.board.map((row) => row.map((cell) => cell.id)), idsBefore, '棋盘未变');
 });
 
-test('trySwap：魔力鸟 + 另一颗特效 → 本步不触发（特效+特效属 Step 10 的组合）', () => {
-  const game = createGame({ steps: 30 });
-  paintFixture(game.board, (b) => {
-    b[4][4].type = CELL_TYPE.MAGIC;
-    b[4][4].color = 0;
-    b[4][5].type = CELL_TYPE.STRIPED;
-    b[4][5].color = 4;
-  });
 
-  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
-
-  assertEqual(result.valid, false, '尚未实现组合效果 → 按普通匹配判定为无效');
-  assertEqual(result.stepsLeft, 30, '不消耗步数');
-});
 
 test('resolveBoard：5 连直线生成魔力鸟的那一层按 3.5 计 2.5 倍（Step 9 接入）', () => {
   const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
@@ -384,4 +371,182 @@ test('resolveBoard：initialClear 透传给 resolveCascades（v1.11 契约）', 
   assertTrue(result.scoreDelta > 0, '照常计分');
 });
 
+// ---------------------------------------------------------------- Step 10：组合效果（3.3）
+
+/**
+ * 组合夹具底色：与 tests/board.test.js 的死局夹具同族（(r+2c)%3），本身无三连、任意相邻交换也不成三连。
+ * 这样 L0 的 groups 只可能来自「交换本身形成的普通匹配」，使 4.3.9「不进行普通匹配检测」可被断言。
+ * 需要「某种颜色全盘不存在或只出现一次」时改用 paintFixture（0/1 底色）另配颜色 3。
+ */
+function noMatchFixture(board, paint) {
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) {
+      board[r][c].color = (r + 2 * c) % 3;
+    }
+  }
+  if (paint) paint(board);
+}
+
+test('trySwap：条纹 + 条纹 → 十字形清除，3.0 倍（3.3 第 1 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.STRIPED;
+    b[4][4].direction = DIRECTION.H;
+    b[4][5].type = CELL_TYPE.STRIPED;
+    b[4][5].direction = DIRECTION.V;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertTrue(result.valid, '两颗相邻特效交换必定触发组合');
+  assertEqual(result.stepsLeft, 29, '组合触发扣 1 步（ROADMAP Step 10 验收）');
+  assertEqual(result.resolve.levels[0].groups.length, 0, '4.3.9：组合不进行普通匹配检测');
+  assertEqual(result.resolve.levels[0].cleared.length, 15, '第 4 行（8）∪ 第 4 列（8）− 中心重叠 1 = 15');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.stripedStriped, '条纹+条纹 = 3.0 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 450, '150 × 3.0');
+});
+
+test('trySwap：条纹 + 包装 → 整行 + 3×3 二次爆炸，3.5 倍（3.3 第 2 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.STRIPED;
+    b[4][4].direction = DIRECTION.H;
+    b[4][5].type = CELL_TYPE.WRAPPED;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertTrue(result.valid, '组合有效');
+  // 第 4 行（8）∪ 包装糖以 (4,5) 为心的 3×3（rows3-5 × cols4-6 = 9）− 重叠 3 = 14
+  assertEqual(result.resolve.levels[0].cleared.length, 14, '条纹方向清除 + 区域内包装糖爆炸');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.stripedWrapped, '条纹+包装 = 3.5 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 490, '140 × 3.5');
+});
+
+test('trySwap：包装 + 包装 → 两个 5×5，4.0 倍（3.3 第 4 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[3][3].type = CELL_TYPE.WRAPPED;
+    b[3][4].type = CELL_TYPE.WRAPPED;
+  });
+
+  const result = trySwap(game, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  assertEqual(result.resolve.levels[0].cleared.length, 30, '两个 5×5 的并集（重叠 20 格）');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.wrappedWrapped, '包装+包装 = 4.0 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 1200, '300 × 4.0');
+  assertEqual(result.stepsLeft, 29, '仍只扣 1 步');
+});
+
+test('trySwap：魔力鸟 + 魔力鸟 → 清除全盘，5.0 倍（3.3 第 6 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[3][3].type = CELL_TYPE.MAGIC;
+    b[3][3].color = 0;
+    b[3][4].type = CELL_TYPE.MAGIC;
+    b[3][4].color = 1;
+  });
+
+  const result = trySwap(game, { r: 3, c: 3 }, { r: 3, c: 4 });
+
+  assertEqual(result.resolve.levels[0].cleared.length, SIZE * SIZE, '清除游戏面板上所有糖果（8×8）');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.magicMagic, '魔力鸟+魔力鸟 = 5.0 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 3200, '640 × 5.0');
+  assertEqual(game.board.flat().filter((cell) => cell.type === CELL_TYPE.MAGIC).length, 0, '两只魔力鸟都被清掉（补位只生成普通格）');
+});
+
+test('trySwap：条纹 + 魔力鸟 → 同色糖果就地变条纹并引爆（3.3 第 3 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  // 0/1 底色 + 全盘仅 (0,0) 与条纹同为色 3：交换后只可能由「变形 + 引爆」造成第 0 行消除
+  paintFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.STRIPED;
+    b[4][4].direction = DIRECTION.H;
+    b[4][4].color = 3;
+    b[4][5].type = CELL_TYPE.MAGIC;
+    b[4][5].color = 0;
+    b[0][0].color = 3;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertTrue(result.valid, '组合有效');
+  // 第 4 行（8）+ (0,0) 变条纹后引爆第 0 行（8）= 16，两行不重叠
+  assertEqual(result.resolve.levels[0].cleared.length, 16, '同色普通格被改造成条纹后立即触发');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.magic, '魔力鸟相关组合回落 2.5（3.5 表未登记 3.3 的两种魔力鸟混搭）');
+  assertEqual(result.resolve.levelScores[0].gained, 400, '160 × 2.5');
+});
+
+test('trySwap：包装 + 魔力鸟 → 同色糖果就地变包装并引爆（3.3 第 5 行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.WRAPPED;
+    b[4][4].color = 3;
+    b[4][5].type = CELL_TYPE.MAGIC;
+    b[4][5].color = 0;
+    b[0][0].color = 3;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  // (0,0) 变包装后在角上触发 2×2（越界裁剪）= 4；原包装糖在 (4,5) 被清除时按 4.3.8 激活 3×3 = 9
+  assertEqual(result.resolve.levels[0].cleared.length, 13, '变形包装 + 原包装各自触发');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.magic, '同样回落 2.5');
+  assertEqual(result.stepsLeft, 29, '仍只扣 1 步');
+});
+
+test('trySwap：条纹 + 魔力鸟在全盘无同色可变形时组合仍成立（只清条纹自身整行）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.STRIPED;
+    b[4][4].direction = DIRECTION.H;
+    b[4][4].color = 3; // 全盘没有第二个色 3（底色只有 0/1/2）
+    b[4][5].type = CELL_TYPE.MAGIC;
+    b[4][5].color = 0;
+  });
+
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  assertTrue(result.valid, '即使没有同色糖果可变形，组合本身仍成立');
+  assertEqual(result.resolve.levels[0].cleared.length, SIZE, '只剩条纹自身的整行 8 格');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.magic, '2.5 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 200, '80 × 2.5');
+});
+
+test('trySwap：特效 + 普通格仍走普通匹配路径（组合只在两侧都是特效时触发）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  paintFixture(game.board, (b) => {
+    b[4][1].color = 3;
+    b[4][2].color = 3;
+    b[4][3].color = 3;
+    b[3][3].color = 3;
+    b[3][3].type = CELL_TYPE.STRIPED;
+    b[3][3].direction = DIRECTION.V;
+  });
+
+  const result = trySwap(game, { r: 3, c: 3 }, { r: 4, c: 3 });
+
+  assertTrue(result.valid, '条纹参与同色匹配（4.3.14），4 连带上条纹即有效交换');
+  // 条纹落到 (4,3) 后与 (4,1)(4,2) 成 3 连：条纹按 4.3.8 激活整列 8 格，另两格随匹配被消除
+  assertEqual(result.resolve.levels[0].cleared.length, 10, '整列 8 + 同组另外 2 格');
+  assertEqual(result.resolve.levelScores[0].multiplier, SCORE.specialMultipliers.striped, '单条纹仍是 1.5 倍');
+  assertEqual(result.resolve.levelScores[0].gained, 150, '100 × 1.5');
+});
+
+test('边界（诚实记录）：只剩「两颗相邻特效」可换时，3.8 仍按字面判为死局', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    b[4][4].type = CELL_TYPE.STRIPED;
+    b[4][4].direction = DIRECTION.H;
+    b[4][5].type = CELL_TYPE.STRIPED;
+    b[4][5].direction = DIRECTION.V;
+  });
+
+  // 3.8 把「有效交换」定义为「交换后能形成至少一组三消」，组合交换不形成三消，
+  // 因此这种盘面会被 hasPossibleMove 判为死局并重排。这是 3.8 字面定义的直接结果，
+  // 不为组合开例外（禁止自行发明规则，见 D026）。
+  assertFalse(hasPossibleMove(game.board), '3.8 的有效交换定义不认「特效 + 特效」组合');
+  const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+  assertTrue(result.valid, '但实际交换仍按 3.3 的组合生效');
+  assertEqual(result.resolve.levels[0].cleared.length, 15, '组合照常清除十字 15 格');
+});
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
