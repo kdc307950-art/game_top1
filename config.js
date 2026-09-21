@@ -97,6 +97,28 @@ export const CONFIG = {
     choc: { maxLayers: 1 }
   },
 
+  // 步数由难度派生（Step 12.2，用户批准）：「难度分 → 步数」公式的系数（附录 B 逐键登记）。
+  // 设计意图：目标越大给越多步（workload），障碍越多/越厚/色数越多给越少步（friction），
+  // 结果夹在 [min, max] 内。关卡表因此不再手写步数。
+  STEP_BUDGET: {
+    base: 24,        // 基准步数
+    workload: 1.6,   // 每个「目标工作量单位」折算的步数
+    perCell: 0.25,   // 每个障碍格的扣减
+    perLayer: 0.2,   // 每层障碍的扣减
+    perColor: 2,     // 超过 5 色后每多一色的扣减
+    min: 20,         // 步数下限
+    max: 34,         // 步数上限
+    scoreUnit: 2000, // 分数目标：每多少分算 1 个工作量单位
+    collectUnit: 4,  // 收集目标：每多少只算 1 个工作量单位
+    iceUnit: 4       // 消冰目标：每多少层算 1 个工作量单位
+  },
+
+  // 本局结束时的「引爆特殊方块」上限（Step 12.3）：引爆会生成新的特殊方块，
+  // 理论上可以「引爆 → 生成 → 再引爆」循环，故给一个确定的轮数上限作为终止保证。
+  ENDGAME_CONFIG: {
+    maxDetonationRounds: 8
+  },
+
   LEVEL_DEFAULTS: {
     steps: 30,
     starThresholds: [7000, 12000, 18000]

@@ -6,6 +6,22 @@
 
 ---
 
+## D030：Step 12.2/12.3 —— 步数由难度派生、结束前引爆特殊方块
+
+- 日期：2026-09-20
+- 背景：用户在 Step 12.1 完成后追加两条要求 —— ① 把步数和关卡难度绑定、动态调整；② 走完最后一步引爆特殊方块再结算。三项口径经用户确认：步数取**设计期派生**（难度分 → 公式 → 步数，非运行时补偿）；引爆取**全部链式引爆**（直到盘面无特殊方块）；引爆成果**计入目标判定与分数**，之后才算星。
+- 决策：
+  1. **宪法 v1.15（用户批准）**：3.6 新增第 6 条（步数派生公式）与第 7 条（结束前引爆）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`。
+  2. **步数派生 = `clamp(round(base + 目标工作量 × workload − 障碍摩擦), min, max)`**：目标工作量按目标类型折算（`scoreUnit`/`collectUnit`/`iceUnit`，`mixed` 相加），障碍摩擦 = 障碍格数 × perCell + 障碍总层数 × perLayer + max(0, 色数 − 5) × perColor。系数全在 `CONFIG.STEP_BUDGET`，实现是 `level.js` 的 `computeStepBudget`（纯函数、无随机）。**设计期派生**而非运行时补偿：关卡仍可复现、可巡检 —— 用户也选了这个口径（比运行时加减步更可控、不引入额外状态）。
+  3. **`LEVELS.md` 的步数列改为公式输出**：50 关表由生成器（引用 `computeStepBudget` 本体）重算后写回，`_build/lint-levels.mjs` **独立重算并逐关比对**（实测把 L1 的 28 改成 30 会直接报 `步数 30 ≠ 公式派生的 28`）。
+  4. **引爆时机与范围**：`trySwap` 在扣步并完成本手结算后，若「步数已用尽」**或**「已达成目标」，调用 `detonateSpecials(state)` —— 每轮把盘面所有特殊方块坐标作为 `initialClear` 交给 `resolveBoard`（Step 10 起 `initialClear` 即**激活种子**，条纹/包装各自展开并被链式传播）；魔力鸟在 D025 的保守口径下只清自己，故额外把「它保留的颜色」的全屏同色格一起点燃。一轮后若级联又生成新特效就再来一轮，上限 `ENDGAME_CONFIG.maxDetonationRounds`。
+  5. **引爆结果合并成一个 `ResolveResult`**：多轮引爆的 `levels/cleared/spawned/damaged/levelScores` 展平合并后与本手结算一起返回给 UI，因此动画会完整播完；`deadlock` 置 null（本局已结束，3.8 的重排已无意义）。
+  6. **通关时也引爆**（在用户「走完最后一步」的基础上做的一个明确延伸，已在本记录登记）：目标提前达成时盘面往往还有特效，一并引爆可以让观感与结算一致；剩余步数转化与本手/引爆分都计入最终分数。
+  7. **验证**：L1 162 → **169 用例 / 1122 断言 / 0 失败**（`level.test.js` 新增 `computeStepBudget` 三例、`game.test.js` 新增引爆四例）；`_build/verify-step12.mjs` 增加阶段 7（浏览器内真实模块：步数派生的三条性质 + 最后一步引爆 + 引爆达标的通关），**全绿**。
+- 影响：`config.js`（`STEP_BUDGET`、`ENDGAME_CONFIG`）、`level.js`（`computeStepBudget`、`buildDemoLevelConfig` 用派生步数）、`game.js`（`detonateSpecials`/`detonationSeeds`/`mergeResolveResults`、`trySwap` 的结束前引爆）、`LEVELS.md`（步数列 = 公式输出 + §6 公式说明）、`AGENTS.md` v1.15、`ROADMAP.md`、`tests/level.test.js`、`tests/game.test.js`、`_build/gen-levels.mjs`、`_build/lint-levels.mjs`、`_build/sync-levels-steps.mjs`。
+- 替代方案：运行时动态补偿步数（否决：用户选 A，且会让关卡不可复现、多一套运行时状态）；只引爆一次不追新生成的特效（否决：用户选 A，且会留下「爆完还剩特效」的观感缺口）；引爆只加分数不影响目标（否决：用户选 A）；把步数继续手写在 `LEVELS.md`（否决：那就谈不上「与难度绑定」）。
+
+---
 ## D029：Step 12.1 目标判定、进度累加、三星与 HUD 四格的实现口径
 
 - 日期：2026-09-20

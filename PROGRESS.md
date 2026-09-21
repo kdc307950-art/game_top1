@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-09-20（Step 12.2 步数派生 + 12.3 结束前引爆 —— 完成并验证）
+
+用户要求在 Step 12 内追加两条规则，三项口径经确认后（步数 = **设计期派生**、引爆 = **全部链式**、引爆成果**计入目标判定**）落地：
+
+### 完成项
+
+- **宪法 v1.15（用户批准）**：3.6 新增第 6 条（步数派生公式）与第 7 条（结束前引爆）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`。
+- **12.2 步数由难度派生**：`level.js` 的 `computeStepBudget` = `clamp(round(base + 目标工作量 × workload − 障碍摩擦), min, max)`；目标工作量按 `scoreUnit`/`collectUnit`/`iceUnit` 折算（`mixed` 相加），障碍摩擦含障碍格数、障碍层数与超过 5 色的惩罚。`buildDemoLevelConfig` 与 `LEVELS.md` 的 50 关表都用它 —— 步数列从此是**公式输出**，巡检器用同一份实现重算并逐关比对（把 L1 的 28 改成 30 会直接报错）。
+- **12.3 结束前引爆特殊方块**：`trySwap` 在扣步并结算本手后，若步数用尽或已达成目标，调用 `detonateSpecials` —— 每轮把盘面所有特殊方块作为 `initialClear`（即 Step 10 的激活种子）交给 `resolveBoard`，魔力鸟额外按它保留的颜色点燃全屏同色；一轮后若又生成新特效就再来一轮（上限 `ENDGAME_CONFIG.maxDetonationRounds`）。多轮结果合并成一个 `ResolveResult` 返回给 UI 播完动画，`deadlock` 置 null。**引爆成果计入目标判定与分数**，因此最后一步引爆刚好达标算通关；通关时同样引爆。
+
+### 验证方式（可复现）
+
+- `node tests/run-all.js` → **169 用例 / 1122 断言 / 0 失败**（新增 `computeStepBudget` 三例、引爆四例）。
+- `_build/verify-step12.mjs` **全绿**（新增阶段 7，浏览器内跑真实模块）：步数派生的三条性质（障碍/色数越多越少、目标越大越多、夹在 [min,max]）、最后一步引爆（结算含引爆轮、无残留特效、分数增加）、引爆达标 → 通关 + 星级。
+- `node _build/lint-levels.mjs` → PASS（含「步数 = 公式派生」的比对）；`python _build/consistency_check.py` → 全部通过（新增 11 个配置键已登记附录 B）。
+- 证据等级：L1 + L2 + L3；真机与手感**未验证**。
+
+### 边界（如实）
+
+- 步数是**设计期派生**，不是运行时补偿：局势落后不会自动加步（用户选 A）。
+- 引爆的关卡级细节：每轮 `resolveCascades` 从第 1 层重新计连消，因此引爆本身不额外吃「连消加成」；这是有意的简化（引爆属于结算奖励，不是玩家的一次消除）。
+- `LEVELS.md` 的 50 关**尚未在代码里落地**（当前只有第 1 关用派生步数）；50 关表 + 选关界面 + 每关星级存档仍属 Step 12.2 的剩余部分。
+
+---
 ## 2026-09-20（Step 12.1：目标判定 + 三星 + HUD 四格 —— 完成并验证）
 
 ### 完成项

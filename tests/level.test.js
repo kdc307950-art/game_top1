@@ -5,7 +5,7 @@
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
 import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from '../config.js';
-import { calcStars, checkGoal, consumeStep, createLevel, getRemainingStepBonus } from '../level.js';
+import { calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getRemainingStepBonus } from '../level.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -150,4 +150,55 @@ test('calcStars：非法入参按 0 星处理（不抛错）', () => {
   assertEqual(calcStars(Number.NaN, [1, 2, 3]), 0, '分数 NaN');
 });
 
+// ---------------------------------------------------------------- Step 12.2：步数由难度派生
+
+test('computeStepBudget：障碍越多/越厚/色数越多 → 步数越少（难度绑定）', () => {
+  const goal = { type: GOAL_TYPE.SCORE, target: 10000 };
+  const plain = computeStepBudget({ colorCount: 5, goal, obstacles: [] });
+  const oneLayer = computeStepBudget({ colorCount: 5, goal, obstacles: [{ r: 1, c: 1, type: 'ice', layers: 1 }, { r: 1, c: 6, type: 'ice', layers: 1 }, { r: 6, c: 1, type: 'ice', layers: 1 }, { r: 6, c: 6, type: 'ice', layers: 1 }] });
+  const fourLayers = computeStepBudget({ colorCount: 5, goal, obstacles: [{ r: 1, c: 1, type: 'ice', layers: 3 }, { r: 1, c: 6, type: 'ice', layers: 3 }, { r: 6, c: 1, type: 'ice', layers: 3 }, { r: 6, c: 6, type: 'ice', layers: 3 }] });
+  const manyCells = computeStepBudget({
+    colorCount: 5,
+    goal,
+    obstacles: Array.from({ length: 8 }, (_, i) => ({ r: Math.floor(i / 4) + 1, c: (i % 4) + 1, type: 'ice', layers: 1 }))
+  });
+  const sixColors = computeStepBudget({ colorCount: 6, goal, obstacles: [] });
+
+  assertTrue(plain > oneLayer, `无阻碍 ${plain} > 1 层障碍 ${oneLayer}`);
+  assertTrue(oneLayer > fourLayers, `1 层 ${oneLayer} > 4 层 ${fourLayers}`);
+  assertTrue(oneLayer > manyCells, `1 格 ${oneLayer} > 2 格 ${manyCells}`);
+  assertTrue(plain > sixColors, `5 色 ${plain} > 6 色 ${sixColors}`);
+});
+
+test('computeStepBudget：目标越大步数越多（四种目标都能折算）', () => {
+  const small = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.SCORE, target: 4000 }, obstacles: [] });
+  const large = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.SCORE, target: 8000 }, obstacles: [] });
+  assertTrue(large > small, `分数目标 4000→${small}，8000→${large}`);
+
+  const collectSmall = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.COLLECT, targets: { frog: 4 } }, obstacles: [] });
+  const collectLarge = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.COLLECT, targets: { frog: 20 } }, obstacles: [] });
+  assertTrue(collectLarge > collectSmall, `收集 4→${collectSmall}，20→${collectLarge}`);
+
+  const iceSmall = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.CLEAR_ICE, target: 4 }, obstacles: [] });
+  const iceLarge = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.CLEAR_ICE, target: 24 }, obstacles: [] });
+  assertTrue(iceLarge > iceSmall, `消冰 4→${iceSmall}，24→${iceLarge}`);
+
+  // 注意：分档会被 [min, max] 夹取，因此这里用不触发夹取的量级比较（夹取本身由下一个用例断言）
+  const mid = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.SCORE, target: 6000 }, obstacles: [] });
+  const mixed = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.MIXED, score: 4000, clearIce: 4 }, obstacles: [] });
+  assertTrue(mixed > small && mixed < large, `混合目标落在两端之间：${small} < ${mixed} < ${large}（另一档 ${mid}）`);
+});
+
+test('computeStepBudget：结果夹在 [min, max] 内，且同一配置永远算出同一步数', () => {
+  const budget = CONFIG.STEP_BUDGET;
+  const heavy = Array.from({ length: 12 }, (_, i) => ({ r: Math.floor(i / 4) + 1, c: (i % 4) + 1, type: 'snow', layers: 5 }));
+  const tiny = computeStepBudget({ colorCount: 6, goal: { type: GOAL_TYPE.SCORE, target: 1 }, obstacles: heavy });
+  const huge = computeStepBudget({ colorCount: 5, goal: { type: GOAL_TYPE.MIXED, score: 999999, clearIce: 999 }, obstacles: [] });
+  assertEqual(tiny, budget.min, '极小目标被夹到下限');
+  assertEqual(huge, budget.max, '极大目标被夹到上限');
+
+  const config = { colorCount: 5, goal: { type: GOAL_TYPE.SCORE, target: 9000 }, obstacles: [{ r: 1, c: 1, type: 'ice', layers: 2 }] };
+  assertEqual(computeStepBudget(config), computeStepBudget(config), '同一配置两次结果一致（设计期派生，无随机）');
+  assertTrue(computeStepBudget({ colorCount: 5, goal: null, obstacles: [] }) > 0, '缺 goal 时回落到纯基准步数，不抛错');
+});
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

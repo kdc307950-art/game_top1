@@ -1,9 +1,21 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.14
+> 版本：v1.15
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.14 → v1.15 关键变更）
+
+本次修订经**用户明确批准**，为 Step 12 增加两条玩法规则：**步数由关卡难度派生**、**本局结束前引爆盘面上的特殊方块再结算**。不改动既有数值，但会改变步数的来源与结算流程。
+
+1. **3.6 新增「步数由难度派生」**：关卡不再手写步数，改由公式 `步数 = clamp(round(base + 目标工作量 × workload − 障碍摩擦), min, max)` 算出（系数集中在 `config.js` 的 `STEP_BUDGET`）。目标工作量按目标类型折算（分数/收集/消冰各自的单位，`mixed` 相加），障碍摩擦 = 障碍格数 × perCell + 障碍总层数 × perLayer + 超过 5 色的部分 × perColor。**设计期派生**：同一关卡配置永远算出同一步数，关卡仍可复现、可巡检。
+2. **3.6 新增「本局结束前引爆特殊方块」**：走完最后一步（步数用尽）**或**已达成目标时，先引爆盘面上所有特殊方块（条纹/包装各自展开；魔力鸟按它保留的颜色清除全屏同色），引爆过程中新生成的特殊方块**继续链式引爆**，直到盘面没有特殊方块或达到 `ENDGAME_CONFIG.maxDetonationRounds`。引爆的消除与得分**计入目标判定与分数**，然后才做星级结算 —— 因此「最后一步引爆刚好达成目标」算通关。
+3. **4.2 补 `level.computeStepBudget`**：新增的关卡步数派生函数（纯函数、无随机；系数全部来自 `CONFIG.STEP_BUDGET`）。
+4. **附录 B 新增 `STEP_BUDGET`（10 键）与 `ENDGAME_CONFIG.maxDetonationRounds`**：公式系数与引爆轮数上限都必须集中登记，逻辑模块里不出现魔法数字。
+5. **`LEVELS.md` 同步**：50 关表的「步数」列改为**公式输出**（不再手写），并在 §6 写明公式；巡检脚本用 `computeStepBudget` 重算并逐关比对，公式一改就红。
 
 ---
 
@@ -435,6 +447,14 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 3. **每关最多引入 1 种新机制**（新的障碍类型 / 新的目标类型 / 新解锁的层数档位）；新机制首次出现的关卡，其余维度（障碍格数、收集数量、三星阈值）**不升档**。
 4. **混合目标最多 3 个大项**（`score` / `collect` / `clearIce` 各算一项），其中 `collect` 最多 2 个动物种类。
 5. **目标必须可达**：`clearIce` 目标 ≤ 该关冰块总层数（`冰格数 × 冰层数`，雪块层数不计入 `clearedIce`）；`collect` 目标的单一动物数量 ≤ `步数 × 0.9`，多动物合计 ≤ `步数 × 1.6`（保守估算，用于排期而非精确模拟）。
+6. **步数由难度派生（v1.15）**：关卡不手写步数，由 `level.computeStepBudget` 按
+   `clamp(round(base + 目标工作量 × workload − 障碍摩擦), min, max)` 算出：
+   目标工作量 = 分数目标 `target / scoreUnit` + 收集目标 `合计 / collectUnit` + 消冰目标 `target / iceUnit`（`mixed` 相加）；
+   障碍摩擦 = `障碍格数 × perCell + 障碍总层数 × perLayer + max(0, 色数 − 5) × perColor`。
+   系数全部来自 `CONFIG.STEP_BUDGET`（附录 B），是**设计期派生**：同配置同结果、无运行时随机。
+7. **本局结束前引爆特殊方块（v1.15）**：走完最后一步（步数用尽）或已达成目标时，先引爆盘面上所有特殊方块，
+   引爆过程中新生成的继续链式引爆（上限 `ENDGAME_CONFIG.maxDetonationRounds`），直到盘面无特殊方块。
+   引爆的消除与得分**计入目标判定与分数**，之后才做星级结算；因此最后一步的引爆可以完成关卡目标。
 
 ### 3.7 三星评分系统
 
@@ -608,6 +628,7 @@ GameSnapshot = {
 - `checkGoal(level: Level, board: Board, score: number, collected: Record<string, number>): boolean`
 - `calcStars(score: number, thresholds: [number, number, number]): 0 | 1 | 2 | 3`
 - `getRemainingStepBonus(stepsLeft: number): number`
+- `computeStepBudget(config: LevelConfig): number`（v1.15：按 3.6 的公式由难度派生步数；纯函数、无随机）
 
 ### 4.3 算法规则
 
@@ -897,6 +918,7 @@ node tests/integration.test.js
 | v1.11 | 2026-09-20 | Agent（用户批准） | Step 9 魔力鸟的规则口径与契约：3.2 补「清全屏该色（含被交换格与自身）、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被其它特效波及时不额外触发」；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）；ROADMAP 头部同步升到 v1.11 | 3.2、4.2、4.3、11、`ROADMAP.md` |
 | v1.12 | 2026-09-20 | Agent（用户批准） | Step 11 冰块与雪块的口径与契约：3.4 补「冰块内的动物被消除后该格补位且冰块保留（3 层冰需三次消除）」「同一级联层内每格障碍物最多 −1 层」「覆层障碍（ice/vine）与占格障碍（snow/choc）两类」，并修正「冰块格在动物被消除后被误判为屏障」的潜伏缺陷；3.5 补「层数分另算、不参与特效倍数」「冰块连消 (n−1)×1000 与普通连消并存」；4.2 三条纯追加（`Obstacle`、`ObstacleDamage` 与 `ResolveLevel/ResolveResult.damaged`、`LevelScore.obstacle`）；ROADMAP 头部同步升到 v1.12 | 3.4、3.5、4.2、11、`ROADMAP.md` |
 | v1.14 | 2026-09-20 | Agent（用户批准） | Step 12 的契约与 UI 口径：4.2 追加 `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`stars`/`won`；4.4 追加 `Level.completed`；5.5 落地 HUD 四格（分数/步数/目标进度/最高分）；附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`（每关星级存档键） | 4.2、4.4、5.5、附录 B、11 |
+| v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
 
 ---
@@ -1137,6 +1159,17 @@ const LEVEL_3 = {
 | `ANIMATION_CONFIG.fallDuration`    | 下落动画时长（ms） | 200                  | 15       |
 | `ANIMATION_CONFIG.cascadeGap`      | 级联间隔（ms）     | 120                  | 15       |
 | `ANIMATION_CONFIG.shuffleMaxTries` | 重排最大尝试次数   | 50                   | 3.8      |
+| `STEP_BUDGET.base`                 | 步数公式基准       | 24                   | 3.6      |
+| `STEP_BUDGET.workload`             | 每单位目标工作量的步数 | 1.6              | 3.6      |
+| `STEP_BUDGET.perCell`              | 每障碍格的步数扣减 | 0.25                 | 3.6      |
+| `STEP_BUDGET.perLayer`             | 每层障碍的步数扣减 | 0.2                  | 3.6      |
+| `STEP_BUDGET.perColor`             | 超过 5 色每色的扣减 | 2                   | 3.6      |
+| `STEP_BUDGET.min`                  | 派生步数下限       | 20                   | 3.6      |
+| `STEP_BUDGET.max`                  | 派生步数上限       | 34                   | 3.6      |
+| `STEP_BUDGET.scoreUnit`            | 分数目标的工作量单位 | 2000               | 3.6      |
+| `STEP_BUDGET.collectUnit`          | 收集目标的工作量单位 | 4                  | 3.6      |
+| `STEP_BUDGET.iceUnit`              | 消冰目标的工作量单位 | 4                  | 3.6      |
+| `ENDGAME_CONFIG.maxDetonationRounds` | 结束前引爆的最大轮数 | 8                 | 3.6      |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |
 | `COLOR_NAMES`                      | 颜色索引 0-5 到动物名映射 | `['frog','hippo','ladybug','octopus','chick','fox']` | 3.6 / 13 |

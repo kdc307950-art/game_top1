@@ -709,4 +709,86 @@ test('12.1：通关时的剩余步数转化只结算一次（重复结算不会�
   assertEqual(again.scoreDelta, 0, '没有新的消除 → 0 分');
   assertEqual(game.level.currentScore, afterWin, '剩余步数分不再重复结算');
 });
+
+// ---------------------------------------------------------------- Step 12.3：结束前引爆特殊方块
+
+/** 夹具：0/1 棋盘格底色 + 行 4 可由 (4,2)↔(5,2) 交换成三连（与 singleLevelBoard 同族）。 */
+const detonationBoard = (game, paint) => {
+  singleLevelBoard(game.board);
+  if (paint) paint(game.board);
+};
+
+test('12.3：走完最后一步会引爆盘面上的特殊方块（条纹 → 整列）', () => {
+  const game = createGame(
+    { steps: 1, goal: { type: GOAL_TYPE.SCORE, target: 999999 }, starThresholds: [1, 2, 3] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  detonationBoard(game, (b) => {
+    b[7][7].type = CELL_TYPE.STRIPED; // 远离玩家这一手，必定留到引爆
+    b[7][7].direction = DIRECTION.V;
+  });
+
+  const result = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertEqual(result.stepsLeft, 0, '最后一步已用掉');
+  assertTrue(result.valid && game.gameOver, '本局结束');
+  assertTrue(result.resolve.cleared.length > 3, `引爆清掉了更多格子：${result.resolve.cleared.length} > 3`);
+  assertTrue(result.resolve.levels.length >= 2, `结算里含引爆轮：${result.resolve.levels.length} 层`);
+  assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '引爆后盘面无特殊方块');
+});
+
+test('12.3：引爆是链式的，直到盘面没有特殊方块', () => {
+  const game = createGame(
+    { steps: 1, goal: { type: GOAL_TYPE.SCORE, target: 999999 }, starThresholds: [1, 2, 3] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  detonationBoard(game, (b) => {
+    b[0][0].type = CELL_TYPE.STRIPED; b[0][0].direction = DIRECTION.H;
+    b[7][7].type = CELL_TYPE.WRAPPED;
+    b[3][6].type = CELL_TYPE.STRIPED; b[3][6].direction = DIRECTION.V;
+  });
+
+  const result = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '链式引爆后没有剩余特殊方块');
+  assertTrue(result.resolve.damaged.length >= 0, '障碍物明细字段照常存在');
+});
+
+test('12.3：引爆的成果计入目标判定 —— 最后一步引爆刚好达成目标算通关', () => {
+  const game = createGame(
+    { steps: 1, goal: { type: GOAL_TYPE.SCORE, target: 120 }, starThresholds: [120, 5000, 9000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  detonationBoard(game, (b) => {
+    b[7][7].type = CELL_TYPE.STRIPED;
+    b[7][7].direction = DIRECTION.V;
+  });
+
+  trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  // 玩家这一手 30 分 < 120；引爆整列（8 格 = 80 分）后 ≥ 120 → 通关
+  assertTrue(game.level.completed, '引爆达成的目标也算通关（用户批准的口径）');
+  assertTrue(getState(game).won, '快照判为通关');
+  assertTrue(getState(game).stars >= 1, '通关至少有 1 星');
+});
+
+test('12.3：通关（还有剩余步数）时同样会引爆盘面特殊方块', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.SCORE, target: 30 }, starThresholds: [30, 5000, 9000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  detonationBoard(game, (b) => {
+    b[7][7].type = CELL_TYPE.STRIPED;
+    b[7][7].direction = DIRECTION.V;
+  });
+
+  const result = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertTrue(game.level.completed, '这一手就达成目标');
+  assertEqual(result.stepsLeft, 29, '还剩 29 步');
+  assertTrue(result.resolve.cleared.length > 3, '通关时也引爆了盘面特殊方块');
+  assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '引爆后盘面无特殊方块');
+  // 30（本手）+ 29×30（剩余步数转化）+ 引爆分（整列 80）
+  assertTrue(getState(game).currentScore >= 30 + 29 * 30, `总分含剩余步数转化：${getState(game).currentScore}`);
+});
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

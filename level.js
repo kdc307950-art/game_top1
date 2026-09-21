@@ -24,12 +24,11 @@ const GOAL_TYPES = new Set(Object.values(GOAL_TYPE));
  * 层数也都留出「需要多次消除」的观感又不至于 30 步内破不掉。
  */
 export function buildDemoLevelConfig() {
-  return {
+  const config = {
     id: 1,
     rows: CONFIG.BOARD_SIZE,
     cols: CONFIG.BOARD_SIZE,
     colorCount: CONFIG.COLOR_COUNT,
-    steps: CONFIG.LEVEL_DEFAULTS.steps,
     goal: { type: GOAL_TYPE.SCORE, target: CONFIG.LEVEL_DEFAULTS.starThresholds[0] },
     starThresholds: [...CONFIG.LEVEL_DEFAULTS.starThresholds],
     obstacles: [
@@ -41,6 +40,43 @@ export function buildDemoLevelConfig() {
       { r: 4, c: 4, type: OBSTACLE_TYPE.SNOW, layers: 3 }
     ]
   };
+  // 步数不再手写字面量：由「难度 → 步数」公式给出（见 computeStepBudget）
+  return { ...config, steps: computeStepBudget(config) };
+}
+
+/**
+ * Step 12.2（用户批准）：难度 → 步数。**设计期派生**，不引入运行时随机性 ——
+ * 同一个关卡配置永远算出同一个步数，因此关卡仍然可复现、可在巡检里被校验。
+ *
+ * 公式：`步数 = clamp(round(base + 目标工作量 × workload − 障碍摩擦), min, max)`
+ *   · 目标工作量（workload）：分数目标按 `scoreUnit` 折算，收集目标按 `collectUnit` 折算，
+ *     消冰目标按 `iceUnit` 折算；`mixed` 三项相加。
+ *   · 障碍摩擦（friction）：`障碍格数 × perCell + 障碍总层数 × perLayer + 超过 5 色的部分 × perColor`。
+ * 系数全部来自 `CONFIG.STEP_BUDGET`（附录 B），本函数里没有魔法数字。
+ */
+export function computeStepBudget(config) {
+  const budget = CONFIG.STEP_BUDGET;
+  const obstacles = config?.obstacles ?? [];
+  const cells = obstacles.length;
+  const layers = obstacles.reduce((sum, spec) => sum + (Number.isFinite(spec?.layers) ? spec.layers : 0), 0);
+  const colors = config?.colorCount ?? CONFIG.COLOR_COUNT;
+  const friction = cells * budget.perCell + layers * budget.perLayer + Math.max(0, colors - 5) * budget.perColor;
+  const raw = budget.base + goalWorkload(config?.goal, budget) * budget.workload - friction;
+  return Math.min(Math.max(Math.round(raw), budget.min), budget.max);
+}
+
+/** 目标工作量：把四种目标折算到同一个「单位」上（`mixed` 相加）。 */
+function goalWorkload(goal, budget) {
+  if (!goal || typeof goal !== 'object') return 0;
+  const score = (value) => (Number.isFinite(value) ? value / budget.scoreUnit : 0);
+  const collect = (targets) => Object.values(targets ?? {}).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0) / budget.collectUnit;
+  const ice = (value) => (Number.isFinite(value) ? value / budget.iceUnit : 0);
+
+  if (goal.type === GOAL_TYPE.SCORE) return score(goal.target);
+  if (goal.type === GOAL_TYPE.COLLECT) return collect(goal.targets);
+  if (goal.type === GOAL_TYPE.CLEAR_ICE) return ice(goal.target);
+  if (goal.type === GOAL_TYPE.MIXED) return score(goal.score) + ice(goal.clearIce) + collect(goal.collect);
+  return 0;
 }
 
 /**

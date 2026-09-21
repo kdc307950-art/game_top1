@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.14
+> 版本：v1.15
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -517,7 +517,7 @@
 
 **验收**：
 1. **Step 12.1（目标与三星引擎）**：支持 `score`、`collect`、`clearIce`、`mixed` 四种目标；Level.collected 与 Level.clearedIce 正确累加；步数用尽未达成则失败；三星只取决于分数；剩余步数按 3.5 转化；关卡目标与进度在 HUD 常驻可见（5.5）。
-2. **Step 12.2（50 关落地）**：`level.js` 的关卡表与 `LEVELS.md` 的 50 关表**逐项一致**（关数、目标类型与参数、步数、色数、障碍布局的格数与层数、三星阈值）；通关后进入下一关；第 50 关通关后给出「全部通关」状态；关卡表满足 3.6 的五条关卡设计硬指标。
+2. **Step 12.2（50 关落地 + 步数由难度派生）**：**步数不手写**，由 `computeStepBudget` 从难度派生（宪法 3.6 第 6 条 / `STEP_BUDGET`）；`level.js` 的关卡表与 `LEVELS.md` 的 50 关表**逐项一致**（关数、目标类型与参数、步数、色数、障碍布局的格数与层数、三星阈值）；通关后进入下一关；第 50 关通关后给出「全部通关」状态；关卡表满足 3.6 的五条关卡设计硬指标。
 
 **测试**：`node tests/level.test.js` 断言四种目标判定、进度累加与三星计算；新增的关卡表巡检断言 50 关与 `LEVELS.md` 一致；`node _build/lint-levels.mjs` 复核文档自身。
 

@@ -89,7 +89,13 @@ export function trySwap(state, a, b) {
   // 4.3.3：只有有效交换才扣步数。**先扣步再结算** —— 3.5 的剩余步数转化用的是「通关那一刻」的真实剩余，
   // 把刚用掉的这一步也算进去会多给一份分（Step 12.1 的用例抓到过这个 off-by-one）。
   consumeStep(state.level);
-  const resolve = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
+  const moveResult = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
+
+  // Step 12.3（用户批准）：走完最后一步（步数用尽）或已经达成目标时，**先引爆盘面上的特殊方块再最终结算**。
+  // 引爆是链式的（引爆过程中新生成的特殊方块继续引爆），成果照常计入目标进度与分数 ——
+  // 因此「最后一步引爆刚好达成目标」算通关。
+  const endgame = state.level.remainingSteps <= 0 || state.level.completed ? detonateSpecials(state) : null;
+  const resolve = endgame ? mergeResolveResults([moveResult, endgame]) : moveResult;
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
   // Step 12.1：结束有三种原因 —— 通关（3.6）、步数用尽、死局且重排失败（3.8 约束 4）
@@ -332,6 +338,70 @@ function normalizeLevelConfig(config) {
     starThresholds: config.starThresholds ?? [...CONFIG.LEVEL_DEFAULTS.starThresholds],
     obstacles: config.obstacles ?? []
   };
+}
+
+/**
+ * Step 12.3：本局结束时引爆盘面上的特殊方块，返回合并后的结算结果（没有特殊方块时返回 null）。
+ * 每一轮把「盘面上所有特殊方块的坐标」作为 `initialClear` 交给 `resolveCascades` ——
+ * Step 10 起 initialClear 的格子同时充当**激活种子**，因此条纹/包装会各自展开、并被链式传播；
+ * 魔力鸟在 D025 的保守口径下只清自己，所以这里额外把「它保留的颜色」的全屏同色格一起点燃。
+ * 一轮之后若级联又生成了新的特殊方块，就再来一轮，直到盘面没有特殊方块或达到轮数上限。
+ */
+function detonateSpecials(state) {
+  const rounds = [];
+  const maxRounds = CONFIG.ENDGAME_CONFIG.maxDetonationRounds;
+  for (let round = 0; round < maxRounds; round += 1) {
+    const seeds = detonationSeeds(state.board);
+    if (seeds.length === 0) break;
+    rounds.push(resolveBoard(state, { initialClear: seeds }));
+  }
+  if (rounds.length === 0) return null;
+  const merged = mergeResolveResults(rounds);
+  merged.deadlock = null; // 本局已结束：3.8 的死局检测是为了继续玩，这里不再重排
+  return merged;
+}
+
+/** 引爆要点燃的坐标：盘面上每个特殊方块自身；魔力鸟再加上「它自己那颗颜色」的全屏同色格。 */
+function detonationSeeds(board) {
+  const seeds = [];
+  board.forEach((row, r) => {
+    row.forEach((cell, c) => {
+      if (!cell || cell.type === CELL_TYPE.NORMAL) return;
+      seeds.push({ r, c });
+      if (cell.type === CELL_TYPE.MAGIC && cell.color !== null && cell.color !== undefined) {
+        seeds.push(...getMagicTargets(board, cell.color));
+      }
+    });
+  });
+  return seeds;
+}
+
+/** 把多轮结算的结果合并成一个 ResolveResult（供 UI 一次播完，字段与 4.2 一致）。 */
+function mergeResolveResults(results) {
+  const merged = {
+    cascades: 0,
+    levels: [],
+    cleared: [],
+    damaged: [],
+    spawned: [],
+    capped: false,
+    scoreDelta: 0,
+    levelScores: [],
+    deadlock: null
+  };
+  for (const result of results) {
+    if (!result) continue;
+    merged.cascades += result.cascades;
+    merged.levels.push(...result.levels);
+    merged.cleared.push(...result.cleared);
+    merged.damaged.push(...result.damaged);
+    merged.spawned.push(...result.spawned);
+    merged.capped = merged.capped || result.capped;
+    merged.scoreDelta += result.scoreDelta;
+    merged.levelScores.push(...result.levelScores);
+    merged.deadlock = merged.deadlock ?? result.deadlock;
+  }
+  return merged;
 }
 
 /** 4.3.1：上下左右相邻（曼哈顿距离为 1）。 */
