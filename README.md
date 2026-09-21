@@ -8,7 +8,7 @@
 
 **关卡模式已实现**：`LEVELS.md` 定义的 50 关（难度曲线、10 个障碍布局图案、五条关卡设计硬指标）全部落进 `level.js` 并可在选关界面进入；代码表由文档生成（`_build/gen-level-table.mjs`）、再由 `_build/check-level-table.mjs` 反向逐项巡检，`LEVELS.md` 自身由 `_build/lint-levels.mjs` 巡检 —— 任一侧漂移都会让巡检变红。
 
-**扩展前 Bug Audit Gate（`ROADMAP.md` §0.1）已通过**（Step 7→8、8→9、9→10、10→11、11→12 各一轮，**Step 12→13 为第六轮**）：L1 自动回归 173 用例 / 1545 断言 / 0 失败，静态巡检三项（`check-level-table`、`lint-levels`、`consistency_check`）PASS，浏览器与窄屏套件 `verify-step4`–`verify-step12b` 与 `audit-gate-step7`–`audit-gate-step11` 共 **15 个套件 / 582 项断言 PASS / 0 FAIL**，P0/P1 清零，P3 已登记（见 `PROGRESS.md` 与 `DECISIONS.md` D022/D025/D026/D027/D032；其中 P3-9 记录了两个 Step 2/3 时代的像素解码器脚本仍红的原因与回归计划）。**当前暂停点：Step 13（藤蔓、巧克力）已完成（宪法 v1.17），进入 Step 14 前需再跑一次 Gate 0.1（第七轮）并归档证据**；README 不替代测试证据。
+**扩展前 Bug Audit Gate（`ROADMAP.md` §0.1）已通过**（Step 7→8、8→9、9→10、10→11、11→12 各一轮，**Step 12→13 为第六轮**）：L1 自动回归 173 用例 / 1545 断言 / 0 失败，静态巡检三项（`check-level-table`、`lint-levels`、`consistency_check`）PASS，浏览器与窄屏套件 `verify-step4`–`verify-step12b` 与 `audit-gate-step7`–`audit-gate-step11` 共 **15 个套件 / 582 项断言 PASS / 0 FAIL**，P0/P1 清零，P3 已登记（见 `PROGRESS.md` 与 `DECISIONS.md` D022/D025/D026/D027/D032；其中 P3-9 记录了两个 Step 2/3 时代的像素解码器脚本仍红的原因与回归计划）。**当前暂停点：Step 13（藤蔓、巧克力）已完成，Gate 0.1 第七轮已通过（宪法 v1.17）；Step 14（水果关 / 时间关 / 金豆荚关）开工前必须先补宪法规则并经批准**；P3-10 登记了退役脚本留下的「高亮环像素取证」缺口。README 不替代测试证据。
 
 当前已实现、仅代码审查、仅测试夹具通过、真机未验证和延期能力必须分开表述。特别是 Android/iOS 包装、真实设备性能、iOS Safari/WebView、音频/震动、色盲与控制台检查，未实际验证前均不得写成“已支持”或“可发布”。
 
