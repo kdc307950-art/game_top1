@@ -579,6 +579,7 @@ ResolveResult = {
   levels: ResolveLevel[],
   cleared: Cell[],                 // 展平后的被消除格子（含 color，供计分）
   damaged: ObstacleDamage[],       // 展平后的障碍物受损明细（v1.12 补，供 3.5 层数分与 UI 显示层数变化）
+  collected: Pos[],                // v1.18：本局新收集的收集物坐标（水果/金豆荚落到出口行），供计分与 UI 播收动画
   spawned: Cell[],
   capped: boolean,                 // 是否触发级联层数上限（上限 = 棋盘格数，见 ROADMAP Step 3）
   scoreDelta: number,
@@ -609,6 +610,8 @@ GameSnapshot = {
   goal: GoalSpec,                       // v1.14：HUD 常驻显示通关目标（5.5）
   collected: Record<string, number>,    // v1.14：本局已收集的动物计数（键为 COLOR_NAMES 里的名字）
   clearedIce: number,                   // v1.14：本局已清除的冰块层数（3.6 的 clearIce 目标用）
+  collectedFruit: number,               // v1.18：本局已收集的水果数
+  collectedPod: number,                 // v1.18：本局已收集的金豆荚数
   stars: 0 | 1 | 2 | 3,                 // v1.14：按 3.7 由最终分数算出
   won: boolean,                         // v1.14：是否已达成通关目标（与 gameOver 的「失败」区分）
   board: Board
@@ -1198,6 +1201,9 @@ const LEVEL_3 = {
 | `SCORE_CONFIG.icePerLayer`         | 冰块每层得分       | 1000                 | 3.5      |
 | `SCORE_CONFIG.snowPerLayer`        | 雪块每层得分       | 1000                 | 3.5      |
 | `SCORE_CONFIG.chocPerLayer`        | 巧克力每块得分     | 1000                 | 3.5      |
+| `COLLECTIBLE_CONFIG.fruitFallPerStep` | 水果单次下落格数（≥ 列高即视为整列直落） | 99 | 3.6 v1.18 |
+| `COLLECTIBLE_CONFIG.podFallPerStep`   | 金豆荚单次下落格数（分阶段节奏）        | 1  | 3.6 v1.18 |
+| `COLLECTIBLE_CONFIG.exitRow`          | 底部出口所在行（收集物到达即计数）      | 7  | 3.6 v1.18 |
 | `SCORE_CONFIG.gemScore`            | 宝石得分           | 1500                 | 3.5      |
 | `SCORE_CONFIG.specialMultipliers`  | 特效倍数表         | 见 3.5               | 3.5      |
 | `SCORE_CONFIG.cascadeStep`         | 普通连消递增       | 30                   | 3.5      |

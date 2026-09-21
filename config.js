@@ -98,6 +98,14 @@ export const CONFIG = {
     choc: { maxLayers: 1 }
   },
 
+  // 可掉落的收集物（AGENTS.md 3.6 / 4.1，v1.18）。
+  // 水果「整列直落」= 单次下落格数不小于列高；金豆荚是分阶段节奏，每次消除只下落 1 格。
+  COLLECTIBLE_CONFIG: {
+    fruitFallPerStep: 99,
+    podFallPerStep: 1,
+    exitRow: 7
+  },
+
   // 步数由难度派生（Step 12.2，用户批准）：「难度分 → 步数」公式的系数（附录 B 逐键登记）。
   // 设计意图：目标越大给越多步（workload），障碍越多/越厚/色数越多给越少步（friction），
   // 结果夹在 [min, max] 内。关卡表因此不再手写步数。
