@@ -6,6 +6,24 @@
 
 ---
 
+## D032：Gate 0.1 第六轮通过（Step 12 → Step 13），并确立「关卡事实只从关卡表读」的断言口径
+
+- 日期：2026-09-20
+- 背景：Step 12.2 把上线关卡从代码里的演示关（30 步 / 6 色 / 6 格障碍）换成 `LEVELS.md` 的第 1 关（28 步 / 5 色 / 无障碍），并把结束面板从单按钮改为「主按钮 + 选关」双按钮。旧验证脚本里写死的关卡事实因此集体误报（5 个套件、12 项），但它们**单独运行时都绿** —— 这是夹具假设过期（P3-5），不是产品回归。
+- 决策：
+  1. **修 harness，不修产品**（P3-5 口径，本轮为第六次）：产品行为与宪法 3.6 一致，误报来源是脚本里的常量。
+  2. **断言口径改为「从关卡表读」**：步数读 `getLevelConfig(id).steps` 或启动/新局日志声明的步数，再验证相对关系（有效交换恰好 −1、重开回到满值、胜负在各关自己的预算下判定）；色数读该关 `colorCount`；障碍像素取证针对「有障碍的关卡配置」，不再假设首屏必有障碍。
+  3. **双按钮面板的坐标口径**：结束面板的按钮点按一律取**左侧主按钮中心**，不再用整块面板的中心（双按钮后正中是死区）。
+  4. **随机局面下的循环按「生效交换数」计数**：只在日志确认「交换有效/无效」后累加，无效滑动不消耗预算，避免偶发假失败。
+  5. **放行与标记**：Step 12 完成（tag `step12-done`）、门禁通过（tag `gate-0.1-step12-pass`）；Step 12 是第二阶段的最后一步，附 `phase-2-done`。
+- 依据与证据：L1 = 173 用例 / 1545 断言 / 0 失败；静态三项（代码表巡检、`LEVELS.md` 巡检、一致性脚本）PASS；浏览器与移动模拟 **15 个套件共 582 项断言 PASS / 0 FAIL**（新增 `audit-gate-step7/8/9/10` 与 `verify-step4`）。日志：`_build/gate-tests.log`、`_build/gate-leveltable.log`、`_build/gate-lintlevels.log`、`_build/gate-consistency.log`、`_build/g-*.log`、`_build/g2-*.log`、`_build/g3-*.log`。
+- **P3-9（新增，未关闭）**：`_build/verify-step2.mjs` 与 `_build/verify-step3.mjs` 仍红（各 6 项），因为两者的**内联像素解码器停在 Step 2/3 时代**（色相表 + 「6 色」假设与 Step 7 的外观重做 D020、Step 12 的 5 色第 1 关不符）。它们覆盖的 Step 2/3 细节已由 `verify-step5`–`verify-step12b` 在现代解码器上覆盖，因此不阻塞放行；回归计划见 `PROGRESS.md` 该轮 3b（Step 13 门禁轮内移植现代解码器或正式退役）。
+- 影响：`_build/verify-step5.mjs`、`_build/verify-step7.mjs`、`_build/verify-step11.mjs`、`_build/verify-step12b.mjs`、`_build/audit-gate-step11.mjs`（本机证据，不入库）；`PROGRESS.md`、`README.md`、`ROADMAP.md`、本文件。
+- 替代方案：① 把上线关卡改回演示关（否决：违背 Step 12.2 的验收目标）；② 每个脚本各存一份「关卡快照常量」（否决：仍随关卡表漂移，只是把漂移点换个地方）；③ 用 `LEVELS.md` 生成脚本常量（否决：脚本是审计工具，直接读页面里的关卡表更接近真实运行）。
+- 未验证：真机（iOS / Android）的手感与性能；Step 13 的藤蔓/巧克力规则口径尚需用户确认（见 `PROGRESS.md` 放行附带条件）。
+
+---
+
 ## D031：Step 12.2 —— 50 关落地、选关界面、星级存档与 storage.js 拆分
 
 - 日期：2026-09-20
