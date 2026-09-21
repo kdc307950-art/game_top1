@@ -527,6 +527,8 @@ cell = {
   direction: 'h' | 'v' | null,                       // 条纹方向
   obstacle: null | 'ice' | 'snow' | 'vine' | 'choc', // 障碍物类型
   obstacleLayers: 0-5,                               // 障碍物剩余层数
+  collectible: null | 'fruit' | 'pod',               // v1.18：可掉落的收集物（水果/金豆荚）；占格、不参与匹配、
+                                                     //   随重力下落、不可被消除或特效清除，与 obstacle 不是一类
   id: number                                         // 唯一标识，用于动画追踪
 }
 ```
@@ -704,6 +706,8 @@ GoalSpec =
   | { type: 'score',    target: number }
   | { type: 'collect',  targets: Record<string, number> }
   | { type: 'clearIce', target: number }
+  | { type: 'fruit',    target: number }   // v1.18：水果关，收集 N 个掉到底部出口的水果
+  | { type: 'pod',      target: number }   // v1.18：金豆荚关，收集 N 个（每次消除只下落 1 格）
   | { type: 'mixed',    score?: number, collect?: Record<string, number>, clearIce?: number }
 
 ObstacleSpec = { r: number, c: number, type: 'ice' | 'snow' | 'vine' | 'choc', layers: number }
@@ -712,6 +716,8 @@ Level = LevelConfig & {
   remainingSteps: number,
   collected: Record<string, number>,
   clearedIce: number,
+  collectedFruit: number,  // v1.18：本局已收集的水果数（落到底部出口计数）
+  collectedPod: number,    // v1.18：本局已收集的金豆荚数
   currentScore: number,
   completed: boolean       // v1.14：本局已达成通关目标（3.6）；与 gameOver 的失败原因分开
 }
