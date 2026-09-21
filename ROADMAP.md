@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.16
+> 版本：v1.17
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -28,7 +28,7 @@
 
 ## 0.1 扩展前 Bug Audit Gate（当前暂停点）
 
-当一个 Step 已完成、准备进入下一个玩法 Step 时，先执行一次独立的 Bug Audit，不把“功能已经写出来”直接当成“可以继续扩展”。当前 **Step 12 已完成，Gate 0.1 第六轮已于 2026-09-20 通过（tag `gate-0.1-step12-pass`）**；Step 13 可在确认藤蔓/巧克力的规则口径后开始（见 `PROGRESS.md` 该轮记录的放行附带条件）。
+当一个 Step 已完成、准备进入下一个玩法 Step 时，先执行一次独立的 Bug Audit，不把“功能已经写出来”直接当成“可以继续扩展”。当前 **Step 13（藤蔓、巧克力）已完成（宪法 v1.17，用户批准）**；进入 Step 14（关卡类型）前需再过一次 Gate 0.1（第七轮）并归档证据。
 
 1. **自动回归**：运行 `node tests/run-all.js`，记录测试文件数、用例数、断言数、失败数和退出码；失败用例必须先修复或在 `PROGRESS.md` 明确标记为阻塞。
 2. **静态一致性**：运行现有 `_build/consistency_check.py`（如文件存在），检查模块边界、配置键、文档交叉引用和禁止依赖；不要用“脚本没有报错”替代行为测试。

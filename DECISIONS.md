@@ -6,6 +6,23 @@
 
 ---
 
+## D033：Step 13 藤蔓与巧克力的口径、实现落点与演示关
+
+- 日期：2026-09-20
+- 背景：宪法 3.4 对藤蔓/巧克力只有一句话（藤蔓：被困动物不能移动；巧克力：单层、被相邻消除或特效波及时消除），而实现里已经有两处「半成品」：`shuffle.isCellMovable` 已排除藤蔓、`board.js` 的 `BLOCKING_OBSTACLE_TYPES` 已含 `choc`，但 `damageObstacle` 的通用规则会让**藤蔓随格内动物被消除而消失**、巧克力则**不计分**。开工前经用户确认四项口径，其中「藤蔓永不被清除」与已选的 A 方案直接相关，故单独确认。
+- 决策（用户确认）：
+  1. **交换限制落在逻辑层**：`shuffle.isCellMovable` 返回 `false` → `game.trySwap` 直接拒绝、回退、**不消耗步数**（3.1）；不在 input/app 层做「假拦截」。理由：逻辑层是唯一判定点，测试与契约可约束。
+  2. **藤蔓永不被清除（永久锁格）**：`obstacles.damageObstacle` 对藤蔓一律返回零伤害（唯一权威判定点），`board.damageObstacles` 的受损候选也排除藤蔓（双保险）；藤蔓格内的动物照常参与匹配、可被相邻消除波及，被消除后该格从上方补位而藤蔓留下。藤蔓**不计分**。
+  3. **巧克力每块 1000 分**（与冰块/雪块同档）：新增独立配置键 `SCORE_CONFIG.chocPerLayer`，而不是复用 `snowPerLayer` —— 避免「改雪块分数顺带改巧克力」的隐式耦合。
+  4. **本步不改 50 关表**：`LEVELS.md` 与 `level.js` 的 50 关保持原样；新障碍通过**演示关**（`DEMO_LEVEL_ID = 0`，`index.html?demo=1`）在真实页面里可看、可玩、可验收。
+- 实现落点：`config.js`（新键）、`obstacles.js`（按表计分 + 藤蔓零伤害）、`board.js`（受损候选排除藤蔓）、`candy.js`（两套精灵）、`render.js`（注释更新，贴图路径本就按类型查表）、`level.js`（演示关）、`app.js`（`?demo=1` 入口）、`tests/obstacles.test.js`（+7 例）、`tests/level.test.js`（+1 例并改 id 0 断言）。
+- 依据与证据：L1 = 181 用例 / 1573 断言 / 0 失败；L0 = 一致性脚本（含新键登记）、代码表巡检、`LEVELS.md` 巡检三项 PASS；L2/L3 = `_build/verify-step13.mjs` 11 项全绿（演示关启动、像素取证「巧克力不透明 / 藤蔓半透明」、真实触摸滑动藤蔓格被拒且不扣步、真实模块清除巧克力计 1000 分、0 异常）。
+- 影响：`AGENTS.md` v1.17（3.4 / 3.5 / 附录 B / 第 11 节）、`config.js`、`obstacles.js`、`board.js`、`candy.js`、`render.js`、`level.js`、`app.js`、`tests/obstacles.test.js`、`tests/level.test.js`、`README.md`、`ROADMAP.md`、`PROGRESS.md`。
+- 替代方案：① 让藤蔓随格内动物被消除而消失（否决：用户选择永久锁格，且「一层 = 一次被波及」的通用规则会让藤蔓在 3 层冰同一套逻辑里被误清）；② 巧克力复用 `snowPerLayer`（否决：语义混用）；③ 把两种障碍直接排进 50 关（否决：等于同时改关卡表、3.6 硬指标与巡检脚本，超出单个 Step）；④ 只在单测里验证（否决：3.4/5.4 的外观与交互必须在真实页面取证）。
+- 未验证：真机（iOS/Android）观感与性能；「藤蔓可解除」的替代口径；绳索（Step 13 明确不做，宪法 3.4 未定义其规则）。
+
+---
+
 ## D032：Gate 0.1 第六轮通过（Step 12 → Step 13），并确立「关卡事实只从关卡表读」的断言口径
 
 - 日期：2026-09-20

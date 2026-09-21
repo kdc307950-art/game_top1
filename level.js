@@ -1,4 +1,4 @@
-﻿// level.js — 关卡配置、目标追踪、步数消耗、三星判定。见 AGENTS.md 2.3 / 4.2 / 4.4 / 3.6 / 3.7。
+// level.js — 关卡配置、目标追踪、步数消耗、三星判定。见 AGENTS.md 2.3 / 4.2 / 4.4 / 3.6 / 3.7。
 //
 // 纯逻辑模块：不碰 DOM / Canvas / localStorage（宪法 9 节）。
 //
@@ -100,6 +100,7 @@ const LEVEL_SPECS = [
  */
 export function getLevelConfig(id) {
   const wanted = Number.isFinite(id) ? Math.round(id) : 1;
+  if (wanted === DEMO_LEVEL_ID) return demoLevelConfig();
   const spec = LEVEL_SPECS.find((item) => item.id === Math.min(Math.max(wanted, 1), LEVEL_COUNT)) ?? LEVEL_SPECS[0];
   const coords = PATTERNS[spec.pattern] ?? [];
   const obstacles = [];
@@ -118,6 +119,33 @@ export function getLevelConfig(id) {
     colorCount: spec.colors,
     goal: spec.goal,
     starThresholds: starThresholdsOf(spec.star1),
+    obstacles
+  };
+  return { ...config, steps: computeStepBudget(config) };
+}
+
+/**
+ * Step 13（v1.17）演示关：id = 0，**不在 LEVELS.md 的 50 关表内**，只用于在真实页面里
+ * 查看与验证藤蔓/巧克力（`index.html?demo=1`）。它同时使用两种新障碍，满足 3.6 的
+ * 「单关障碍物类型 ≤ 2 种、障碍格 ≤ 12 格」硬指标；步数同样由 computeStepBudget 派生。
+ * 之所以不做进 50 关表：把新障碍排进关卡属「文档先行」的另一步（见 DECISIONS D033）。
+ */
+export const DEMO_LEVEL_ID = 0;
+
+function demoLevelConfig() {
+  const vines = [[3, 3], [4, 4]];
+  const chocs = [[2, 2], [2, 5], [5, 2], [5, 5]];
+  const obstacles = [
+    ...vines.map(([r, c]) => ({ r, c, type: OBSTACLE_TYPE.VINE, layers: 1 })),
+    ...chocs.map(([r, c]) => ({ r, c, type: OBSTACLE_TYPE.CHOC, layers: 1 }))
+  ];
+  const config = {
+    id: DEMO_LEVEL_ID,
+    rows: CONFIG.BOARD_SIZE,
+    cols: CONFIG.BOARD_SIZE,
+    colorCount: 5,
+    goal: { type: 'score', target: 4000 },
+    starThresholds: starThresholdsOf(4000),
     obstacles
   };
   return { ...config, steps: computeStepBudget(config) };

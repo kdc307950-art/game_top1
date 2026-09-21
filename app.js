@@ -13,7 +13,7 @@ import { createGame, getState as getGameState, trySwap as gameTrySwap } from './
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
-import { LEVEL_COUNT, getLevelConfig } from './level.js';
+import { DEMO_LEVEL_ID, LEVEL_COUNT, getLevelConfig } from './level.js';
 import { createStorage } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
@@ -40,7 +40,7 @@ const view = {
   best: 0, // 最高分（localStorage，属 UI 侧状态）
   newRecord: false,
   stars: 0, // 3.7：本局通关星级（结束面板用；失败时为 0）
-  levelId: 1, // 当前关卡 id（Step 12.2 的选关与「下一关」流转）
+  levelId: demoLevelRequested() ? DEMO_LEVEL_ID : 1, // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=1` 进 Step 13 演示关）
   screen: 'playing', // 'playing' | 'select'：选关界面与对局界面
   levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
   levelRects: [], // 选关界面的每格命中矩形（由 render.js 返回）
@@ -103,6 +103,12 @@ function init() {
     `动效设置：系统减少动效=${view.systemReducedMotion}，配置 reducedMotion=${cfg.reducedMotion}，` +
       `消除 ${cfg.clearDuration}ms / 下落 ${cfg.fallDuration}ms / 级联间隔 ${cfg.cascadeGap}ms`
   );
+}
+
+/** Step 13：URL 带 `?demo=1` 或 `#demo` 时进入演示关（id 0，不是 50 关表里的一关）。 */
+function demoLevelRequested() {
+  if (typeof window === 'undefined') return false;
+  return /(^|[?&])demo=1(&|$)/.test(window.location.search) || window.location.hash === '#demo';
 }
 
 /** 开新一局：重建 GameState 并复位视图侧状态。 */

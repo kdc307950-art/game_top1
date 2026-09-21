@@ -4,8 +4,8 @@
 // Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
-import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from '../config.js';
-import { LEVEL_COUNT, calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getLevelConfig, getRemainingStepBonus } from '../level.js';
+import { CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
+import { DEMO_LEVEL_ID, LEVEL_COUNT, calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getLevelConfig, getRemainingStepBonus } from '../level.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -221,8 +221,8 @@ test('getLevelConfig：50 关都能取出合法配置（步数 = 公式派生、
   }
 });
 
-test('getLevelConfig：越界 id 夹到 [1, 50]，非法 id 回落第 1 关', () => {
-  assertEqual(getLevelConfig(0).id, 1, '0 → 1');
+test('getLevelConfig：越界 id 夹到 [1, 50]，id 0 是演示关，非法 id 回落第 1 关', () => {
+  assertEqual(getLevelConfig(0).id, DEMO_LEVEL_ID, '0 → Step 13 演示关（不在 50 关表内）');
   assertEqual(getLevelConfig(-5).id, 1, '负数 → 1');
   assertEqual(getLevelConfig(999).id, 50, '超上限 → 50');
   assertEqual(getLevelConfig(Number.NaN).id, 1, 'NaN → 1');
@@ -236,6 +236,18 @@ test('getLevelConfig：关卡曲线符合 LEVELS.md 的机制引入点', () => {
   assertEqual(getLevelConfig(31).goal.type, 'clearIce', 'L31 首次消冰目标');
   assertEqual(getLevelConfig(41).goal.type, 'mixed', 'L41 首次混合目标');
   assertEqual(getLevelConfig(50).starThresholds[0], 40000, 'L50 1★ = 设计基准 40000');
+});
+
+test('Step 13 演示关（id 0）：含藤蔓与巧克力，并满足 3.6 的硬指标与步数派生', () => {
+  const demo = getLevelConfig(DEMO_LEVEL_ID);
+  const types = new Set(demo.obstacles.map((o) => o.type));
+  assertTrue(types.has(OBSTACLE_TYPE.VINE), '含藤蔓');
+  assertTrue(types.has(OBSTACLE_TYPE.CHOC), '含巧克力');
+  assertEqual(types.size, 2, '障碍物类型恰为 2 种（3.6 第 1 条上限）');
+  assertTrue(demo.obstacles.length <= 12, `障碍格 ${demo.obstacles.length} ≤ 12（3.6 第 2 条）`);
+  assertEqual(demo.steps, computeStepBudget(demo), '步数仍是公式派生（3.6 第 6 条）');
+  assertTrue(demo.steps >= CONFIG.STEP_BUDGET.min && demo.steps <= CONFIG.STEP_BUDGET.max, '步数夹在 [min, max]');
+  assertTrue(demo.obstacles.every((o) => o.layers >= 1), '障碍物层数都 ≥ 1（v1.17 上限均为 1）');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

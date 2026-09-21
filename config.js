@@ -65,6 +65,7 @@ export const CONFIG = {
     basePerCell: 10,
     icePerLayer: 1000,
     snowPerLayer: 1000,
+    chocPerLayer: 1000,   // v1.17（用户批准）：巧克力每块 1000 分，与冰块/雪块同档（附录 B）
     gemScore: 1500,
     cascadeStep: 30,
     cascadeIceStep: 1000,

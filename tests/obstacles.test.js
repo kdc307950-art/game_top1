@@ -19,7 +19,7 @@ import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
 import { applyGravity, createBoard, resolveCascades, swapCells } from '../board.js';
 import { createGame, resolveBoard, trySwap } from '../game.js';
 import { findMatches } from '../match.js';
-import { shuffleBoard } from '../shuffle.js';
+import { shuffleBoard, isCellMovable } from '../shuffle.js';
 import { createObstacle, damageObstacle, getObstacleScore, isObstacleCleared } from '../obstacles.js';
 
 const SIZE = CONFIG.BOARD_SIZE;
@@ -64,6 +64,20 @@ const putSnow = (board, r, c, layers) => {
   board[r][c].color = null; // 3.4：占格障碍格内没有动物
 };
 
+// Step 13（v1.17）：藤蔓是覆层障碍（格内有动物，只是不能交换且永不被清除）
+const putVine = (board, r, c, color) => {
+  board[r][c].obstacle = OBSTACLE_TYPE.VINE;
+  board[r][c].obstacleLayers = 1;
+  if (color !== undefined) board[r][c].color = color;
+};
+
+// Step 13（v1.17）：巧克力是占格障碍、单层，与雪块同一条受损路径
+const putChoc = (board, r, c) => {
+  board[r][c].obstacle = OBSTACLE_TYPE.CHOC;
+  board[r][c].obstacleLayers = 1;
+  board[r][c].color = null;
+};
+
 // ---------------------------------------------------------------- 4.2 契约
 
 test('createObstacle：层数按 3.4 上限裁剪、下限为 1，未登记类型返回 null', () => {
@@ -96,11 +110,11 @@ test('damageObstacle：无障碍物、越界与 amount ≤ 0 都是幂等的空�
   assertEqual(board[2][2].obstacleLayers, 2, '以上都不该改动层数');
 });
 
-test('getObstacleScore：冰块/雪块每层 1000，藤蔓/巧克力与非法入参为 0（3.5）', () => {
+test('getObstacleScore：冰块/雪块每层 1000、巧克力每块 1000，藤蔓与非法入参为 0（3.5 v1.17）', () => {
   assertEqual(getObstacleScore(OBSTACLE_TYPE.ICE, 3), 3 * SCORE.icePerLayer, '冰块 3 层');
   assertEqual(getObstacleScore(OBSTACLE_TYPE.SNOW, 2), 2 * SCORE.snowPerLayer, '雪块 2 层');
-  assertEqual(getObstacleScore(OBSTACLE_TYPE.VINE, 1), 0, '藤蔓属 Step 13，未登记');
-  assertEqual(getObstacleScore(OBSTACLE_TYPE.CHOC, 1), 0, '巧克力属 Step 13，未登记');
+  assertEqual(getObstacleScore(OBSTACLE_TYPE.VINE, 1), 0, '藤蔓不计分（它永不被清除）');
+  assertEqual(getObstacleScore(OBSTACLE_TYPE.CHOC, 1), SCORE.chocPerLayer, '巧克力每块 1000 分');
   assertEqual(getObstacleScore('bogus', 5), 0, '未登记类型');
   assertEqual(getObstacleScore(OBSTACLE_TYPE.ICE, -2), 0, '负层数');
   assertEqual(getObstacleScore(OBSTACLE_TYPE.ICE, Number.NaN), 0, 'NaN');
@@ -336,6 +350,104 @@ test('3.5：层数分不参与特效倍数，冰块连消另加 (n−1) × 1000'
   assertEqual(resolved.levelScores[1].gained, 30 + 30 + 2000, 'gained = base + 连消 + 层数分');
   assertEqual(resolved.scoreDelta, 1030 + 2060, '本次结算总分');
   assertEqual(game.board[0][0].obstacleLayers, 1, '3 层冰被打了两次 → 剩 1 层');
+});
+
+// ---------------------------------------------------------------- Step 13：藤蔓与巧克力（v1.17）
+
+test('3.4 v1.17：藤蔓永不被清除 —— damageObstacle 对藤蔓一律零伤害、也不计分', () => {
+  const board = createBoard(SIZE, SIZE, CONFIG.COLOR_COUNT);
+  noMatchFixture(board, (b) => putVine(b, 2, 2, 3));
+  assertFalse(isObstacleCleared(board, 2, 2), '藤蔓存在');
+  assertDeepEqual(damageObstacle(board, 2, 2, 5), { cleared: false, layersRemoved: 0 }, '多少伤害都不减层');
+  assertEqual(board[2][2].obstacle, OBSTACLE_TYPE.VINE, '藤蔓仍在原格');
+  assertEqual(board[2][2].obstacleLayers, 1, '层数仍是 1');
+  assertEqual(getObstacleScore(OBSTACLE_TYPE.VINE, 1), 0, '藤蔓不计分（3.5 v1.17）');
+});
+
+test('3.4/4.3.11：藤蔓格不可交换，冰块格照常可交换', () => {
+  const board = createBoard(SIZE, SIZE, CONFIG.COLOR_COUNT);
+  noMatchFixture(board, (b) => {
+    putVine(b, 1, 1, 2);
+    putIce(b, 1, 2, 1, 3);
+  });
+  assertFalse(isCellMovable(board, 1, 1), '藤蔓里的动物不能移动');
+  assertTrue(isCellMovable(board, 1, 2), '冰块里的动物可以移动（3.4）');
+});
+
+test('3.4 v1.17：交换藤蔓格 → 直接拒绝、不扣步、棋盘回到交换前', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => putVine(b, 4, 4, 5));
+  const before = game.board.map((row) => row.map((cell) => cell.color));
+
+  const result = trySwap(game, { r: 4, c: 3 }, { r: 4, c: 4 });
+
+  assertFalse(result.valid, '藤蔓格参与 → 交换无效');
+  assertEqual(result.stepsLeft, 30, '不消耗步数（3.1）');
+  assertDeepEqual(game.board.map((row) => row.map((cell) => cell.color)), before, '棋盘已回退');
+  assertEqual(game.board[4][4].obstacle, OBSTACLE_TYPE.VINE, '藤蔓不受交换影响');
+});
+
+test('3.4/4.3.11：藤蔓里的动物照常参与匹配（v1.17 不把藤蔓格排除出匹配）', () => {
+  const board = createBoard(SIZE, SIZE, CONFIG.COLOR_COUNT);
+  noMatchFixture(board, (b) => {
+    putVine(b, 4, 4, 5);
+    b[4][2].color = 5;
+    b[4][3].color = 5;
+  });
+
+  const groups = findMatches(board);
+
+  assertTrue(
+    groups.some((g) => g.cells.some((p) => p.r === 4 && p.c === 4)),
+    '（4,2)(4,3)(4,4) 的三连包含藤蔓格'
+  );
+});
+
+test('3.4 v1.17：巧克力被相邻消除波及 → 整块清除并计 1000 分', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => {
+    putChoc(b, 5, 4); // 正上方 (4,4) 将被消除
+    b[4][2].color = 5;
+    b[4][3].color = 5;
+    b[4][4].color = 5;
+  });
+
+  const resolved = resolveBoard(game);
+
+  assertTrue(
+    resolved.damaged.some((d) => d.r === 5 && d.c === 4 && d.type === OBSTACLE_TYPE.CHOC && d.cleared),
+    '巧克力被整块清除（单层，一次到位）'
+  );
+  assertTrue(resolved.levelScores.some((s) => s.obstacle >= SCORE.chocPerLayer), '含 1000 分/块的巧克力分');
+  assertEqual(game.board[5][4].obstacle, null, '格内不再有障碍物');
+});
+
+test('3.4 v1.17：清除集合覆盖巧克力格 → 整块清除（与雪块同一条受损路径）', () => {
+  const game = createGame({ steps: 30 }, { rng: cycleRng([0.05, 0.4, 0.9]) });
+  noMatchFixture(game.board, (b) => putChoc(b, 3, 3));
+
+  const resolved = resolveBoard(game, { initialClear: [{ r: 3, c: 3 }] });
+
+  assertTrue(
+    resolved.damaged.some((d) => d.r === 3 && d.c === 3 && d.type === OBSTACLE_TYPE.CHOC && d.cleared),
+    '被特效/清除集合扫过即整块清除'
+  );
+  assertEqual(game.board[3][3].obstacle, null, '障碍物消失');
+});
+
+test('3.8 v1.17：重排不搬动藤蔓与巧克力（位置与层数都不变）', () => {
+  const board = createBoard(SIZE, SIZE, CONFIG.COLOR_COUNT);
+  noMatchFixture(board, (b) => {
+    putVine(b, 0, 0, 1);
+    putChoc(b, 7, 7);
+  });
+
+  shuffleBoard(board, { rng: seededRng(7), maxTries: 50 });
+
+  assertEqual(board[0][0].obstacle, OBSTACLE_TYPE.VINE, '藤蔓仍在 (0,0)');
+  assertEqual(board[0][0].obstacleLayers, 1, '藤蔓层数不变');
+  assertEqual(board[7][7].obstacle, OBSTACLE_TYPE.CHOC, '巧克力仍在 (7,7)');
+  assertEqual(board[7][7].obstacleLayers, 1, '巧克力层数不变');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

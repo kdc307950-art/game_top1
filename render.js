@@ -197,9 +197,9 @@ function drawCandies(ctx, cache, scene, field) {
 
 /**
  * 障碍物层（Step 11；3.4 与 5.4）：冰块是**半透明覆层**（冰里的动物仍要看得见，故画在糖果之上）、
- * 雪块是**不透明占格**（格内没有动物）。层数角标已在 candy.js 的精灵里烘焙，这里只做贴图：
- * 每格一次 drawImage，不产生逐帧文本绘制（15 节「单帧 ≤ 200 次」）。
- * 藤蔓/巧克力属 Step 13，暂无精灵：跳过而不是画出错误外观。
+ * 雪块/巧克力是**不透明占格**（格内没有动物）、藤蔓是**半透明覆层**（Step 13 起）。层数角标已在
+ * candy.js 的精灵里烘焙，这里只做贴图：每格一次 drawImage，不产生逐帧文本绘制（15 节「单帧 ≤ 200 次」）。
+ * 四种障碍共用同一条查表路径：`cache.obstacles[type]` 缺表或空数组才跳过（不再按类型写死跳过）。
  */
 function drawObstacles(ctx, cache, scene, field) {
   const cell = cache.cellCss;

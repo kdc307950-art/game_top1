@@ -285,7 +285,8 @@ function keyToPos(key) {
  * 一层 = 一次被波及：同一个级联层内每格障碍物最多计一次，与该层清掉多少颗相邻动物、
  * 特效扫过多少格无关（用户批准口径）。判定来源：
  *   ① 自身坐标在清除集合里的障碍物格 —— 覆层障碍（冰块）由其上的动物被消除而受损，
- *      占格障碍（雪块）由特效范围覆盖到该格而受损；
+ *      占格障碍（雪块/巧克力）由特效范围覆盖到该格（或相邻动物被消除，见 ②）而受损；
+ *      **藤蔓除外**：v1.17 口径下它永不被清除，权威判定在 `obstacles.damageObstacle`；
  *   ② 与「本层被消除的动物格」上下左右相邻的**占格障碍**（3.4「消除雪块旁边的小动物」）。
  */
 function damageObstacles(board, keys) {
@@ -294,7 +295,8 @@ function damageObstacles(board, keys) {
     const pos = keyToPos(key);
     const cell = board[pos.r]?.[pos.c];
     if (!cell) continue;
-    if (cell.obstacle !== null && cell.obstacle !== undefined) hits.add(key); // ①
+    // ① v1.17：藤蔓是永久锁格，不进候选（即使进来，damageObstacle 也会返回零伤害）
+    if (cell.obstacle !== null && cell.obstacle !== undefined && cell.obstacle !== OBSTACLE_TYPE.VINE) hits.add(key);
     if (!carriesAnimal(cell)) continue; // ② 只有被消除的动物才谈得上「旁边的雪块」
     for (const [dr, dc] of NEIGHBORS) {
       const around = board[pos.r + dr]?.[pos.c + dc];

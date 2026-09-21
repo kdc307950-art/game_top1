@@ -49,6 +49,20 @@ const SNOW_FILL_COLOR = '#f4f8ff';
 const SNOW_EDGE_COLOR = '#c6d6ee';
 const SNOW_MOUND_Y_RATIO = 0.72; // 堆积弧带中心的相对高度
 const SNOW_MOUND_COLOR = 'rgba(148, 174, 212, 0.35)';
+
+// Step 13（v1.17）藤蔓：覆层障碍，画在糖果之上 —— 必须**半透明**，否则读不出里面的动物（3.4 / 5.4）。
+const VINE_STEM_COLOR = 'rgba(52, 124, 66, 0.88)';
+const VINE_LEAF_COLOR = 'rgba(118, 190, 92, 0.9)';
+const VINE_STEM_WIDTH_RATIO = 0.075; // 藤茎线宽 / 格子边长
+const VINE_LEAF_R_RATIO = 0.13;      // 叶片半径 / 格子边长
+const VINE_INSET_RATIO = 0.1;        // 藤茎端点内缩 / 格子边长
+
+// Step 13（v1.17）巧克力：占格障碍、单层，格内没有动物，所以是**不透明**深色方块 + 巧克力格纹。
+const CHOC_INSET_RATIO = 0.03;
+const CHOC_FILL_COLOR = '#5b3520';
+const CHOC_EDGE_COLOR = '#301809';
+const CHOC_GRID_COLOR = 'rgba(255, 216, 173, 0.30)';
+const CHOC_GLOSS_COLOR = 'rgba(255, 236, 206, 0.22)';
 const BADGE_X_RATIO = 0.78; // 层数角标圆心（右上角）
 const BADGE_Y_RATIO = 0.24;
 const BADGE_R_RATIO = 0.15;
@@ -121,7 +135,15 @@ export function buildObstacleAtlas(cellCss, dpr) {
   for (let layers = 1; layers <= CONFIG.OBSTACLE_CONFIG.snow.maxLayers; layers += 1) {
     snow.push(bake((ctx, size) => paintSnowBlock(ctx, size, layers)));
   }
-  return { ice, snow };
+  const vine = [];
+  for (let layers = 1; layers <= CONFIG.OBSTACLE_CONFIG.vine.maxLayers; layers += 1) {
+    vine.push(bake((ctx, size) => paintVineOverlay(ctx, size, layers)));
+  }
+  const choc = [];
+  for (let layers = 1; layers <= CONFIG.OBSTACLE_CONFIG.choc.maxLayers; layers += 1) {
+    choc.push(bake((ctx, size) => paintChocBlock(ctx, size, layers)));
+  }
+  return { ice, snow, vine, choc };
 }
 
 /**
@@ -166,6 +188,70 @@ function paintSnowBlock(ctx, size, layers) {
   ctx.ellipse(size / 2, inset + box * SNOW_MOUND_Y_RATIO, box * 0.32, box * 0.16, 0, 0, Math.PI * 2);
   ctx.fillStyle = SNOW_MOUND_COLOR;
   ctx.fill();
+  paintLayerBadge(ctx, size, layers);
+}
+
+/**
+ * 藤蔓（Step 13 / v1.17）：**半透明**绿色藤茎十字缠绕 + 两片叶子 + 右上角层数角标。
+ * 它是覆层障碍，画在糖果**之上**；透明度是功能性的 —— 3.4 要求冰里的动物仍可辨，
+ * 藤蔓同理（里面的动物照常参与匹配、可被相邻消除波及）。
+ */
+function paintVineOverlay(ctx, size, layers) {
+  const inset = size * VINE_INSET_RATIO;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(1, size * VINE_STEM_WIDTH_RATIO);
+  ctx.strokeStyle = VINE_STEM_COLOR;
+  for (const along of [0, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(along === 0 ? inset : size / 2, along === 0 ? size / 2 : inset);
+    ctx.lineTo(along === 0 ? size - inset : size / 2, along === 0 ? size / 2 : size - inset);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = VINE_LEAF_COLOR;
+  for (const [lx, ly] of [[0.28, 0.30], [0.72, 0.70]]) {
+    ctx.beginPath();
+    ctx.ellipse(size * lx, size * ly, size * VINE_LEAF_R_RATIO, size * VINE_LEAF_R_RATIO * 0.62, leafTilt(lx), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  paintLayerBadge(ctx, size, layers);
+}
+
+/** 叶片倾斜：左右两片反向，避免看起来是复制粘贴（纯观感，不影响任何判定）。 */
+function leafTilt(x) {
+  return x < 0.5 ? -Math.PI / 5 : Math.PI / 5;
+}
+
+/**
+ * 巧克力（Step 13 / v1.17）：不透明深棕占格方块 + 描边 + 十字格纹 + 左上高光 + 层数角标。
+ * 它是占格障碍（3.4 v1.12），格内没有动物，所以直接盖住格位槽 —— 与雪块同一条受损路径，
+ * 但每块 1000 分（3.5 v1.17）。
+ */
+function paintChocBlock(ctx, size, layers) {
+  const inset = size * CHOC_INSET_RATIO;
+  const box = size - inset * 2;
+  roundRectPath(ctx, inset, inset, box, box, box * ICE_RADIUS_RATIO);
+  ctx.fillStyle = CHOC_FILL_COLOR;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, size * ICE_EDGE_WIDTH_RATIO);
+  ctx.strokeStyle = CHOC_EDGE_COLOR;
+  ctx.stroke();
+
+  // 十字格纹：不用阴影/模糊 API（红线 1），只画两条线表达「一块巧克力」
+  ctx.strokeStyle = CHOC_GRID_COLOR;
+  ctx.lineWidth = Math.max(1, size * ICE_CRACK_WIDTH_RATIO);
+  ctx.beginPath();
+  ctx.moveTo(inset + box / 2, inset + box * 0.12);
+  ctx.lineTo(inset + box / 2, inset + box * 0.88);
+  ctx.moveTo(inset + box * 0.12, inset + box / 2);
+  ctx.lineTo(inset + box * 0.88, inset + box / 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = CHOC_GLOSS_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(inset + box * 0.2, inset + box * 0.24);
+  ctx.lineTo(inset + box * 0.44, inset + box * 0.24);
+  ctx.stroke();
   paintLayerBadge(ctx, size, layers);
 }
 

@@ -14,6 +14,14 @@ import { CONFIG, OBSTACLE_TYPE } from './config.js';
 const LIMITS = CONFIG.OBSTACLE_CONFIG;
 const SCORE = CONFIG.SCORE_CONFIG;
 
+// 3.5（v1.17）：冰块/雪块按层计分，巧克力按块计分（同为 1000）；**藤蔓不登记** ——
+// v1.17 口径下它永不被清除、不会产生层数分，漏登记即得 0 分正是期望行为。
+const SCORE_PER_LAYER = {
+  [OBSTACLE_TYPE.ICE]: SCORE.icePerLayer,
+  [OBSTACLE_TYPE.SNOW]: SCORE.snowPerLayer,
+  [OBSTACLE_TYPE.CHOC]: SCORE.chocPerLayer
+};
+
 /**
  * 4.2：createObstacle(type, layers) —— 障碍物值对象 Obstacle = { type, layers }（v1.12 补形状）。
  * 层数按 3.4 与 OBSTACLE_CONFIG 的上限裁剪；下限为 1，因为 0 层等于没有障碍物。
@@ -31,11 +39,15 @@ export function createObstacle(type, layers = 1) {
  * 原地修改 cell.obstacleLayers；层数归零时清空 obstacle/obstacleLayers（障碍物消失，
  * 占格障碍格从此变成可被填充的空格）。返回 { cleared, layersRemoved }。
  * 无障碍物、越界或 amount ≤ 0 时返回 { cleared: false, layersRemoved: 0 }（幂等，不报错）。
+ *
+ * v1.17（用户批准）：**藤蔓永不被清除**（永久锁格），因此这里对藤蔓一律返回零伤害 ——
+ * 这是唯一权威的「藤蔓不可被清除」判定点，board.js 的受损候选即使把它算进来也无效。
  */
 export function damageObstacle(board, r, c, amount = 1) {
   const none = { cleared: false, layersRemoved: 0 };
   const cell = board?.[r]?.[c];
   if (!cell || cell.obstacle === null || cell.obstacle === undefined) return none;
+  if (cell.obstacle === OBSTACLE_TYPE.VINE) return none; // 3.4 v1.17：藤蔓是永久锁格
   const step = Number.isFinite(amount) ? Math.floor(amount) : 0;
   if (step <= 0) return none;
 
@@ -48,16 +60,13 @@ export function damageObstacle(board, r, c, amount = 1) {
 }
 
 /**
- * 4.2：getObstacleScore(type, layersRemoved) —— 3.5「冰块每层 1000 分，雪块每层 1000 分」。
+ * 4.2：getObstacleScore(type, layersRemoved) —— 3.5 的障碍物得分。
+ * 冰块/雪块每层 1000 分，**巧克力每块 1000 分（v1.17）**，藤蔓不计分（它永不被清除）。
  * 层数分另算、不参与特效倍数（3.5 v1.12）：调用方把它加在 base × multiplier + bonus 之外。
- * 未登记类型（藤蔓/巧克力属 Step 13）与非法层数返回 0，不放大分数。
+ * 未登记类型与非法层数返回 0，不放大分数。
  */
 export function getObstacleScore(type, layersRemoved) {
-  const perLayer = type === OBSTACLE_TYPE.ICE
-    ? SCORE.icePerLayer
-    : type === OBSTACLE_TYPE.SNOW
-      ? SCORE.snowPerLayer
-      : 0;
+  const perLayer = SCORE_PER_LAYER[type] ?? 0;
   if (perLayer === 0) return 0;
   const layers = Number.isFinite(layersRemoved) ? Math.max(Math.floor(layersRemoved), 0) : 0;
   return layers * perLayer;
