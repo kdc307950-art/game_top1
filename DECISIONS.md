@@ -6,6 +6,25 @@
 
 ---
 
+---
+
+## D036：Step 15 道具系统的口径（数量与持久化、时间关的加五步、UI 落点）
+
+- 日期：2026-09-22
+- 背景：ROADMAP Step 15 的验收只写了「刷新不消耗步数重排；加五步增加 5 步；小木锤消除单个格子；道具数量持久化」，三处需要口径才能写代码：① 数量从哪来、用完怎么办；② 时间关没有步数（宪法 3.6 v1.18），「加五步」在时间关是什么；③ 道具按钮放在哪里 —— 这一步直接决定要不要动 `boardRect`（动它就等于让 17 个既有浏览器套件的像素几何全部失效）。另有一处文档偏差：ROADMAP 写「`localStorage` 读写只在 `app.js`」，而宪法 v1.16 已把该职责移到 `storage.js`（2.3）。用户本轮预授权「需要我决定的问题若长时间没有选择就按推荐默认执行」，下列口径即**推荐默认**。
+- 决策（推荐默认）：
+  1. **数量**：三种道具各有 `BOOSTER_CONFIG.initialCount`（默认 3）；数量持久化在 `STORAGE_KEYS.BOOSTERS`（`{ refresh, addSteps, hammer }`）；每用掉一次 −1，为 0 时按钮禁用且点击无效。**本步不含获取途径**（商店/奖励/每日赠送）—— 用光即用光，这一点写进边界。
+  2. **刷新**：复用 `shuffle.js` 的 `shuffleBoard`，因此 3.8 的四条约束（无初始三连、存在可行交换、不改障碍物布局、尝试上限 50）原样适用；**不消耗步数、也不扣时间**。重排失败（超过上限）时 `used = false`，**不扣数量**。
+  3. **加五步**：步数关 `remainingSteps += BOOSTER_CONFIG.extraSteps`（默认 5）；**时间关**（本局没有步数概念，3.6 v1.18）改为 `remainingTime += BOOSTER_CONFIG.extraSeconds`（默认 10 秒）。两种关卡都不消耗任何东西，纯粹是「给资源」。
+  4. **小木锤**：一次消除 `BOOSTER_CONFIG.hammerCells`（默认 1）个格子；**只接受有动物的格子**（空格 / 纯障碍 / 收集物一律 `used = false` 且**不扣数量**）。消除走 `game.resolveBoard(state, { initialClear: [pos] })`：**不消耗步数**，得分与关卡目标进度照常结算；被点名的特殊元素按 4.3.8 照常优先激活（因此木锤点条纹/包装/魔力鸟是有意义的打法）。
+  5. **UI 落点 = 画布外的 DOM 道具条**（`index.html` 的 `#boosters` + `styles.css`），固定在画布下方；`render.js` 的 `computeBoardSize` 从可用高度中扣除 CSS 变量 `--booster-bar-h`，保证短视口下不遮挡棋盘。**理由**：在画布内新增任何带区都要改 `boardRect`，从而让 `verify-step4`–`verify-step14` 与 5 个 `audit-gate-*` 的像素几何（`hudCss = size × 0.13`）全部失效；DOM 按钮对既有几何零影响，命中测试直接用 DOM 事件，不需要在画布上再维护一套命中区域。`index.html` 的「只放结构」没有被破坏（按钮就是结构），样式在 `styles.css`。
+  6. **`localStorage` 归属以宪法为准**：在 `storage.js` 新增 `readBoosters` / `writeBoosters` / `useBooster`（与既有的 `readLevelStars` / `recordLevelStars` 同一形状），**不在逻辑模块里碰存档**；ROADMAP Step 15 的「只在 app.js」保留原文不改（宪法第 0 节的优先级已定：宪法 > ROADMAP），本条的偏差在此登记。
+- 影响：`AGENTS.md` v1.20（3.9 新增道具规则、4.2 补 `game.useBooster` 与 `BoosterResult`、附录 B/B-2、2.3 的 UI 归属、第 11 节）、`ROADMAP.md` 头部版本、`config.js`、`game.js`、`level.js`、`storage.js`、`app.js`、`render.js`、`index.html`、`styles.css`、`tests/*.test.js`、`PROGRESS.md`、本文件。
+- 替代方案：① 道具数量放在 `level.js` 的关卡状态里（否决：数量是**跨关卡**的账号级状态，放进 `Level` 会让「同一关卡配置」不再等价，还会污染 `getState` 的快照语义；实际效果参数仍登记在 `config.js`，符合 6 节）；② 时间关的「加五步」直接禁用（否决：同一套道具在两种关卡下行为不一致更难解释，且时间关是第三阶段的主推玩法）；③ 把道具按钮画进画布（否决：见第 5 条的几何连带影响，收益只有「少一个 DOM 节点」）；④ 木锤允许打空格/障碍（否决：会变成「无意义地消耗道具」，且与 3.4/3.6 的「障碍只能被相邻消除波及」口径冲突）。
+- 未验证：真机上的按钮手感与安全区避让；道具用完后的获取体验（本步不做）。
+
+---
+
 ## D035：Step 14 三种关卡类型的口径落地（宪法 v1.18 规则 → v1.19 契约）
 
 - 日期：2026-09-22
