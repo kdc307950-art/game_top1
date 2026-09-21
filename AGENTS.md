@@ -1,9 +1,21 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.18
+> 版本：v1.19
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.18 → v1.19 关键变更）
+
+本次修订把 Step 14 三种关卡类型的**落地契约**写进宪法（v1.18 只定义规则，并注明「数据结构契约随 14.1 的代码在**同一 v1.18 版本内**补齐」）。用户本轮预授权「需要我决定的问题若长时间没有选择就按推荐默认执行」，本修订即该**推荐默认**；**不改变任何既有玩法数值，也不改变第一、二阶段已验收的目标语义**。
+
+1. **4.4 补时间关与收集物字段**：新增 `LevelConfig.timeLimit`（秒，> 0 即时间关）、`LevelConfig.collectibles?: CollectibleSpec[]`（`CollectibleSpec = { r, c, type: 'fruit' | 'pod' }`）与 `Level.remainingTime`。时间关的 `steps` 为 **0**（v1.18：「本局没有步数概念」），`createLevel` 的校验相应改为「`steps` 是非负整数，且非时间关时必须 ≥ 1」。
+2. **4.2 补四条纯追加**：`board.createBoard` 增加第 5 个可选参数 `collectibles`；`board.applyGravity(board, options?)` 增加 `options.collectibleFall`（收集物单层下落格数上限，缺省取 `COLLECTIBLE_CONFIG`）；`ResolveResult.collected` 的取值形状明确为 `CollectibleHit = { r, c, type }`；`level.consumeTime(level, seconds)` 与 `game.tickTime(state, seconds)`（时间关的倒计时推进）。缺省行为与既有调用**完全一致**。
+3. **3.6 补时间关的派生与结算口径**：时间关用 `TIME_CONFIG` + `level.computeTimeBudget` **派生时长**（3.6 第 6 条的步数派生对时间关不适用）；**消除不扣时间**，时间只按真实时间流逝；归零时目标未达成即失败，归零那一刻仍按第 7 条**先引爆盘面上的特殊方块再结算**。金豆荚关的二星/三星阈值更高，其倍率登记为 `STAR_CONFIG.podFactor`（顺带把原先散在 `level.js` 里的 1.7 / 2.5 收进同一张表）。
+4. **附录 B / B-2**：新增 `TIME_CONFIG`（5 键）与 `STAR_CONFIG`（3 键）；`GOAL_TYPE` 补 `fruit` / `pod`；新增字符串常量 `COLLECTIBLE_TYPE`。
+5. **不改 50 关表**：v1.18 第 4 条继续有效 —— 三种类型在 14.1/14.2/14.3 各自验收前**不得**写进 `LEVELS.md` 的 50 关表；本步只提供演示关（id 51 水果 / 52 时间 / 53 金豆荚）。
 
 ---
 
@@ -476,7 +488,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - **消除冰块**：消除指定数量的冰块。
 - **混合目标**：同时满足多个条件。
 - **收集水果（水果关，v1.18）**：收集 N 个掉落到棋盘底部出口的水果。
-- **收集金豆荚（金豆荚关，v1.18）**：收集 N 个掉落到棋盘底部出口的金豆荚（每次消除只下落 1 格）。
+- **收集金豆荚（金豆荚关，v1.18）**：收集 N 个掉落到棋盘底部出口的金豆荚（每次消除只下落 1 格）。它与水果关的区别只在**掉落节奏**与**三星阈值更高**（后者取 `STAR_CONFIG.podFactor`，v1.19）。
 - **时间关（v1.18）**：在限定时间内达成上述任一目标；时间归零未达成即失败。
 
 **关卡设计约束（硬指标，v1.13；50 关表的落点见 `LEVELS.md`）**：以下五条对每个关卡都成立，违反任一条即视为设计缺陷。
@@ -494,6 +506,12 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 7. **本局结束前引爆特殊方块（v1.15）**：走完最后一步（步数用尽）或已达成目标时，先引爆盘面上所有特殊方块，
    引爆过程中新生成的继续链式引爆（上限 `ENDGAME_CONFIG.maxDetonationRounds`），直到盘面无特殊方块。
    引爆的消除与得分**计入目标判定与分数**，之后才做星级结算；因此最后一步的引爆可以完成关卡目标。
+8. **时间关的时长与结算（v1.19）**：`LevelConfig.timeLimit`（秒，> 0 即时间关）**替代步数** —— 时间关的 `steps` 为 `0`，
+   **消除不扣时间**（时间只按真实时间流逝，由 `game.tickTime` 接收 UI 传入的真实经过秒数）。时长由 `level.computeTimeBudget` 按
+   `clamp(round(initialSeconds + 目标工作量 × secondsPerWorkload − 障碍摩擦 × secondsPerFriction), minSeconds, maxSeconds)`
+   派生（第 6 条的步数派生对时间关**不适用**），系数全部来自 `CONFIG.TIME_CONFIG`（附录 B），同为设计期派生。
+   倒计时**归零时若目标未达成即失败**；归零那一刻仍按第 7 条**先引爆盘面上的特殊方块再结算**，引爆若达成目标即算通关。
+   HUD 的第二格在时间关显示剩余时间（5.5）。金豆荚关的二星/三星阈值更高，倍率取 `CONFIG.STAR_CONFIG.podFactor`（3.7）。
 
 ### 3.7 三星评分系统
 
@@ -557,7 +575,8 @@ board = cell[][]  // board[row][col]
 **game.js**
 
 - `createGame(levelConfig: LevelConfig, options?: { rng?: () => number }): GameState`
-- `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`
+- `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`（有效交换扣 1 步；**时间关不扣步数**（v1.19：时间只按真实时间流逝））
+- `tickTime(state: GameState, seconds: number): { remainingTime: number, gameOver: boolean, won: boolean, resolve: ResolveResult | null }`（v1.19 纯追加：推进时间关的倒计时；`seconds` 由 UI 传入真实经过的秒数。归零时按 3.6 第 7 条先引爆盘面上的特殊方块再结算，`resolve` 为本次引爆的结算结果，未归零时为 `null`）
 - `resolveBoard(state: GameState, options?: { initialClear?: Pos[] }): ResolveResult`（消除 → 下落 → 填充 → 级联，返回轨迹供动画使用；`options.initialClear` 透传给 `board.resolveCascades`，供 3.2 的魔力鸟交换使用）
 - `getState(state: GameState): GameSnapshot`（返回**深拷贝并冻结**的不可变快照，供 UI 读取）
 
@@ -579,7 +598,7 @@ ResolveResult = {
   levels: ResolveLevel[],
   cleared: Cell[],                 // 展平后的被消除格子（含 color，供计分）
   damaged: ObstacleDamage[],       // 展平后的障碍物受损明细（v1.12 补，供 3.5 层数分与 UI 显示层数变化）
-  collected: Pos[],                // v1.18：本局新收集的收集物坐标（水果/金豆荚落到出口行），供计分与 UI 播收动画
+  collected: CollectibleHit[],     // v1.18 登记、v1.19 明确形状：本局新收集的收集物（水果/金豆荚落到出口行），供计数与 UI 播收动画
   spawned: Cell[],
   capped: boolean,                 // 是否触发级联层数上限（上限 = 棋盘格数，见 ROADMAP Step 3）
   scoreDelta: number,
@@ -604,9 +623,16 @@ LevelScore   = { level: number, base: number, multiplier: number, bonus: number,
 Obstacle       = { type: 'ice' | 'snow' | 'vine' | 'choc', layers: number }   // obstacles.createObstacle 的返回值
 ObstacleDamage = { r: number, c: number, type: string, layersRemoved: number, cleared: boolean }
 
+// v1.19 补：可掉落的收集物（3.6 的水果关 / 金豆荚关）。它占格、随重力下落、不能被消除或特效清除，
+// 与 obstacle 不是一类；落到 COLLECTIBLE_CONFIG.exitRow 即被收走并计入 ResolveResult.collected。
+CollectibleHit  = { r: number, c: number, type: 'fruit' | 'pod' }   // 一次收集事件
+CollectibleSpec = { r: number, c: number, type: 'fruit' | 'pod' }   // 4.4 的关卡落点（LevelConfig.collectibles）
+
 GameSnapshot = {
   levelId: number, rows: number, cols: number, colorCount: number,
   totalSteps: number, remainingSteps: number, currentScore: number, gameOver: boolean,
+  timeLimit: number | null,              // v1.19：时间关的总秒数；非时间关为 null（此时步数有效）
+  remainingTime: number,                 // v1.19：时间关的剩余秒数（非时间关为 0）
   goal: GoalSpec,                       // v1.14：HUD 常驻显示通关目标（5.5）
   collected: Record<string, number>,    // v1.14：本局已收集的动物计数（键为 COLOR_NAMES 里的名字）
   clearedIce: number,                   // v1.14：本局已清除的冰块层数（3.6 的 clearIce 目标用）
@@ -620,12 +646,12 @@ GameSnapshot = {
 
 **board.js**
 
-- `createBoard(rows: number, cols: number, colorCount: number, obstacles?: ObstacleSpec[]): Board`（保证无初始三连且至少存在一个可行交换）
+- `createBoard(rows: number, cols: number, colorCount: number, obstacles?: ObstacleSpec[], collectibles?: CollectibleSpec[]): Board`（保证无初始三连且至少存在一个可行交换；v1.19 的第 5 个参数为可掉落的收集物（3.6），缺省 `[]`，收集物格 `color` 为 `null`）
 - `swapCells(board: Board, a: Pos, b: Pos): void`（原地交换）
-- `applyGravity(board: Board): MoveRecord[]`（原地压缩并返回下落轨迹，供动画使用）
+- `applyGravity(board: Board, options?: { collectibleFall?: Record<string, number> }): MoveRecord[]`（原地压缩并返回下落轨迹，供动画使用；v1.19：收集物与动物一同下落，但单层下落格数受 `options.collectibleFall`（缺省取 `COLLECTIBLE_CONFIG`）限制，落下后对其上方的格子充当本层屏障）
   - `MoveRecord = { id: number, from: Pos, to: Pos, color: number }`（只记录真正发生位移的格子；`id` 对应 4.1 的 `cell.id`，供动画追踪）
-- `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子）
-- `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number, initialClear?: Pos[] }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`options.initialClear` 让第一层先清除给定坐标（3.2 的魔力鸟交换用），之后照常级联；`game.resolveBoard` 在其上叠加计分与状态，不复写循环）
+- `refillBoard(board: Board, colorCount: number, rng?: () => number): Cell[]`（原地填充空洞并返回新生成格子；收集物格**不是**空洞，不得被覆盖）
+- `resolveCascades(board: Board, colorCount: number, options?: { rng?: () => number, initialClear?: Pos[] }): ResolveResult`（反复「消除 → 下落 → 填充」直到无新匹配；`options.initialClear` 让第一层先清除给定坐标（3.2 的魔力鸟交换用），之后照常级联；`game.resolveBoard` 在其上叠加计分与状态，不复写循环；v1.19：每层在**下落之后、填充之前**把位于 `COLLECTIBLE_CONFIG.exitRow` 的收集物收走并计入 `collected`）
 - `cloneBoard(board: Board): Board`（深拷贝，供测试与回退使用）
 
 **shuffle.js**（v1.6 从 board.js 拆出，逻辑与签名不变）
@@ -667,12 +693,14 @@ GameSnapshot = {
 
 **level.js**
 
-- `createLevel(config: LevelConfig): Level`（按 4.4 校验 `goal` 必填、`starThresholds` 为三元组且非递减）
-- `consumeStep(level: Level): number`（扣 1 步并返回剩余步数，已为 0 时保持 0；4.3.3 的调用点在 `game.trySwap`）
+- `createLevel(config: LevelConfig): Level`（按 4.4 校验 `goal` 必填、`starThresholds` 为三元组且非递减、`steps` 非负且非时间关时 ≥ 1）
+- `consumeStep(level: Level): number`（扣 1 步并返回剩余步数，已为 0 时保持 0；4.3.3 的调用点在 `game.trySwap`，**时间关不调用**）
+- `consumeTime(level: Level, seconds: number): number`（v1.19 纯追加：扣减时间关的剩余秒数并返回剩余值，已为 0 时保持 0；调用点在 `game.tickTime`）
 - `checkGoal(level: Level, board: Board, score: number, collected: Record<string, number>): boolean`
 - `calcStars(score: number, thresholds: [number, number, number]): 0 | 1 | 2 | 3`
 - `getRemainingStepBonus(stepsLeft: number): number`
 - `computeStepBudget(config: LevelConfig): number`（v1.15：按 3.6 的公式由难度派生步数；纯函数、无随机）
+- `computeTimeBudget(config: LevelConfig): number`（v1.19：按 3.6 第 8 条的公式由难度派生**时间关的时长（秒）**；纯函数、无随机；系数全部来自 `CONFIG.TIME_CONFIG`）
 
 ### 4.3 算法规则
 
@@ -699,10 +727,12 @@ LevelConfig = {
   rows: number,
   cols: number,
   colorCount: number,
-  steps: number,
+  steps: number,               // v1.19：时间关为 0（v1.18：时间关「本局没有步数概念」）
+  timeLimit?: number,          // v1.19：秒；> 0 即时间关（倒计时替代步数，见 3.6 第 8 条）
   goal: GoalSpec,
   starThresholds: [number, number, number],
-  obstacles: ObstacleSpec[]
+  obstacles: ObstacleSpec[],
+  collectibles?: CollectibleSpec[]  // v1.19：棋盘顶部的收集物落点（水果关/金豆荚关，见 3.6）
 }
 
 GoalSpec =
@@ -717,6 +747,7 @@ ObstacleSpec = { r: number, c: number, type: 'ice' | 'snow' | 'vine' | 'choc', l
 
 Level = LevelConfig & {
   remainingSteps: number,
+  remainingTime: number,   // v1.19：时间关的剩余秒数（非时间关为 0）
   collected: Record<string, number>,
   clearedIce: number,
   collectedFruit: number,  // v1.18：本局已收集的水果数（落到底部出口计数）
@@ -730,6 +761,8 @@ Level = LevelConfig & {
 
 - `goal` 与 `starThresholds` 必填。
 - `starThresholds` 必须是三元组，且非递减。
+- `steps` 必须是非负整数；**非时间关时 ≥ 1**，时间关（`timeLimit > 0`）时为 `0`（v1.19）。
+- `timeLimit` 若给出必须是正整数秒（v1.19）。
 - 具体示例见第 14 节。
 - 50 个关卡的实例值（目标、步数、色数、障碍布局、三星阈值）以 `LEVELS.md` 的 50 关表为准；`level.js` 落地时必须与之一致（v1.13）。
 
@@ -970,6 +1003,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.19 | 2026-09-22 | Agent（用户预授权默认） | Step 14 三种关卡类型的**落地契约**：4.4 补 `LevelConfig.timeLimit` / `collectibles`（`CollectibleSpec`）与 `Level.remainingTime`（时间关 `steps = 0`）；4.2 补四条纯追加（`board.createBoard` 的收集物参数、`applyGravity` 的 `collectibleFall`、`ResolveResult.collected` 的 `CollectibleHit` 形状、`level.consumeTime` 与 `game.tickTime`）与 `computeTimeBudget`、`GameSnapshot` 的 `timeLimit`/`remainingTime`；3.6 补第 8 条时间关的时长派生与归零结算口径、金豆荚三星阈值更高（`STAR_CONFIG.podFactor`）；附录 B 新增 `TIME_CONFIG` 5 键与 `STAR_CONFIG` 3 键；附录 B-2 补 `COLLECTIBLE_TYPE` 并扩写 `GOAL_TYPE`；50 关表不变 | 3.6、4.1、4.2、4.4、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
 
 ---
@@ -1225,6 +1259,14 @@ const LEVEL_3 = {
 | `STEP_BUDGET.collectUnit`          | 收集目标的工作量单位 | 4                  | 3.6      |
 | `STEP_BUDGET.iceUnit`              | 消冰目标的工作量单位 | 4                  | 3.6      |
 | `ENDGAME_CONFIG.maxDetonationRounds` | 结束前引爆的最大轮数 | 8                 | 3.6      |
+| `STAR_CONFIG.secondFactor`         | 二星阈值倍率（× 1★ 基准分） | 1.7         | 3.7 v1.19 |
+| `STAR_CONFIG.thirdFactor`          | 三星阈值倍率（× 1★ 基准分） | 2.5         | 3.7 v1.19 |
+| `STAR_CONFIG.podFactor`            | 金豆荚关 2★/3★ 的额外倍率 | 1.2          | 3.6 / 3.7 v1.19 |
+| `TIME_CONFIG.initialSeconds`       | 时间关时长公式的基准秒数 | 60            | 3.6 v1.19 |
+| `TIME_CONFIG.secondsPerWorkload`   | 每单位目标工作量折算的秒数 | 12           | 3.6 v1.19 |
+| `TIME_CONFIG.secondsPerFriction`   | 每点障碍摩擦扣减的秒数 | 3             | 3.6 v1.19 |
+| `TIME_CONFIG.minSeconds`           | 派生时长下限（秒）   | 45            | 3.6 v1.19 |
+| `TIME_CONFIG.maxSeconds`           | 派生时长上限（秒）   | 120           | 3.6 v1.19 |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |
 | `COLOR_NAMES`                      | 颜色索引 0-5 到动物名映射 | `['frog','hippo','ladybug','octopus','chick','fox']` | 3.6 / 13 |
@@ -1250,5 +1292,6 @@ const LEVEL_3 = {
 | `OBSTACLE_TYPE`  | `ice` / `snow` / `vine` / `choc`                 | 4.1 / 3.4    |
 | `DIRECTION`      | `h` / `v`                                        | 4.1 / 3.2    |
 | `MATCH_SHAPE`    | `line3` / `line4` / `line5` / `L` / `T`          | 4.2 / 4.3    |
-| `GOAL_TYPE`      | `score` / `collect` / `clearIce` / `mixed`       | 4.4 / 3.6    |
+| `GOAL_TYPE`      | `score` / `collect` / `clearIce` / `mixed` / `fruit` / `pod` | 4.4 / 3.6    |
+| `COLLECTIBLE_TYPE` | `fruit` / `pod`                                 | 4.1 / 3.6 v1.19 |
 | `STORAGE_KEYS`   | 见附录 B 上表                                    | 2.3 / 9      |

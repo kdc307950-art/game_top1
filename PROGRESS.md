@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-09-22（Step 14 执行卡：关卡类型（水果关 / 时间关 / 金豆荚关）+ 待补账登记）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。本 Step 的**宪法前置**（v1.18 的规则口径）已获用户批准并落地。按 **14.1 / 14.2 / 14.3** 三个子步骤分别验收与提交。
+
+### 一、补账：开工前的三笔 `[step14]` 契约修订（此前未写入本日志）
+
+- **`02d8b17 [step14]`** —— 宪法 **v1.18**（用户批准）：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除或特效清除、落到底部出口计数）、时间关（**倒计时替代步数**、归零未达成即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与三种目标类型；明确「收集物 ≠ 障碍物」；`ROADMAP.md` 头部版本同步。
+- **`e9b17ce [step14]`** —— 契约补齐：4.1 的 `cell.collectible`、4.4 的 `GoalSpec`（`fruit` / `pod`）与 `Level.collectedFruit` / `collectedPod`。
+- **`29100af [step14]`** —— 契约与配置：`ResolveResult.collected`、`GameSnapshot` 的两个收集计数、`config.js` 的 `COLLECTIBLE_CONFIG`（3 键）并同步附录 B。
+- **落账说明**：v1.18 的修订说明写明「数据结构契约（4.1 / 4.4 / 附录 B）随 14.1 的代码在**同一版本内**补齐」。上面三笔是该补齐的前半段；**时间关**的 4.4 字段与时间配置键按 v1.18 第 3 条在 **14.2** 落地时补齐（下一条执行卡第 3 项）。
+
+### 二、任务卡（照第 8.1 节模板逐项填写）
+
+1. **开始前置条件**：Step 13 已验收（tag `step13-done` = `586df88`），Gate 0.1 第七轮已通过（tag `gate-0.1-step13-pass` = `5fd1e80`，**明确允许进入 Step 14**）；起点 = tag **`step14-start`（`02d8b17`）**，工作区干净。相关章节：AGENTS 第 1 节第三阶段、**3.6（三种新目标类型与收集物口径）**、3.7（三种类型仍走三星）、3.4（障碍物与收集物的边界）、4.1（`cell.collectible`）、4.2（`createBoard` / `applyGravity` / `resolveCascades` / `Level` / `Game` 接口）、4.4（`GoalSpec` 与 `LevelConfig`）、5.5（HUD 第二格在时间关显示剩余时间）；ROADMAP Step 14；`REFERENCES.md` §2.3 Step 14。前置决策：**D033（13 的收尾口径）**、**D034（v1.18 的三种类型口径）**。
+2. **允许修改范围**：`config.js`、`level.js`、`game.js`、`board.js`、`app.js`、`hud.js`、`candy.js`、`render.js`、`tests/level.test.js`、`tests/game.test.js`、`tests/board.test.js`、`tests/integration.test.js`；**AGENTS.md v1.19（须获用户批准）**：3.6 补时间关的时长派生与结算口径、4.2 补纯追加接口、4.4 补时间关/收集物字段、附录 B 补时间与三星配置键、附录 B-2 补 `COLLECTIBLE_TYPE`、第 11 节记录；`ROADMAP.md` 头部版本同步。**禁止**：把三种类型写进 `LEVELS.md` 的 50 关表（v1.18 第 4 条：各自验收前不得入表）；实现道具系统（Step 15）；实现绳索（宪法未定义）；改动第一、二阶段已验收的目标语义（ROADMAP Step 14 的禁止项）。
+3. **执行顺序**：执行卡与 DoR（本条）→ **14.1 水果关**（`config.js` 常量 → `board.js` 的收集物占格/下落/出口收集 → `level.js` 的目标判定与进度 → `game.js` 的建局与计数 → 单测 → 浏览器验证 → 提交 `[step14.1]`）→ **14.2 时间关**（**先补 4.4 与附录 B 的时间口径**（v1.18 第 3 条）→ `TIME_CONFIG` 与 `computeTimeBudget` → `level.consumeTime` / `game.tickTime` → `hud.js` 第二格 → `app.js` 倒计时编排 → 单测 → 浏览器验证 → 提交 `[step14.2]`）→ **14.3 金豆荚关**（分阶段下落 1 格 + 三星阈值更高口径 → 单测 → 浏览器验证 → 提交 `[step14.3]`）→ 外观（`candy.js` 精灵 + `render.js` 贴图）随 14.1 一起落 → 全量回归与 Gate 0.1 第八轮。
+4. **必须产物**：源码 diff；`node tests/run-all.js`（用例/断言数增长且 0 失败、exit 0）；`_build/verify-step14.mjs` 的 L2/L3 结果（三种关卡各一条路径 + 像素取证）；`python _build/consistency_check.py`；`_build/check-level-table.mjs`（证明 50 关表未受影响）；`DECISIONS.md` 新条目；`[step14.1]`/`[step14.2]`/`[step14.3]` 提交 + `step14-done` tag；五份文档同步。
+5. **自动化测试**：`node tests/run-all.js`；单跑 `tests/board.test.js`、`tests/level.test.js`、`tests/game.test.js`、`tests/integration.test.js`。新增用例至少覆盖：① 水果占格且不参与匹配、不可被消除/特效清除；② 水果随重力下落、到出口行即收集并计数；③ 金豆荚每次消除只下落 1 格（同一层内不跨 2 格）；④ 三种目标类型的 `checkGoal` 判定与「未达成即失败」；⑤ 时间关不消耗步数、倒计时归零时未达成即失败、归零前达成即通关；⑥ 时间关的 HUD 快照含剩余时间。
+6. **手动/浏览器测试**：390×844@DPR3；`index.html?demo=fruit|time|pod` 三个演示关；像素取证（水果/金豆荚精灵可辨、不透明占格、落到底部后消失）；真实触摸滑动一次有效交换；时间关倒计时读数递减与归零后的结束面板文案；HUD 第二格在时间关显示「时间」。
+7. **证据等级**：L1 + L2 + L3；真机、Android/iOS、商店发布**未验证**。
+8. **失败处理**：P0/P1 阻止收尾并阻止进入 Step 15；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step14-start` = `02d8b17`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（14.1 水果关、14.2 时间关、14.3 金豆荚关的机制、判定、HUD 与验证）与非目标（不排进 50 关表、不做道具、不做绳索）明确；前置 Step 13 与 Gate 0.1 第七轮已验收；允许修改文件已列出；**规则口径已确认** —— 用户已批准宪法 v1.18，三种类型的规则不再需要临时发明；契约（`cell.collectible` / `GoalSpec` / `COLLECTIBLE_CONFIG` / `ResolveResult.collected`）已在 `02d8b17`→`29100af` 三个提交里登记；夹具（水果与金豆荚的最小棋盘、倒计时的最小关卡）与验收路径可执行；风险（**时间关没有步数**，`trySwap` 的结束判定若继续用 `remainingSteps` 会让时间关开局即判负；**收集物与占格障碍**在重力里的分岔若写错会让收集物被当空洞填充）已识别并写入用例；回滚点已登记 → **通过**。
+
+---
+
 ## 2026-09-20（Gate 0.1 第七轮：Step 13 → Step 14 扩展前 Bug Audit —— 通过，放行 Step 14；P3-9 关闭）
 
 - **审计对象**：Step 13（藤蔓与巧克力：口径、计分、外观、演示关）。起点 = tag `step13-done`（586df88），工作区干净。

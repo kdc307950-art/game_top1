@@ -6,6 +6,26 @@
 
 ---
 
+## D035：Step 14 三种关卡类型的口径落地（宪法 v1.18 规则 → v1.19 契约）
+
+- 日期：2026-09-22
+- 背景：宪法 **v1.18** 已由用户批准，为水果关 / 时间关 / 金豆荚关定义了规则口径，但其中三项需要落地口径才能写代码：① 收集物在重力和级联里的位置（4.1 只新增了 `cell.collectible` 字段）；② 时间关没有步数，而 `trySwap` 的结束判定、HUD 与「结束前引爆」都以步数为轴；③ 金豆荚「三星阈值更高」需要落在配置里而不是硬编码。用户本轮预授权：「需要我决定的问题如果我长时间没有选择就按照默认推荐来」—— 下列口径即**推荐默认**，任何一条都可按用户后续指示调整。
+- 决策（推荐默认）：
+  1. **收集物 = 占格但可下落的特殊格**：`cell.collectible = 'fruit' | 'pod'`，其 `color` 为 `null`（4.1 的语义不需要扩写）。因此它天然不参与匹配（`match.colorAt` 返回 null）、不能被交换（`shuffle.isCellMovable` 因 `color === null` 返回 false）、不会被重排搬动（`shuffleBoard` 只收 `color !== null`），也**不会被清除**（`board.clearCells` 只清 `carriesAnimal` 的格子）—— 一次实现同时满足 3.6 的四条限制。
+  2. **`isHole` 必须排除收集物**（否则 `refillBoard` 会把它当空洞覆盖成动物，收集物会凭空消失）。这条是 14.1 最容易写错的地方，已写成用例。
+  3. **重力分岔（`applyGravity(board, options)`，纯追加）**：收集物与动物一起参与下落，但单层下落格数受 `COLLECTIBLE_CONFIG.fruitFallPerStep`（99 ≈ 整列直落）与 `podFallPerStep`（1）限制；收集物落下后**对上方格子充当本层屏障**（上方动物只能压到它上面）。理由：若让动物穿过停在半路的金豆荚，就会出现「豆荚下面是新补的动物」这种既不符合直觉、也无法解释的局面；用「本层屏障」表达「分阶段节奏」既简单又只在重力一处生效。
+  4. **出口收集**：在每层级联的「下落之后、填充之前」判定 —— 位于 `COLLECTIBLE_CONFIG.exitRow`（默认 7 = 最后一行）的收集物被移除、计入 `ResolveResult.collected`（`{ r, c, type }`），该格随后照常补位。放在填充之前，是为了让出口格在同一层里就被新动物填上，不必等到下一层。
+  5. **金豆荚三星阈值更高**：新增 `STAR_CONFIG`（`secondFactor` 1.7 / `thirdFactor` 2.5 / `podFactor` 1.2），把原先散在 `level.js` 里的 1.7/2.5 一并收进配置（顺带消除一处魔法数字）；`podFactor` 只作用于金豆荚关的 2★/3★，1★ 仍是设计基准分（3.7 的「达成目标即一星」不变）。
+  6. **时间关模型**：`LevelConfig.timeLimit`（秒，> 0 即时间关，`steps: 0`）；`Level.remainingTime` 由 `level.consumeTime` 递减，由 `game.tickTime(state, seconds)` 驱动（UI 传真实经过的秒数）。**时间关不消耗步数**（`trySwap` 跳过 `consumeStep`，3.6 v1.18「消除不扣时间」），**结束判定改用 `remainingTime`**（否则 `steps: 0` 会让时间关开局即判负）。倒计时归零时若目标未达成即失败；归零那一刻仍按 3.6 第 7 条**先引爆盘面上的特殊方块再结算**，引爆若达成目标即通关（与「最后一步引爆」同口径）。
+  7. **时间长度派生**：新增 `TIME_CONFIG` 与 `computeTimeBudget(config)`，公式与步数派生同构（目标工作量 × 每秒折算 − 障碍摩擦 × 每秒扣减，夹在 `minSeconds`/`maxSeconds`）。3.6 第 6 条的「步数由难度派生」对时间关**不适用**（v1.18 第 3 条），时间关用时长。
+  8. **演示关而不是关卡表**：新增演示关 id **51（水果）/ 52（时间）/ 53（金豆荚）**，由 `index.html?demo=fruit|time|pod` 进入；`LEVELS.md` 的 50 关表与 `check-level-table.mjs` 的比对范围**不变**（v1.18 第 4 条：三种类型各自验收前不得入表）。第 13 步的障碍演示关 id 0 保留。
+- 依据与证据：L1 = `node tests/run-all.js`（见 PROGRESS 的 Step 14 记录）；L0 = `python _build/consistency_check.py`（v1.19 的新键与新常量全部登记）、`node _build/check-level-table.mjs`（50 关表未受影响）；L2/L3 = `_build/verify-step14.mjs`。
+- 影响：`AGENTS.md` v1.19（3.6 / 4.1 / 4.2 / 4.4 / 附录 B / 附录 B-2 / 第 11 节）、`ROADMAP.md` 头部版本、`config.js`、`level.js`、`game.js`、`board.js`、`app.js`、`hud.js`、`candy.js`、`render.js`、`tests/*.test.js`、`PROGRESS.md`、本文件。
+- 替代方案：① 收集物计入 `obstacle` 字段（否决：3.6 明确「收集物与障碍物不是一类」，混用会让 3.4 的受损/屏障判定全部要加分支）；② 金豆荚不限速、靠动画表现节奏（否决：3.6 明文「每次消除只下落 1 格」，属规则而非观感）；③ 时间关沿用步数并让 UI 把秒数换算成步数（否决：v1.18 明文「本局没有步数概念」）；④ 把三种类型直接排进 50 关表（否决：违反 v1.18 第 4 条，且等于同时改关卡文档、硬指标与巡检脚本）；⑤ 时间关归零时不引爆直接判负（否决：与 3.6 第 7 条「本局结束前引爆特殊方块」的既有口径不一致）。
+- 未验证：真机（iOS/Android）的倒计时观感与后台切回的时间处理；三种类型排进 50 关后的可达性（需另一步改文档与硬指标）。
+
+---
+
 ## D034：Gate 0.1 第七轮通过（Step 13 → Step 14）、P3-9 的退役处置与 P3-10 登记
 
 - 日期：2026-09-20

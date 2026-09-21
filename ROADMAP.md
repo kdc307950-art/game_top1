@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.18
+> 版本：v1.19
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -28,7 +28,7 @@
 
 ## 0.1 扩展前 Bug Audit Gate（当前暂停点）
 
-当一个 Step 已完成、准备进入下一个玩法 Step 时，先执行一次独立的 Bug Audit，不把“功能已经写出来”直接当成“可以继续扩展”。当前 **Step 13（藤蔓、巧克力）已完成，Gate 0.1 第七轮已通过（tag `gate-0.1-step13-pass`）**；Step 14（关卡类型）开工前必须先补宪法：水果关 / 时间关 / 金豆荚关的规则与计分在 3.6 中尚无定义。
+当一个 Step 已完成、准备进入下一个玩法 Step 时，先执行一次独立的 Bug Audit，不把“功能已经写出来”直接当成“可以继续扩展”。当前 **Step 13（藤蔓、巧克力）已完成，Gate 0.1 第七轮已通过（tag `gate-0.1-step13-pass`）**，**Step 14（关卡类型）已开工**：宪法 v1.18 的规则口径与 v1.19 的落地契约（时间关/收集物）已补齐，14.1 水果关 / 14.2 时间关 / 14.3 金豆荚关按子步骤分别验收。Step 14 完成后、进入 Step 15（道具系统）前必须再走一轮 Gate 0.1。
 
 1. **自动回归**：运行 `node tests/run-all.js`，记录测试文件数、用例数、断言数、失败数和退出码；失败用例必须先修复或在 `PROGRESS.md` 明确标记为阻塞。
 2. **静态一致性**：运行现有 `_build/consistency_check.py`（如文件存在），检查模块边界、配置键、文档交叉引用和禁止依赖；不要用“脚本没有报错”替代行为测试。
@@ -960,7 +960,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 ### 第三阶段
 
 - [ ] Step 13：更多障碍物
-- [ ] Step 14：关卡类型
+- [ ] Step 14：关卡类型（**进行中**：宪法 v1.18 规则 + v1.19 落地契约已落地；14.1 水果关 / 14.2 时间关 / 14.3 金豆荚关按子步骤分别验收，见 DECISIONS D035）
 - [ ] Step 15：道具系统
 - [ ] Step 16：音效与震动反馈
 - [ ] Step 17：粒子动画与视觉打磨
@@ -982,3 +982,4 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.8 | 2026-09-20 | Agent | 在 Step 8 前新增 Bug Audit Gate、证据等级和可交付门槛；将 Step 18 扩充为 Capacitor 从环境冻结到发布候选回归的 7 个子步骤 | §0.1-§0.3、Step 18、完成记录、第 6 节 |
 | v1.9 | 2026-09-20 | Agent | 同步扩展前 Bug Audit 收尾规则、静态检查口径与当前暂停点，确保路线图版本与宪法一致 | §0.1-§0.3、Step 8 前置门禁、第 6 节 |
 | v1.10 | 2026-09-20 | Agent | 补充成熟 App 研发阶段总表、统一 Step 执行卡、DoR/DoD、需求到发布追溯、分支版本回滚与包装发布准备清单；明确当前仍停在 Gate 0.1 | §0.4-§0.8、Step 8 前置门禁 |
+| v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
