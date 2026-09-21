@@ -35,6 +35,7 @@ const view = {
   game: null, // game.js 的 GameState
   best: 0, // 最高分（localStorage，属 UI 侧状态）
   newRecord: false,
+  stars: 0, // 3.7：本局通关星级（结束面板用；失败时为 0）
   sizePx: 0,
   dpr: 1,
   layout: null, // render.js 的 boardRect(sizePx) 结果（prepare 时复用）
@@ -98,6 +99,7 @@ function startNewGame() {
   timeline.stop(); // 防御性：正常路径下不会在回放中重开
   view.game = createGame(buildDemoLevelConfig());
   view.newRecord = false;
+  view.stars = 0;
   view.selected = null;
   view.firstGroups = [];
   view.playback = null;
@@ -237,7 +239,15 @@ function attemptSwap(a, b) {
   // 3.8：死局与重排的结果（成功：提示 + 重排动画；失败：结束流程，不消耗步数）
   const deadlock = result.resolve.deadlock;
   view.endReason = 'steps';
-  if (deadlock) {
+  if (view.game.level.completed) {
+    // 3.6 / 3.7：通关优先于「步数用尽」——最后一步达成目标也算通关（此时剩余步数已被转化）
+    view.endReason = 'won';
+    log(
+      'info',
+      `关卡完成（3.6）：${describeGoal(view.game.level.goal)}，剩余 ${result.stepsLeft} 步按 3.5 转化为分数，` +
+        `本局 ${view.game.level.currentScore} 分`
+    );
+  } else if (deadlock) {
     if (deadlock.shuffled) {
       log('info', `检测到无可消除组合，已重排棋盘（第 ${deadlock.tries} 次尝试成功，不消耗步数）`);
     } else {
@@ -260,10 +270,14 @@ function attemptSwap(a, b) {
  * 首帧快照在 `result.afterSwap`，是否进入结束面板在 `result.gameOver`。
  */
 function startTimeline(result, scoreBefore) {
+  const levelTotal = result.resolve.levelScores.reduce((sum, item) => sum + item.gained, 0);
   view.playback = {
     scoreBefore,
     levelScores: result.resolve.levelScores,
-    pendingGameOver: result.gameOver
+    pendingGameOver: result.gameOver,
+    // 通关时 3.5 的剩余步数转化是「关卡级一次性结算」，不在逐层明细里；
+    // 单独记下尾款，HUD 才不会在回放中少一段再突然跳回去
+    tailBonus: result.scoreDelta - levelTotal
   };
   const motion = motionDurations(view.systemReducedMotion);
   timeline.play(buildPhases(result.resolve, result.afterSwap, motion));
@@ -275,7 +289,8 @@ function hudScoreAt(levelIndex) {
   if (!playback) return view.game.level.currentScore;
   let gained = 0;
   for (let i = 0; i <= levelIndex && i < playback.levelScores.length; i += 1) gained += playback.levelScores[i].gained;
-  return playback.scoreBefore + gained;
+  const tail = levelIndex >= playback.levelScores.length - 1 ? playback.tailBonus : 0;
+  return playback.scoreBefore + gained + tail;
 }
 
 function finishTimeline() {
@@ -291,6 +306,19 @@ function finishTimeline() {
 // 绘制：把状态整理成 render.js 需要的「场景描述」
 // ---------------------------------------------------------------------------
 
+/** 目标的一句话摘要（只用于日志，让「这一关要干什么」在控制台里可读）。 */
+function describeGoal(goal) {
+  if (!goal) return '无目标';
+  if (goal.type === 'score') return `分数达到 ${goal.target}`;
+  if (goal.type === 'clearIce') return `消除 ${goal.target} 层冰块`;
+  if (goal.type === 'collect') return `收集 ${Object.entries(goal.targets).map(([k, v]) => `${k}×${v}`).join(' + ')}`;
+  const parts = [];
+  if (goal.score !== undefined) parts.push(`分数 ${goal.score}`);
+  if (goal.clearIce !== undefined) parts.push(`冰块 ${goal.clearIce} 层`);
+  if (goal.collect) parts.push(`收集 ${Object.entries(goal.collect).map(([k, v]) => `${k}×${v}`).join(' + ')}`);
+  return `混合目标（${parts.join(' + ')}）`;
+}
+
 function drawFrame(entry = null, progress = 1) {
   if (view.sizePx === 0) return;
   const scene = {
@@ -305,7 +333,12 @@ function drawFrame(entry = null, progress = 1) {
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,
       steps: view.game.level.remainingSteps,
-      best: view.best
+      best: view.best,
+      // v1.14（5.5）：目标格要显示「当前值/目标值」。drawFrame 每帧都会跑，故直接读关卡状态，
+      // 不调用 getState（那会每帧深拷贝并冻结整个棋盘）
+      goal: view.game.level.goal,
+      collected: view.game.level.collected,
+      clearedIce: view.game.level.clearedIce
     },
     overlay:
       view.game.gameOver && !timeline.running
@@ -313,7 +346,8 @@ function drawFrame(entry = null, progress = 1) {
             score: view.game.level.currentScore,
             best: view.best,
             newRecord: view.newRecord,
-            reason: view.endReason
+            reason: view.endReason,
+            stars: view.stars
           }
         : null
   };
@@ -328,15 +362,22 @@ function drawFrame(entry = null, progress = 1) {
 function finishGame() {
   const snapshot = getGameState(view.game);
   const isRecord = snapshot.currentScore > view.best;
-  const endReasonText = view.endReason === 'stuck' ? '无可消除组合（重排失败）' : '步数用尽';
+  const endReasonText =
+    view.endReason === 'won'
+      ? `关卡完成（${snapshot.stars} 星）`
+      : view.endReason === 'stuck'
+        ? '无可消除组合（重排失败）'
+        : '步数用尽';
   if (isRecord) {
     view.best = snapshot.currentScore;
     writeBestScore(view.best);
   }
   view.newRecord = isRecord;
+  view.stars = snapshot.stars; // 3.7：结束面板据此画星星（未通关时为 0）
   log(
     'info',
-    `游戏结束：${endReasonText}。本局得分 ${snapshot.currentScore}，最高分 ${view.best}` +
+    `${view.endReason === 'won' ? '关卡结果' : '游戏结束'}：${endReasonText}。本局得分 ${snapshot.currentScore}，` +
+      `最高分 ${view.best}` +
       (isRecord ? '（新纪录，已写入 localStorage）' : '')
   );
   drawFrame();

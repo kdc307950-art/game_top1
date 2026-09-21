@@ -1,11 +1,11 @@
-// tests/level.test.js — level.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 4。
+// tests/level.test.js — level.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 4 / Step 12.1。
 //
-// Step 4 只实现 createLevel / consumeStep / getRemainingStepBonus；
-// checkGoal（3.6）与 calcStars（3.7）属 Step 12，本文件不测也不留空壳。
+// Step 4 实现了 createLevel / consumeStep / getRemainingStepBonus；
+// Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）。
 
-import { test, assertEqual, assertTrue, assertDeepEqual, assertThrows, summarize } from './assert.js';
+import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
 import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from '../config.js';
-import { consumeStep, createLevel, getRemainingStepBonus } from '../level.js';
+import { calcStars, checkGoal, consumeStep, createLevel, getRemainingStepBonus } from '../level.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -72,8 +72,82 @@ test('getRemainingStepBonus：每剩余一步按 stepBonus 转化（3.5）', () 
   assertTrue(getRemainingStepBonus(undefined) === 0, 'undefined 按 0');
 });
 
-test('STORAGE_KEYS.BEST_SCORE 与附录 B 登记值一致（最高分键名）', () => {
+test('STORAGE_KEYS 与附录 B 登记值一致（最高分 + 每关星级，v1.14）', () => {
   assertEqual(STORAGE_KEYS.BEST_SCORE, 'xxl_best_score', '最高分存储键');
+  assertEqual(STORAGE_KEYS.LEVEL_STARS, 'xxl_level_stars', '每关星级存档键');
+});
+
+// ---------------------------------------------------------------- Step 12.1：3.6 目标判定
+
+test('createLevel：Level.completed 初值为 false（v1.14）', () => {
+  assertFalse(createLevel(levelConfig()).completed, '开局未通关');
+});
+
+test('checkGoal：score 目标只比分数（3.6）', () => {
+  const level = createLevel(levelConfig({ goal: { type: GOAL_TYPE.SCORE, target: 1000 } }));
+  assertFalse(checkGoal(level, null, 999, {}), '差 1 分不算达成');
+  assertTrue(checkGoal(level, null, 1000, {}), '刚好达成');
+  assertTrue(checkGoal(level, null, 1500, {}), '超过也算');
+  assertFalse(checkGoal(level, null, Number.NaN, {}), 'NaN 按 0 处理');
+});
+
+test('checkGoal：collect 目标要求每个列出的动物都达标（3.6）', () => {
+  const level = createLevel(levelConfig({ goal: { type: GOAL_TYPE.COLLECT, targets: { frog: 5, hippo: 3 } } }));
+  assertFalse(checkGoal(level, null, 0, { frog: 5, hippo: 2 }), '差一只不算');
+  assertTrue(checkGoal(level, null, 0, { frog: 5, hippo: 3 }), '刚好达成');
+  assertTrue(checkGoal(level, null, 0, { frog: 9, hippo: 3 }), '超出也算');
+  assertFalse(checkGoal(level, null, 0, { frog: 5 }), '缺失的动物按 0 计');
+  assertFalse(checkGoal(level, null, 0, {}), '空计数不算');
+  assertFalse(checkGoal(level, null, 0, undefined), '未传计数按空处理');
+});
+
+test('checkGoal：clearIce 目标比冰块层数（level.clearedIce）', () => {
+  const level = createLevel(levelConfig({ goal: { type: GOAL_TYPE.CLEAR_ICE, target: 6 } }));
+  level.clearedIce = 5;
+  assertFalse(checkGoal(level, null, 0, {}), '5 层未达标');
+  level.clearedIce = 6;
+  assertTrue(checkGoal(level, null, 0, {}), '6 层达标');
+  level.clearedIce = 7;
+  assertTrue(checkGoal(level, null, 0, {}), '超过也算');
+});
+
+test('checkGoal：mixed 要求列出的每个分项都达标，空 mixed 不算达成', () => {
+  const level = createLevel(levelConfig({ goal: { type: GOAL_TYPE.MIXED, score: 500, collect: { frog: 2 }, clearIce: 3 } }));
+  level.clearedIce = 3;
+  assertFalse(checkGoal(level, null, 500, { frog: 1 }), '收集差一只 → 未达成');
+  assertTrue(checkGoal(level, null, 500, { frog: 2 }), '三项都达标');
+  assertFalse(checkGoal(level, null, 499, { frog: 2 }), '分数差 1 分 → 未达成');
+  level.clearedIce = 2;
+  assertFalse(checkGoal(level, null, 500, { frog: 2 }), '冰块差 1 层 → 未达成');
+
+  const empty = createLevel(levelConfig({ goal: { type: GOAL_TYPE.MIXED } }));
+  assertFalse(checkGoal(empty, null, 1e9, { frog: 99 }), '没有配置任何分项的 mixed 不算达成');
+});
+
+test('checkGoal：未知/非法目标一律返回 false（保守，不抛错打断整局）', () => {
+  assertFalse(checkGoal(null, null, 0, {}), 'level 为空');
+  assertFalse(checkGoal({ goal: null }, null, 0, {}), 'goal 为空');
+  assertFalse(checkGoal({ goal: { type: 'nope' } }, null, 0, {}), '未知类型');
+});
+
+// ---------------------------------------------------------------- Step 12.1：3.7 三星
+
+test('calcStars：分数落在哪一档就是几星（0 = 未达 1★ 线）', () => {
+  const thresholds = [1000, 2000, 3000];
+  assertEqual(calcStars(0, thresholds), 0, '0 分');
+  assertEqual(calcStars(999, thresholds), 0, '1★ 线下一分');
+  assertEqual(calcStars(1000, thresholds), 1, '刚好 1★');
+  assertEqual(calcStars(1999, thresholds), 1, '1★ 区间');
+  assertEqual(calcStars(2000, thresholds), 2, '刚好 2★');
+  assertEqual(calcStars(2999, thresholds), 2, '2★ 区间');
+  assertEqual(calcStars(3000, thresholds), 3, '刚好 3★');
+  assertEqual(calcStars(99999, thresholds), 3, '远超 3★');
+});
+
+test('calcStars：非法入参按 0 星处理（不抛错）', () => {
+  assertEqual(calcStars(5000, [1, 2]), 0, '阈值不是三元组');
+  assertEqual(calcStars(5000, undefined), 0, '阈值缺失');
+  assertEqual(calcStars(Number.NaN, [1, 2, 3]), 0, '分数 NaN');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

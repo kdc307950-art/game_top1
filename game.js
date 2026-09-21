@@ -31,7 +31,7 @@ import {
   calcFinalScore,
   calcSpecialMultiplier
 } from './score.js';
-import { consumeStep, createLevel } from './level.js';
+import { calcStars, checkGoal, consumeStep, createLevel, getRemainingStepBonus } from './level.js';
 
 /**
  * 4.2：createGame(levelConfig, options?) —— 建一局游戏。
@@ -86,11 +86,14 @@ export function trySwap(state, a, b) {
   }
 
   const afterSwap = cloneBoard(state.board);
+  // 4.3.3：只有有效交换才扣步数。**先扣步再结算** —— 3.5 的剩余步数转化用的是「通关那一刻」的真实剩余，
+  // 把刚用掉的这一步也算进去会多给一份分（Step 12.1 的用例抓到过这个 off-by-one）。
+  consumeStep(state.level);
   const resolve = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
-  consumeStep(state.level); // 4.3.3：只有有效交换才扣步数
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
-  state.gameOver = state.level.remainingSteps <= 0 || stuck;
+  // Step 12.1：结束有三种原因 —— 通关（3.6）、步数用尽、死局且重排失败（3.8 约束 4）
+  state.gameOver = state.level.completed || state.level.remainingSteps <= 0 || stuck;
 
   return {
     valid: true,
@@ -131,7 +134,38 @@ export function resolveBoard(state, options = {}) {
   }
 
   state.level.currentScore += scoreDelta;
-  return { ...result, scoreDelta, levelScores, deadlock: ensurePlayable(state) };
+
+  // Step 12.1（3.6）：先把本步的收集与清冰计入关卡进度，再判定目标是否达成。
+  // 顺序很重要：目标判定必须用「本步结算后」的计数与分数，否则最后一手永远差一步。
+  accumulateProgress(state.level, result);
+  if (!state.level.completed && checkGoal(state.level, state.board, state.level.currentScore, state.level.collected)) {
+    // 3.7：达成目标即通关；3.5 的剩余步数转化在通关的**这一刻**一次性结算（repeat 调用不会重复加）
+    state.level.completed = true;
+    const stepBonus = getRemainingStepBonus(state.level.remainingSteps);
+    state.level.currentScore += stepBonus;
+    scoreDelta += stepBonus;
+  }
+
+  // 已通关就不必再为重排操心（3.8 的检测是为了继续玩下去，而不是为了结算面板）
+  const deadlock = state.level.completed ? null : ensurePlayable(state);
+  return { ...result, scoreDelta, levelScores, deadlock };
+}
+
+/**
+ * 3.6 的目标追踪：把本次结算的成果计入 `Level.collected` / `Level.clearedIce`。
+ * 收集只数**动物**（魔力鸟不是可收集的动物，它保留颜色只是为了渲染，故排除，见 3.2 / D025）；
+ * 清冰只数**冰块层数**（3.6 的 clearIce；雪块层数不计入 —— `LEVELS.md` 第 2 节的口径）。
+ */
+function accumulateProgress(level, result) {
+  for (const cell of result.cleared) {
+    if (cell.type === CELL_TYPE.MAGIC) continue;
+    const name = CONFIG.COLOR_NAMES[cell.color];
+    if (!name) continue;
+    level.collected[name] = (level.collected[name] ?? 0) + 1;
+  }
+  for (const hit of result.damaged) {
+    if (hit.type === OBSTACLE_TYPE.ICE) level.clearedIce += hit.layersRemoved;
+  }
 }
 
 /**
@@ -268,8 +302,23 @@ export function getState(state) {
     remainingSteps: state.level.remainingSteps,
     currentScore: state.level.currentScore,
     gameOver: state.gameOver,
+    // v1.14：HUD 与结束面板只靠快照就能渲染（5.5），不必绕过快照去读 state.level
+    goal: Object.freeze({ ...state.level.goal }),
+    collected: Object.freeze({ ...state.level.collected }),
+    clearedIce: state.level.clearedIce,
+    stars: starsOf(state.level),
+    won: state.level.completed,
     board: Object.freeze(board)
   });
+}
+
+/**
+ * 3.7：本局星级。达成通关目标至少 1 星（3.7 原文），二星/三星只看分数阈值；
+ * 未通关时一律 0 星（结束面板因此不会给失败局面画星星）。
+ */
+function starsOf(level) {
+  if (!level.completed) return 0;
+  return Math.max(1, calcStars(level.currentScore, level.starThresholds));
 }
 
 function normalizeLevelConfig(config) {

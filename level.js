@@ -58,7 +58,8 @@ export function createLevel(config) {
     remainingSteps: config.steps,
     collected: {},
     clearedIce: 0,
-    currentScore: 0
+    currentScore: 0,
+    completed: false // 4.4（v1.14）：本局是否已达成通关目标
   };
 }
 
@@ -69,6 +70,56 @@ export function createLevel(config) {
 export function consumeStep(level) {
   level.remainingSteps = Math.max(0, level.remainingSteps - 1);
   return level.remainingSteps;
+}
+
+/**
+ * 4.2：checkGoal(level, board, score, collected) —— 本局是否已达成通关目标（3.6）。
+ * 四种目标：`score` 比分数；`collect` 比收集计数（键为 `COLOR_NAMES` 里的动物名）；
+ * `clearIce` 比冰块层数；`mixed` 要求列出的每个分项都达标（未列出的分项不参与判定）。
+ * `board` 目前不参与判定（四种目标都只依赖计数与分数），保留该参数是因为 4.2 已登记此签名，
+ * 且后续若出现「清空指定区域」类目标就会需要它（见 D029）。
+ */
+export function checkGoal(level, board, score, collected = {}) {
+  const goal = level?.goal;
+  if (!goal || typeof goal !== 'object') return false;
+  const reached = Number.isFinite(score) ? score : 0;
+  const counts = collected ?? {};
+
+  if (goal.type === GOAL_TYPE.SCORE) return reached >= goal.target;
+  if (goal.type === GOAL_TYPE.COLLECT) return meetsCollect(goal.targets, counts);
+  if (goal.type === GOAL_TYPE.CLEAR_ICE) return (level.clearedIce ?? 0) >= goal.target;
+  if (goal.type === GOAL_TYPE.MIXED) {
+    const parts = [];
+    if (goal.score !== undefined) parts.push(reached >= goal.score);
+    if (goal.clearIce !== undefined) parts.push((level.clearedIce ?? 0) >= goal.clearIce);
+    if (goal.collect !== undefined) parts.push(meetsCollect(goal.collect, counts));
+    // 一个分项都没配的 mixed 不算达成（4.4 要求 goal 必填，不能靠空对象蒙过判定）
+    return parts.length > 0 && parts.every(Boolean);
+  }
+  return false;
+}
+
+/** 收集目标：每个列出的动物都要达到数量（未列出的不参与判定）。 */
+function meetsCollect(targets, counts) {
+  if (!targets || typeof targets !== 'object') return false;
+  const entries = Object.entries(targets);
+  if (entries.length === 0) return false;
+  return entries.every(([name, need]) => (counts[name] ?? 0) >= need);
+}
+
+/**
+ * 4.2 / 3.7：calcStars(score, thresholds) —— 分数落在哪一档就是几星（0 = 未达 1★ 线）。
+ * 注意 3.7 的「**达成通关目标即获得一星**」不由本函数表达（签名里没有目标）：
+ * 调用方（game.js）在通关时取 `max(1, calcStars(...))`，于是收集/清冰关即使分数偏低也至少有 1 星。
+ * 分数关因为 1★ 阈值就等于目标分，两种口径自然一致（见 D029）。
+ */
+export function calcStars(score, thresholds) {
+  const value = Number.isFinite(score) ? score : 0;
+  if (!Array.isArray(thresholds) || thresholds.length !== 3) return 0;
+  if (value >= thresholds[2]) return 3;
+  if (value >= thresholds[1]) return 2;
+  if (value >= thresholds[0]) return 1;
+  return 0;
 }
 
 /** 4.2：getRemainingStepBonus(stepsLeft) —— 剩余步数转化（3.5「每剩余一步约转化为 30 分」）。 */

@@ -6,6 +6,25 @@
 
 ---
 
+## D029：Step 12.1 目标判定、进度累加、三星与 HUD 四格的实现口径
+
+- 日期：2026-09-20
+- 背景：Step 12 的第一半（12.1）要实现 3.6 的四种目标判定、3.7 的三星、3.5 的剩余步数转化与 5.5 的「目标/步数/分数常驻可见」。落地时发现三处必须先定的口径：HUD 要显示目标与进度却没有对应契约、通关与「步数用尽」两种结束状态必须区分、剩余步数转化的结算时机与次数。用户批准了三项：**① 纯追加 `Level.completed` + `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`won`/`stars`；② HUD 扩成四格；③ 跨关流转做「选关界面 + 每关星级存档」**（③ 属 12.2）。
+- 决策：
+  1. **宪法 v1.14（用户批准）**：4.2 追加 `GameSnapshot` 五个字段；4.4 追加 `Level.completed`；5.5 落地 HUD 四格（分数 / 剩余步数 / 目标进度 / 最高分）；附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`。
+  2. **`calcStars` 保持 4.2 的签名（只看分数），3.7 的「达成目标即一星」由调用方补**：`game.js` 的 `starsOf(level)` 在通关时取 `max(1, calcStars(score, thresholds))`，未通关一律 0 星。这样既不改已登记的签名，又同时满足 3.7 的两句话。对分数关，1★ 阈值本就等于目标分，两种口径自然一致；对收集/清冰关，即使分数偏低也至少有 1 星。
+  3. **`checkGoal` 的 `board` 参数当前不参与判定**：四种目标都只依赖计数与分数（`score`/`collected`/`clearedIce`）。保留该参数是因为 4.2 已登记此签名，且后续「清空指定区域」类目标会用到它 —— 不留空壳函数、也不擅自改签名。空 `mixed`（一个分项都没配）返回 `false`，避免用空对象蒙过判定。
+  4. **进度累加放在 `game.js`（`accumulateProgress`），而不是新增 `level.js` 的导出**：4.2 的 `checkGoal(level, board, score, collected)` 把 `collected` 作为入参，说明「计数由调用方维护、level.js 只做判定」。收集只数**动物**（`CELL_TYPE.MAGIC` 排除 —— 魔力鸟保留颜色仅供渲染，见 3.2/D025），清冰只数**冰块层数**（雪块层数不计入，与 `LEVELS.md` 第 2 节一致）。这样 12.1 不需要任何新导出。
+  5. **通关与失败必须分开**：`Level.completed` 是通关，`gameOver` 是「本局已结束」；结束原因有三种 —— `won` / `steps`（步数用尽未达标）/ `stuck`（死局重排失败）。`trySwap` 里 `gameOver = completed || remainingSteps <= 0 || stuck`，`app.js` 据此选结束面板文案与是否画星星。已通关时 `resolveBoard` **跳过** `ensurePlayable`（3.8 的检测是为了继续玩，不是为了结算面板）。
+  6. **剩余步数转化在「通关那一刻」一次性结算**：`resolveBoard` 里 `!completed && checkGoal(...)` 成立时加 `getRemainingStepBonus(remainingSteps)`，并用 `completed` 守卫避免重复。**发现并修掉一个 off-by-one**：`trySwap` 原本是「先 `resolveBoard` 再 `consumeStep`」，于是通关时把刚用掉的这一步也算进剩余步数（多给 30 分）。改成**先扣步再结算**后，通关瞬间的剩余步数是真实值（用例抓到：应为 `30 + 29×30 = 900`，原来是 930）。
+  7. **HUD 四格的目标格最多两行**（5.5 的 v1.14 口径）：按目标类型显示「当前值/目标值」（`3200/7000`、`冰 5/12`、`frog 8/12`）；混合目标先显示**未完成**的分项，超出两行的部分以 `+N` 提示；已完成的分项用绿色标记。`hud.js` 仍然只接收场景数据（不认识棋盘状态，2.3）。
+  8. **回放期间的分数不能跳变**：3.5 的剩余步数分不在逐层明细 `levelScores` 里（它是关卡级的一次性结算），因此 `app.js` 的 playback 增加 `tailBonus = scoreDelta − Σ levelScores`，`hudScoreAt` 在最后一层之后补上它，HUD 分数因此单调且终值等于总分。
+  9. **验证**：L1 由 145 用例 / 1025 断言 → **162 用例 / 1095 断言 / 0 失败**（`tests/level.test.js` 新增 checkGoal 五例 + calcStars 两例；`tests/game.test.js` 新增 12.1 集成九例）；浏览器 `_build/verify-step12.mjs` **PASS**（HUD 四格像素取证、真实滑动后目标格像素变化、四种目标判定、三星边界、通关/最后一步通关/失败三态、清冰进度、剩余步数分只结算一次）；既有套件与门禁脚本复跑全绿。
+- 影响：`level.js`（`checkGoal`/`calcStars` + `Level.completed`）、`game.js`（进度累加、通关、星级、剩余步数转化、`GameSnapshot` 五字段、扣步顺序）、`hud.js`（四格 + 目标进度 + 星级面板）、`app.js`（HUD 场景、结束原因、星级、回放尾款）、`config.js`（`STORAGE_KEYS.LEVEL_STARS`）、`tests/level.test.js`、`tests/game.test.js`、`AGENTS.md`（v1.14）、`PROGRESS.md`、`DECISIONS.md`、`_build/verify-step12.mjs`。
+- 替代方案：给 `calcStars` 加「是否通关」参数（否决：改已登记的签名，需另一次契约批准，而 `max(1, ·)` 在调用方一行就能表达）；把进度累加做成 `level.js` 的新导出（否决：4.2 的签名已把 `collected` 定为入参，加导出反而两处都维护计数）；HUD 保持三格把最高分挪走（否决：用户明确选择四格）；不用 `tailBonus` 而是让 `levelScores` 包含尾款（否决：那会把「关卡级结算」塞进「逐层结算」，破坏 4.2 里 `LevelScore` 的语义）。
+
+---
+
 ## D028：关卡模式与 50 关设计表（文档先行，宪法 v1.13）
 
 - 日期：2026-09-20

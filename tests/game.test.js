@@ -12,7 +12,7 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, CONFIG, DIRECTION, OBSTACLE_TYPE } from '../config.js';
+import { CELL_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
 import { createGame, getState, resolveBoard, trySwap } from '../game.js';
 import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
@@ -548,5 +548,165 @@ test('边界（诚实记录）：只剩「两颗相邻特效」可换时，3.8 �
   const result = trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
   assertTrue(result.valid, '但实际交换仍按 3.3 的组合生效');
   assertEqual(result.resolve.levels[0].cleared.length, 15, '组合照常清除十字 15 格');
+});
+
+// ---------------------------------------------------------------- Step 12.1：3.6 目标 / 3.7 三星 / 进度累加
+
+test('12.1：GameSnapshot 带 v1.14 的五个字段（goal/collected/clearedIce/stars/won）', () => {
+  const game = createGame({
+    steps: 30,
+    goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } },
+    starThresholds: [1000, 2000, 3000]
+  });
+
+  const snapshot = getState(game);
+  assertDeepEqual(snapshot.goal, { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, 'goal 透传到快照');
+  assertDeepEqual(snapshot.collected, {}, '开局未收集任何动物');
+  assertEqual(snapshot.clearedIce, 0, '开局未清冰');
+  assertEqual(snapshot.stars, 0, '开局 0 星');
+  assertFalse(snapshot.won, '开局未通关');
+  assertTrue(Object.isFrozen(snapshot.collected), 'collected 是冻结副本（UI 不能改到内部状态）');
+});
+
+test('12.1：收集目标达成 → 通关、剩余步数按 3.5 转化、星级 ≥ 1、gameOver', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [100, 1000, 2000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+
+  const result = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertTrue(result.valid, '交换有效');
+  assertTrue(game.level.completed, '3.6：收集 3 只 ladybug（色 2）即达成目标');
+  assertTrue(game.gameOver, '通关也是结束');
+  assertEqual(game.level.remainingSteps, 29, '只扣 1 步');
+  const snapshot = getState(game);
+  assertEqual(snapshot.collected.ladybug, 3, '进度累加：本步消掉 3 只');
+  assertEqual(snapshot.won, true, '快照标记通关');
+  // 30（本步）+ 29 步 × 30（3.5 的剩余步数转化）= 900
+  assertEqual(snapshot.currentScore, 900, '通关瞬间结算剩余步数分');
+  assertEqual(result.scoreDelta, 900, 'SwapResult.scoreDelta 含转化分');
+  assertEqual(snapshot.stars, 1, '900 分落在 [100,1000) → 1 星');
+});
+
+test('12.1：3.7 通关至少 1 星（分数低于 1★ 线也不给 0 星）', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [100000, 200000, 300000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+
+  trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertTrue(game.level.completed, '目标达成');
+  assertEqual(getState(game).stars, 1, '3.7：达成通关目标即至少一星');
+});
+
+test('12.1：最后一步达成目标算通关，不算「步数用尽」', () => {
+  const game = createGame(
+    { steps: 1, goal: { type: GOAL_TYPE.SCORE, target: 30 }, starThresholds: [30, 500, 900] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+
+  const result = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertEqual(result.stepsLeft, 0, '步数确实用尽');
+  assertTrue(game.level.completed, '但目标在最后一步达成 → 通关');
+  assertTrue(getState(game).won, '快照判为通关');
+  assertTrue(getState(game).stars >= 1, '通关有星');
+});
+
+test('12.1：步数用尽且未达成目标 → 失败且 0 星', () => {
+  const game = createGame(
+    { steps: 1, goal: { type: GOAL_TYPE.SCORE, target: 999999 }, starThresholds: [1, 2, 3] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+
+  trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  const snapshot = getState(game);
+  assertFalse(game.level.completed, '未达成目标');
+  assertTrue(snapshot.gameOver, '步数用尽 → 结束');
+  assertFalse(snapshot.won, '不是通关');
+  assertEqual(snapshot.stars, 0, '失败不给星');
+  assertEqual(snapshot.currentScore, 30, '未通关不结算剩余步数分（此时本来也是 0 步）');
+});
+
+test('12.1：clearIce 目标按冰块层数累加（3.6 / LEVELS.md 口径）', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.CLEAR_ICE, target: 1 }, starThresholds: [100, 1000, 2000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  // 行 4 三连带上 (4,4) 的 2 层冰 → 本步消掉 1 层冰
+  for (let r = 0; r < SIZE; r += 1) for (let c = 0; c < SIZE; c += 1) game.board[r][c].color = (r + 2 * c) % 3;
+  game.board[4][4].obstacle = OBSTACLE_TYPE.ICE;
+  game.board[4][4].obstacleLayers = 2;
+  game.board[4][3].color = 5;
+  game.board[4][4].color = 5;
+  game.board[4][5].color = 5;
+
+  const result = resolveBoard(game);
+
+  assertEqual(result.levels[0].cleared.length, 3, '三连被消除');
+  assertTrue(game.level.completed, '清 1 层冰即达成 clearIce 目标');
+  assertEqual(getState(game).clearedIce, 1, '进度累加 1 层');
+  assertEqual(game.board[4][4].obstacleLayers, 1, '冰层 2 → 1');
+});
+
+test('12.1：mixed 目标要求每个分项都达标', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.MIXED, score: 20, collect: { ladybug: 3 } }, starThresholds: [100, 1000, 2000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+
+  trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+
+  assertTrue(game.level.completed, '分数 30 ≥ 20 且收集 3/3 → 达成');
+
+  const strict = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.MIXED, score: 20, collect: { ladybug: 4 } }, starThresholds: [100, 1000, 2000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(strict.board);
+  trySwap(strict, { r: 4, c: 2 }, { r: 5, c: 2 });
+  assertFalse(strict.level.completed, '收集差一只 → 未达成');
+});
+
+test('12.1：魔力鸟不计入收集（它保留颜色只是为了渲染，3.2 / D025）', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.SCORE, target: 999999 }, starThresholds: [1, 2, 3] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  for (let r = 0; r < SIZE; r += 1) for (let c = 0; c < SIZE; c += 1) game.board[r][c].color = (r + 2 * c) % 3;
+  game.board[4][4].type = CELL_TYPE.MAGIC; // 魔力鸟：色 0（frog）仅供渲染
+  game.board[4][4].color = 0;
+  game.board[4][5].color = 5; // 与魔力鸟交换的那颗：色 5（fox）
+  game.board[1][1].color = 5;
+  game.board[6][6].color = 5;
+
+  trySwap(game, { r: 4, c: 4 }, { r: 4, c: 5 });
+
+  const snapshot = getState(game);
+  assertEqual(snapshot.collected.fox, 3, '全屏 3 颗色 5 被清除并计入 fox');
+  assertEqual(snapshot.collected.frog, undefined, '魔力鸟自身不计入 frog（色 0）');
+});
+
+test('12.1：通关时的剩余步数转化只结算一次（重复结算不会再加分）', () => {
+  const game = createGame(
+    { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [100, 1000, 2000] },
+    { rng: cycleRng([0.05, 0.4, 0.9]) }
+  );
+  singleLevelBoard(game.board);
+  trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+  const afterWin = game.level.currentScore;
+
+  const again = resolveBoard(game); // 通关后再结算一次（盘面无新匹配）
+
+  assertEqual(again.scoreDelta, 0, '没有新的消除 → 0 分');
+  assertEqual(game.level.currentScore, afterWin, '剩余步数分不再重复结算');
 });
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-09-20（Step 12.1：目标判定 + 三星 + HUD 四格 —— 完成并验证）
+
+### 完成项
+
+- **宪法 v1.14（用户批准）**：4.2 追加 `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`stars`/`won`；4.4 追加 `Level.completed`；5.5 落地 HUD 四格；附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`。
+- **`level.js`**：实现 `checkGoal`（3.6 四种目标；空 `mixed` 不算达成；`board` 参数暂不参与判定，保留以备「清空区域」类目标）与 `calcStars`（3.7 分数分档）；`createLevel` 补 `Level.completed = false`。
+- **`game.js`**：`accumulateProgress` 把本步消除计入 `Level.collected`（**排除魔力鸟** —— 它保留颜色只为渲染）与 `Level.clearedIce`（只数冰层）；通关判定在进度累加之后；通关时一次性加 3.5 的剩余步数转化（`completed` 守卫，不会重复）；`starsOf` 实现「3.7 通关至少 1 星 + 二/三星看分数」；`GameSnapshot` 补五个字段；**修掉一个 off-by-one**：`trySwap` 改为「先扣步再结算」，否则通关时会把刚用掉的那一步也算进剩余步数（多给 30 分）。
+- **`hud.js`**：HUD 从三格扩到四格（分数 / 步数 / 目标进度 / 最高分）；目标格最多两行、混合目标优先显示未完成分项、已完成分项用绿色；结束面板支持「关卡完成」标题与 ★★☆ 星级。
+- **`app.js`**：HUD 场景补目标与进度；结束原因三态（`won` / `steps` / `stuck`）；星级进视图；回放增加 `tailBonus`（剩余步数分不在逐层明细里），HUD 分数因此单调且终值等于总分。
+
+### 验证方式（可复现）
+
+- `node tests/run-all.js` → **162 用例 / 1095 断言 / 0 失败**（`tests/level.test.js` 14 例、`tests/game.test.js` 34 例；新增 checkGoal 五例、calcStars 两例、12.1 集成九例）。
+- **浏览器 `_build/verify-step12.mjs` → 34/34 PASS**：HUD 四格像素取证（四格都有文字、第 3 格是目标进度）、真实滑动后目标格像素发生变化、四种目标判定、三星边界 `[0,1,2,3]`、通关（收集 3 只 → 通关 + 30 + 29×30 = 900 分 + 1 星）、最后一步达成目标算通关、步数用尽未达标 0 星、清冰进度累加、剩余步数分只结算一次。
+- **既有套件复跑全绿**：verify-step5 32/32、step6 30/30、step7 44/44、step8 34/34、step9 30/30、step10 37/37、step11 30/30、`audit-gate-step11` 49/49。
+
+### P3-5 第五次出现（脚本的「终态模型」跟不上新玩法）
+
+目标系统上线后，**第 1 关会在步数用尽前提前通关**（分数目标 7000 在实机滑动中很容易达成），于是旧脚本的两类假设失效：
+1. **只认「游戏结束」一个终态** —— 通关时日志写的是「关卡结果：关卡完成（N 星）」。修法：终态判定扩成「游戏结束 或 关卡结果」（`verify-step6/7`、`audit-gate-step11` 的结束原因断言也接受「关卡完成」）。
+2. **结束面板会盖住棋盘** —— 此时再读棋盘像素只会读到面板（暗格/白格），「棋盘补齐/无三连」必然误判。修法：整局循环里记住「最后一次没有面板**且无三连**的干净状态」，结束后的棋盘不变量用它判断；「必须滑满 20 次」也放宽为「≥20 次或本局已提前结束」。
+   **产品代码未因此改动一行。**
+
+### 下一步
+
+- **Step 12.2**（按 `LEVELS.md` 落地 50 关 + **步数由难度派生** + 选关界面 + 每关星级存档 + 关卡表巡检）与 **Step 12.3**（**走完最后一步引爆盘面上的特殊方块再结算**，链式直到无特殊方块，成果计入目标判定与星级）—— 两项规则已按用户批准写入宪法 v1.15（见下一条记录）。
+
+---
+
+## 2026-09-20（Step 12 执行卡：关卡模式（50 关）与三星评分）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。三项口径已获用户批准（见 D029）。按 ROADMAP 的拆分，本 Step 分 **12.1** 与 **12.2** 两个子步骤分别验收与提交。
+
+1. **开始前置条件**：Step 11 已验收（`step11-done`）、Gate 0.1 第五轮已通过（`gate-0.1-step11-pass`，**允许开始 Step 12**）；关卡设计已先行定稿（`levels-50-designed`，`LEVELS.md` + 宪法 v1.13）。起点 = tag **`step12-start`（e0ac8f3）**，工作区干净。相关章节：AGENTS 3.6（四种目标 + 五条关卡设计硬指标）、3.7（三星只取决于分数）、3.5（剩余步数转化 30/步）、4.2（`checkGoal`/`calcStars`/`getRemainingStepBonus`/`GameSnapshot`）、4.4（`LevelConfig`/`Level`）、5.5（目标/步数/分数常驻可见）；ROADMAP Step 12.1-12.2；`LEVELS.md`；`REFERENCES.md` §2.2 Step 12。前置决策：D028（关卡模式与 50 关设计）。
+2. **允许修改范围**：`level.js`、`game.js`、`app.js`、`hud.js`、`config.js`、`tests/level.test.js`、`tests/game.test.js`、`tests/integration.test.js`；**AGENTS.md v1.14（已获批准）**：4.2 补 `GameSnapshot` 五字段、4.4 补 `Level.completed`、5.5 补 HUD 四格、附录 B 补 `STORAGE_KEYS.LEVEL_STARS`、第 11 节记录。**禁止**：实现道具系统（Step 15）；实现藤蔓/巧克力（Step 13）；实现水果关/时间关/金豆荚关（Step 14）；改动 `LEVELS.md` 的硬指标或数值（要改先改文档 + 重跑巡检）。
+3. **执行顺序**：执行卡与 DoR → 宪法 v1.14 登记 → **12.1**（`level.js` 的 `checkGoal`/`calcStars` → `game.js` 的进度累加/通关判定/剩余步数转化/星级 → `hud.js` 四格 → `app.js` 场景与结束面板 → 失败用例 → 修复 → 回归 → 浏览器验证 → 提交 `[step12.1]`）→ **12.2**（`level.js` 的 50 关表与 `getLevelConfig` → 跨关流转与「下一关」→ 选关界面 + 每关星级存档 → 关卡表巡检 → 回归 → 浏览器验证 → 提交 `[step12.2]`）。
+4. **必须产物**：源码 diff；`node tests/run-all.js` 结果；`_build/verify-step12.mjs`（12.1）与 `_build/verify-step12b.mjs`（12.2）结果；`_build/check-level-table.mjs`（代码表 ↔ `LEVELS.md` 逐项比对）；`DECISIONS.md` D029；`[step12.1]`/`[step12.2]` 提交 + `step12-done` tag；五份文档同步。
+5. **自动化测试**：`node tests/run-all.js`（用例/断言数增长且 0 失败、exit 0）；`node tests/level.test.js`、`tests/game.test.js`、`tests/integration.test.js` 单跑；`node _build/lint-levels.mjs` 与 `node _build/check-level-table.mjs`。
+6. **手动/浏览器测试**：390×844@DPR3；HUD 四格（分数/步数/目标进度/最高分）像素取证；`checkGoal` 四种目标在浏览器内跑真实模块；通关流程（目标达成 → 星级 → 剩余步数转化）；选关界面点按进入指定关卡；星级写入 `localStorage` 后重开仍在；真实滑动回归。
+7. **证据等级**：L1 + L2 + L3；真机、Android/iOS、发布**未验证**。
+8. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。
+9. **回滚点**：`step12-start` = `e0ac8f3`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（12.1 四种目标判定/进度累加/三星/剩余步数转化/HUD 常驻显示；12.2 按 `LEVELS.md` 落地 50 关 + 跨关流转 + 选关界面 + 星级存档 + 关卡表巡检）与非目标（不做道具、藤蔓/巧克力、限时关）明确；前置 Step 11 与 Gate 0.1 已验收；允许修改文件已列出；**契约与口径已确认** —— 用户批准纯追加（`Level.completed` + `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`won`/`stars`）、HUD 四格、以及「选关界面 + 每关星级存档」（存 `localStorage`，需新增附录 B 键）；夹具（四种目标的最小胜利条件、进度累加、星级边界）与验收路径可执行；风险（通关与「步数用尽」两种结束原因必须区分清楚，否则结束面板会误报）与回滚点已登记 → **通过**。
+
+---
+
 ## 2026-09-20（文档升级：关卡模式与 50 关设计，宪法 v1.13 —— 代码未动）
 
 ### 一、本次做了什么

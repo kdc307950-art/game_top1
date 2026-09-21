@@ -47,6 +47,7 @@ export const GOAL_TYPE = Object.freeze({
 /** localStorage 键名（读写只允许发生在 app.js，见 AGENTS.md 2.3 / ROADMAP Step 4） */
 export const STORAGE_KEYS = Object.freeze({
   BEST_SCORE: 'xxl_best_score',
+  LEVEL_STARS: 'xxl_level_stars', // 每关星级存档（Step 12.2 的选关界面用）
   MUTED: 'xxl_muted',
   BOOSTERS: 'xxl_boosters'
 });

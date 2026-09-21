@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.13
+> 版本：v1.14
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.13 → v1.14 关键变更）
+
+本次修订经**用户明确批准**，为 Step 12（关卡模式与三星评分）补齐 HUD 与结束状态所需的契约：两处纯追加、一处 UI 落地口径、一个配置键。不改变任何既有玩法数值与行为。
+
+1. **4.2 追加 `GameSnapshot` 五个字段**：`goal`（`GoalSpec`，HUD 要常驻显示目标）、`collected`（本局已收集的动物计数）、`clearedIce`（本局已清除的冰块层数）、`stars`（按 3.7 由最终分数算出的 0-3 星）、`won`（是否已达成通关目标）。它们让 HUD 与结束面板只靠快照就能渲染，不需要绕过 `getState` 去读 `state.level`。
+2. **4.4 追加 `Level.completed`**：布尔值，表示本局已达成通关目标（3.6）。它把「通关」与既有的 `gameOver`（步数用尽 / 死局重排失败）区分开 —— 三者在结束面板上必须显示不同的文案。
+3. **5.5 落地 HUD 四格**：HUD 常驻四格 = **分数 / 剩余步数 / 关卡目标进度 / 最高分**；目标进度按目标类型显示「当前值/目标值」（如 `frog 8/12`、`消冰 5/12`、`分数 3200/7000`），混合目标最多显示两项。
+4. **附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`**（默认 `xxl_level_stars`）：每关星级的存档键（Step 12.2 的选关界面用），仍是**只在 `app.js` 读写** `localStorage`。
 
 ---
 
@@ -534,6 +545,11 @@ ObstacleDamage = { r: number, c: number, type: string, layersRemoved: number, cl
 GameSnapshot = {
   levelId: number, rows: number, cols: number, colorCount: number,
   totalSteps: number, remainingSteps: number, currentScore: number, gameOver: boolean,
+  goal: GoalSpec,                       // v1.14：HUD 常驻显示通关目标（5.5）
+  collected: Record<string, number>,    // v1.14：本局已收集的动物计数（键为 COLOR_NAMES 里的名字）
+  clearedIce: number,                   // v1.14：本局已清除的冰块层数（3.6 的 clearIce 目标用）
+  stars: 0 | 1 | 2 | 3,                 // v1.14：按 3.7 由最终分数算出
+  won: boolean,                         // v1.14：是否已达成通关目标（与 gameOver 的「失败」区分）
   board: Board
 }
 ```
@@ -636,7 +652,8 @@ Level = LevelConfig & {
   remainingSteps: number,
   collected: Record<string, number>,
   clearedIce: number,
-  currentScore: number
+  currentScore: number,
+  completed: boolean       // v1.14：本局已达成通关目标（3.6）；与 gameOver 的失败原因分开
 }
 ```
 
@@ -683,6 +700,7 @@ Level = LevelConfig & {
 
 - 游戏结束用页面内 UI，禁止使用 `alert` 作为正式界面。
 - 关卡目标、剩余步数、当前分数必须常驻可见。
+- HUD 常驻**四格**：**分数 / 剩余步数 / 关卡目标进度 / 最高分**（v1.14）。目标进度显示「当前值/目标值」（如 `frog 8/12`、`消冰 5/12`、`分数 3200/7000`）；混合目标最多显示两项，其余的以「+N」提示。
 - 无可行交换时，必须给出明确提示，再进行重排。
 
 ---
@@ -878,6 +896,7 @@ node tests/integration.test.js
 | v1.10 | 2026-09-20 | Agent（用户批准） | 登记「路线图先行」的既成事实（ROADMAP v1.10 已先行引入 0.1-0.8），使两文件头部版本一致并关闭 P3-1；`candy.js` 职责补全为「条纹 / 包装 / 魔力鸟特效」（Step 8 起它还要画包装，Step 9 起为魔力鸟）；一致性脚本恢复「头部版本必须相等」的严格判定 | 2.2、2.3、11、`_build/consistency_check.py` |
 | v1.11 | 2026-09-20 | Agent（用户批准） | Step 9 魔力鸟的规则口径与契约：3.2 补「清全屏该色（含被交换格与自身）、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被其它特效波及时不额外触发」；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）；ROADMAP 头部同步升到 v1.11 | 3.2、4.2、4.3、11、`ROADMAP.md` |
 | v1.12 | 2026-09-20 | Agent（用户批准） | Step 11 冰块与雪块的口径与契约：3.4 补「冰块内的动物被消除后该格补位且冰块保留（3 层冰需三次消除）」「同一级联层内每格障碍物最多 −1 层」「覆层障碍（ice/vine）与占格障碍（snow/choc）两类」，并修正「冰块格在动物被消除后被误判为屏障」的潜伏缺陷；3.5 补「层数分另算、不参与特效倍数」「冰块连消 (n−1)×1000 与普通连消并存」；4.2 三条纯追加（`Obstacle`、`ObstacleDamage` 与 `ResolveLevel/ResolveResult.damaged`、`LevelScore.obstacle`）；ROADMAP 头部同步升到 v1.12 | 3.4、3.5、4.2、11、`ROADMAP.md` |
+| v1.14 | 2026-09-20 | Agent（用户批准） | Step 12 的契约与 UI 口径：4.2 追加 `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`stars`/`won`；4.4 追加 `Level.completed`；5.5 落地 HUD 四格（分数/步数/目标进度/最高分）；附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`（每关星级存档键） | 4.2、4.4、5.5、附录 B、11 |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
 
 ---
@@ -1127,6 +1146,7 @@ const LEVEL_3 = {
 | `OBSTACLE_CONFIG.choc.maxLayers`   | 巧克力层数         | 1                    | 3.4      |
 | `ANIMATION_CONFIG.reducedMotion`   | 跟随系统减少动效   | false                | 5.4      |
 | `STORAGE_KEYS.BEST_SCORE`          | 最高分存储键       | `xxl_best_score`     | 3.5 / ROADMAP Step 4 |
+| `STORAGE_KEYS.LEVEL_STARS`         | 每关星级存档键     | `xxl_level_stars`    | 3.7 / ROADMAP Step 12.2 |
 | `STORAGE_KEYS.MUTED`               | 静音开关存储键     | `xxl_muted`          | ROADMAP Step 16 |
 | `STORAGE_KEYS.BOOSTERS`            | 道具数量存储键     | `xxl_boosters`       | ROADMAP Step 15 |
 
