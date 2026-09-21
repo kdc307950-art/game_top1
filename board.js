@@ -24,12 +24,20 @@ import { activateSpecial, createSpecial } from './special.js';
 // Step 6.1 纯重构：可移动性/死局检测/重排移到 shuffle.js（职责分离）；
 // createBoard 仍需 hasPossibleMove 校验「开局至少有一个可行交换」，故此处单向依赖 shuffle.js。
 import { hasPossibleMove } from './shuffle.js';
+// Step 11：层数管理在 obstacles.js（2.3），board.js 只负责「哪些格子本层受损」与「障碍物属于格子」。
+import { damageObstacle } from './obstacles.js';
 
 // 4.1：cell.color 为 null 表示空格或纯障碍。
-// 3.4 的语义差别：冰块内的动物可以移动并消除、藤蔓困住的是动物，所以这两类障碍的格子
-// 保留 color；雪块与巧克力是占格障碍（3.4「消除雪块旁边的小动物」「巧克力被相邻消除波及」），
-// 格子内没有动物，color 为 null。该读法记入 DECISIONS.md D014。
-const PURE_OBSTACLE_TYPES = new Set([OBSTACLE_TYPE.SNOW, OBSTACLE_TYPE.CHOC]);
+// 3.4（v1.12）：障碍物分两类 ——
+//   覆层障碍 ice/vine：格内有动物（color 非 null），动物照常参与匹配；动物被消除后该格补位，
+//     障碍物留在原格（3 层冰因此需要三次消除）。故这类格在「没有动物」时是**空洞**而不是屏障。
+//   占格障碍 snow/choc：格内没有动物（color 为 null），不参与匹配、不补位、不下落，
+//     把所在列切成上下互不相通的两段（3.4「占据格子，影响下落」）。
+// 该分工记入 DECISIONS.md D014 第 5 条，v1.12 起为宪法明文。
+const BLOCKING_OBSTACLE_TYPES = new Set([OBSTACLE_TYPE.SNOW, OBSTACLE_TYPE.CHOC]);
+
+// 3.4（v1.12）：冻/雪块的受损判定用上下左右四邻域（与 3.1「只允许交换上下左右相邻格子」一致）
+const NEIGHBORS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
 // 少于 3 色时无法保证「无初始三连」，见 createBoard 的兜底说明
 const MIN_COLOR_COUNT = 3;
@@ -50,7 +58,7 @@ export function createBoard(rows, cols, colorCount, obstacles = []) {
     throw new Error(`createBoard: colorCount 至少为 ${MIN_COLOR_COUNT}，收到 ${colorCount}`);
   }
 
-  const blocking = collectPureObstacleKeys(rows, cols, obstacles);
+  const blocking = collectBlockingObstacleKeys(rows, cols, obstacles);
   const maxTries = Math.max(1, CONFIG.ANIMATION_CONFIG.shuffleMaxTries);
 
   let board = null;
@@ -70,9 +78,28 @@ export function swapCells(board, a, b) {
   if (!isInside(board, a.r, a.c) || !isInside(board, b.r, b.c)) {
     throw new Error(`swapCells: 位置越界 (${a.r},${a.c}) ↔ (${b.r},${b.c})`);
   }
-  const temp = board[a.r][a.c];
-  board[a.r][a.c] = board[b.r][b.c];
-  board[b.r][b.c] = temp;
+  const cellA = board[a.r][a.c];
+  const cellB = board[b.r][b.c];
+  board[a.r][a.c] = cellB;
+  board[b.r][b.c] = cellA;
+  // 3.4/3.8：障碍物属于「格子」而不是动物 —— 交换只移动动物，冰块留在原格（重排同理）。
+  swapObstacleFields(cellA, cellB);
+}
+
+/** 3.4/3.8：把两个 cell 的障碍物字段互换，使障碍物在「格对象被搬走」后仍留在原位置。 */
+function swapObstacleFields(cellA, cellB) {
+  const obstacle = cellA.obstacle;
+  const layers = cellA.obstacleLayers;
+  cellA.obstacle = cellB.obstacle;
+  cellA.obstacleLayers = cellB.obstacleLayers;
+  cellB.obstacle = obstacle;
+  cellB.obstacleLayers = layers;
+}
+
+/** 3.4：把某位置的障碍物字段还原成快照值（传入 null 表示该位置没有障碍物）。 */
+function restoreObstacle(cell, snapshot) {
+  cell.obstacle = snapshot ? snapshot.obstacle : null;
+  cell.obstacleLayers = snapshot ? snapshot.obstacleLayers : 0;
 }
 
 /** 4.2：cloneBoard(board) —— 深拷贝，供测试与无效交换的回退使用。 */
@@ -126,8 +153,14 @@ export function refillBoard(board, colorCount, rng = Math.random) {
 
   for (let c = 0; c < cols; c += 1) {
     for (let r = 0; r < rows; r += 1) {
-      if (!isHole(board[r][c])) continue;
+      const slot = board[r][c];
+      if (!isHole(slot)) continue;
       const cell = makeCell(randomColor(colorCount, rng));
+      // 3.4：覆层障碍（冰块）的格子补位时障碍物留在原格 —— 新动物直接生在冰里
+      const keep = slot.obstacle === null || slot.obstacle === undefined
+        ? null
+        : { obstacle: slot.obstacle, obstacleLayers: slot.obstacleLayers };
+      restoreObstacle(cell, keep);
       board[r][c] = cell;
       spawned.push(cell);
     }
@@ -164,6 +197,7 @@ export function resolveCascades(board, colorCount, options = {}) {
   const levels = [];
   const cleared = [];
   const spawned = [];
+  const damaged = [];
 
   for (let level = 1; level <= maxLevels; level += 1) {
     const groups = findAllMatchGroups(board);
@@ -186,16 +220,20 @@ export function resolveCascades(board, colorCount, options = {}) {
       // 外部指定要清除的格子（魔力鸟交换 / 特殊元素组合）；本层新生成的特效不被它消掉
       for (const key of forced) if (!spawnKeys.has(key)) keys.add(key);
     }
+    // 3.4：障碍物受损必须在 clearCells **之前**结算 —— 此时棋盘还是「消除前」的状态，
+    // 才分得清哪些格是动物（冰块由其上的动物被消除而受损，雪块由旁边的动物被消除而受损）。
+    const levelDamaged = damageObstacles(board, keys);
     const removed = clearCells(board, keys);
     const moves = applyGravity(board);
     const created = refillBoard(board, colorCount, rng);
 
     cleared.push(...removed);
     spawned.push(...created);
-    levels.push({ level, groups, cleared: removed, moves, spawned: created, board: cloneBoard(board) });
+    damaged.push(...levelDamaged);
+    levels.push({ level, groups, cleared: removed, damaged: levelDamaged, moves, spawned: created, board: cloneBoard(board) });
   }
 
-  return { cascades: levels.length, levels, cleared, spawned, capped: levels.length >= maxLevels };
+  return { cascades: levels.length, levels, cleared, spawned, damaged, capped: levels.length >= maxLevels };
 }
 
 /** 把 Pos[] 转成 `"r,c"` 键集；忽略非法项（越界或非整数坐标）。 */
@@ -242,6 +280,39 @@ function keyToPos(key) {
   return { r: Number(key.slice(0, comma)), c: Number(key.slice(comma + 1)) };
 }
 
+/**
+ * 3.4（v1.12）：本层「被波及」的障碍物各减 1 层，返回受损明细（ObstacleDamage[]）。
+ * 一层 = 一次被波及：同一个级联层内每格障碍物最多计一次，与该层清掉多少颗相邻动物、
+ * 特效扫过多少格无关（用户批准口径）。判定来源：
+ *   ① 自身坐标在清除集合里的障碍物格 —— 覆层障碍（冰块）由其上的动物被消除而受损，
+ *      占格障碍（雪块）由特效范围覆盖到该格而受损；
+ *   ② 与「本层被消除的动物格」上下左右相邻的**占格障碍**（3.4「消除雪块旁边的小动物」）。
+ */
+function damageObstacles(board, keys) {
+  const hits = new Set();
+  for (const key of keys) {
+    const pos = keyToPos(key);
+    const cell = board[pos.r]?.[pos.c];
+    if (!cell) continue;
+    if (cell.obstacle !== null && cell.obstacle !== undefined) hits.add(key); // ①
+    if (!carriesAnimal(cell)) continue; // ② 只有被消除的动物才谈得上「旁边的雪块」
+    for (const [dr, dc] of NEIGHBORS) {
+      const around = board[pos.r + dr]?.[pos.c + dc];
+      if (!around || !isBarrierCell(around)) continue; // 只有占格障碍靠「旁边消除」受损
+      hits.add(posKey(pos.r + dr, pos.c + dc));
+    }
+  }
+
+  const damaged = [];
+  for (const key of hits) {
+    const pos = keyToPos(key);
+    const type = board[pos.r][pos.c].obstacle; // 必须在减层前读类型：层数归零会清空 obstacle
+    const { cleared, layersRemoved } = damageObstacle(board, pos.r, pos.c, 1);
+    if (layersRemoved > 0) damaged.push({ r: pos.r, c: pos.c, type, layersRemoved, cleared });
+  }
+  return damaged;
+}
+
 /** 按位置集合清除格子，返回被清除格子的快照（不保留棋盘内的活动引用，见 15 节）。 */
 function clearCells(board, keys) {
   const removed = [];
@@ -268,13 +339,27 @@ function compactSegment(board, c, start, end, moves) {
     const cell = board[r][c];
     if (!carriesAnimal(cell)) continue; // 空洞：跳过，等上面的动物压下来
     if (write !== r) {
+      // 3.4/3.8：障碍物属于格子 —— 先把两端位置的障碍物快照下来，搬完动物再各自还原，
+      // 冰块因此不会随动物下落（重排同理：3.8 要求重排不改变障碍物布局）。
+      const destSlot = board[write][c];
+      const destObstacle = { obstacle: destSlot.obstacle, obstacleLayers: destSlot.obstacleLayers };
+      const srcObstacle = { obstacle: cell.obstacle, obstacleLayers: cell.obstacleLayers };
       board[write][c] = cell;
       board[r][c] = makeCell(null);
+      restoreObstacle(board[write][c], destObstacle);
+      restoreObstacle(board[r][c], srcObstacle); // 动物离开的格子若原本带冰，留下「带冰的空洞」等待补位
       moves.push({ id: cell.id, from: { r, c }, to: { r: write, c }, color: cell.color });
     }
     write -= 1;
   }
-  for (let r = write; r >= start; r -= 1) board[r][c] = makeCell(null);
+  for (let r = write; r >= start; r -= 1) {
+    const slot = board[r][c];
+    const keep = slot && slot.obstacle !== null && slot.obstacle !== undefined
+      ? { obstacle: slot.obstacle, obstacleLayers: slot.obstacleLayers }
+      : null;
+    board[r][c] = makeCell(null);
+    restoreObstacle(board[r][c], keep);
+  }
 }
 
 function randomColor(colorCount, rng) {
@@ -284,8 +369,10 @@ function randomColor(colorCount, rng) {
 }
 
 const carriesAnimal = (cell) => Boolean(cell) && cell.color !== null && cell.color !== undefined;
-const isHole = (cell) => Boolean(cell) && !carriesAnimal(cell) && cell.obstacle === null;
-const isBarrierCell = (cell) => Boolean(cell) && !carriesAnimal(cell) && cell.obstacle !== null;
+// 3.4（v1.12）：只有**占格障碍**才是屏障。冰块/藤蔓属覆层障碍，动物被消除后该格是「带障碍物的空洞」，
+// 必须照常补位（否则冰块格会永远空着且把所在列错误地截断 —— Step 11 修掉的潜伏缺陷）。
+const isBarrierCell = (cell) => Boolean(cell) && !carriesAnimal(cell) && BLOCKING_OBSTACLE_TYPES.has(cell.obstacle);
+const isHole = (cell) => Boolean(cell) && !carriesAnimal(cell) && !isBarrierCell(cell);
 
 // ---------------------------------------------------------------------------
 // 内部实现
@@ -338,7 +425,7 @@ function applyObstacles(board, obstacles) {
     const cell = board[spec.r][spec.c];
     cell.obstacle = spec.type;
     cell.obstacleLayers = layers;
-    if (PURE_OBSTACLE_TYPES.has(spec.type)) cell.color = null; // 3.4：雪块/巧克力格内没有动物
+    if (BLOCKING_OBSTACLE_TYPES.has(spec.type)) cell.color = null; // 3.4：占格障碍（雪块/巧克力）格内没有动物
   }
 }
 
@@ -347,10 +434,10 @@ function clampLayers(value, maxLayers) {
   return Math.min(Math.max(layers, 1), maxLayers);
 }
 
-function collectPureObstacleKeys(rows, cols, obstacles) {
+function collectBlockingObstacleKeys(rows, cols, obstacles) {
   const keys = new Set();
   for (const spec of obstacles) {
-    if (!spec || !PURE_OBSTACLE_TYPES.has(spec.type)) continue;
+    if (!spec || !BLOCKING_OBSTACLE_TYPES.has(spec.type)) continue;
     if (spec.r < 0 || spec.c < 0 || spec.r >= rows || spec.c >= cols) continue;
     keys.add(posKey(spec.r, spec.c));
   }

@@ -12,7 +12,7 @@
 // 外观方案经用户批准（深色描边 + 内阴影 + 内嵌图案 + 高光 + 条纹/方向箭头），见 DECISIONS.md D020。
 
 import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
-import { buildSpriteAtlas, roundRectPath } from './candy.js';
+import { buildObstacleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
 import { HUD_RATIO, drawBanner, drawGameOver, drawHud, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
@@ -87,7 +87,8 @@ export function createRenderer() {
       layout,
       cellCss: layout.field.side / CONFIG.BOARD_SIZE,
       chrome: buildChrome(sizePx, dpr, layout),
-      sprites: buildSpriteAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr)
+      sprites: buildSpriteAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr),
+      obstacles: buildObstacleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr) // Step 11：冰块/雪块
     };
   }
 
@@ -97,6 +98,7 @@ export function createRenderer() {
     ctx.clearRect(0, 0, scene.sizePx, scene.sizePx);
     ctx.drawImage(cache.chrome, 0, 0, scene.sizePx, scene.sizePx); // 静态图层：1 次 drawImage
     drawCandies(ctx, cache, scene, field);
+    drawObstacles(ctx, cache, scene, field); // 5.4：冰块覆层要盖在糖果之上
     drawRings(ctx, scene, field);
     if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的明确提示
     drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud });
@@ -181,6 +183,28 @@ function drawCandies(ctx, cache, scene, field) {
       const item = board[r]?.[c];
       if (!item || item.color === null || item.color === undefined) continue;
       blit(ctx, spriteFor(cache, item), field.x + c * cell, field.y + r * cell, cell, scale, alpha);
+    }
+  }
+}
+
+/**
+ * 障碍物层（Step 11；3.4 与 5.4）：冰块是**半透明覆层**（冰里的动物仍要看得见，故画在糖果之上）、
+ * 雪块是**不透明占格**（格内没有动物）。层数角标已在 candy.js 的精灵里烘焙，这里只做贴图：
+ * 每格一次 drawImage，不产生逐帧文本绘制（15 节「单帧 ≤ 200 次」）。
+ * 藤蔓/巧克力属 Step 13，暂无精灵：跳过而不是画出错误外观。
+ */
+function drawObstacles(ctx, cache, scene, field) {
+  const cell = cache.cellCss;
+  const board = scene.board;
+  const cols = CONFIG.BOARD_SIZE;
+  for (let r = 0; r < cols; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const item = board[r][c];
+      if (!item || item.obstacle === null || item.obstacle === undefined) continue;
+      const set = cache.obstacles[item.obstacle];
+      if (!set || set.length === 0) continue;
+      const layers = Math.min(Math.max(Math.trunc(item.obstacleLayers) || 1, 1), set.length);
+      ctx.drawImage(set[layers - 1], field.x + c * cell, field.y + r * cell, cell, cell);
     }
   }
 }

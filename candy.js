@@ -11,7 +11,7 @@
 //   3) 修饰性底色透明度 ≤ 0.1（本文件的图案/高光属有意义的造型，不在此列）。
 // 色盲友好（5.4）：颜色 ↔ 形状 ↔ 内嵌图案三重区分，形状与图案都由 color 索引唯一决定。
 
-import { DIRECTION } from './config.js';
+import { CONFIG, DIRECTION } from './config.js';
 
 export const CELL_RADIUS_RATIO = 0.36; // 糖果半径 / 格子边长（5.2 正方形棋盘）
 const RIM_MIX = 0.45; // 描边/暗边 = base 与黑的混合比例
@@ -27,6 +27,33 @@ const MAGIC_RING_RATIO = 0.82; // 彩虹环半径 / 糖果半径
 const MAGIC_RING_WIDTH = 0.22; // 彩虹环线宽 / 糖果半径
 const MAGIC_RING_SPIN = -Math.PI / 2; // 让第一段彩虹从正上方开始（观感更稳）
 const MAGIC_CORE_RATIO = 0.24; // 白色中心点半径 / 糖果半径
+
+// 障碍物外观（Step 11；5.4「冰块半透明叠加、雪块白色覆盖」+ 层数显示）。
+// 冰块的半透明是功能性的（要让冰里的动物可辨），不属于红线 3 的修饰性底色。
+const ICE_INSET_RATIO = 0.06; // 冰块覆层内缩 / 格子边长
+const ICE_RADIUS_RATIO = 0.22; // 覆层圆角 / 覆层边长
+const ICE_EDGE_WIDTH_RATIO = 0.025; // 覆层描边线宽 / 格子边长
+const ICE_CRACK_WIDTH_RATIO = 0.02; // 裂纹线宽 / 格子边长
+const ICE_FILL_COLOR = 'rgba(186, 232, 255, 0.35)'; // 0.55 会把红糖果染成粉色（色相 358→330），0.35 仍能读出糖色
+const ICE_EDGE_COLOR = 'rgba(255, 255, 255, 0.92)';
+const ICE_CRACK_COLOR = 'rgba(255, 255, 255, 0.8)';
+// 裂纹位置固定（相对覆层的比例坐标），避免每局观感抖动
+// 三条裂纹都避开格心：格心是玩家判断「冰里是哪颗动物」的关键位置，白色裂纹压上去会让色相失真
+const ICE_CRACKS = [
+  [[0.14, 0.12], [0.32, 0.4]],
+  [[0.68, 0.16], [0.88, 0.48]],
+  [[0.2, 0.7], [0.42, 0.92]]
+];
+const SNOW_INSET_RATIO = 0.04; // 雪块内缩 / 格子边长（比冰块更满，强调「占格」）
+const SNOW_FILL_COLOR = '#f4f8ff';
+const SNOW_EDGE_COLOR = '#c6d6ee';
+const SNOW_MOUND_Y_RATIO = 0.72; // 堆积弧带中心的相对高度
+const SNOW_MOUND_COLOR = 'rgba(148, 174, 212, 0.35)';
+const BADGE_X_RATIO = 0.78; // 层数角标圆心（右上角）
+const BADGE_Y_RATIO = 0.24;
+const BADGE_R_RATIO = 0.15;
+const BADGE_FILL_COLOR = 'rgba(36, 31, 58, 0.85)';
+const BADGE_TEXT_COLOR = '#ffffff';
 
 // 颜色索引（0-5）→ 调色板。顺序对应 CONFIG.COLOR_NAMES，改动顺序等于改动视觉语义。
 export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff', '#a06bff'];
@@ -67,6 +94,95 @@ export function buildSpriteAtlas(cellCss, dpr) {
       magic: bake((ctx, cx, cy, r) => paintMagicCandy(ctx, cx, cy, r))
     };
   });
+}
+
+/**
+ * 障碍物精灵图集（Step 11，5.4「冰块半透明叠加、雪块白色覆盖」+ 清晰的层数显示）。
+ * 返回 { ice: [1 层, 2 层, …], snow: [...] }，索引 = layers − 1；每张正好覆盖一格。
+ *   ice  —— 半透明覆层，画在**糖果之上**（冰里的动物仍要看得见）；
+ *   snow —— 不透明占格，其格内没有动物（3.4），直接盖住格位槽。
+ * 层数角标直接烘焙进精灵：每帧仍是「一格一次 drawImage」，不产生额外文本绘制（15 节 ≤200 次）。
+ * 两个角标都固定在右上角，便于像素取证与观感稳定。
+ */
+export function buildObstacleAtlas(cellCss, dpr) {
+  const px = Math.max(8, Math.round(cellCss * dpr));
+  const bake = (paint) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = px;
+    canvas.height = px;
+    paint(canvas.getContext('2d'), px);
+    return canvas;
+  };
+  const ice = [];
+  for (let layers = 1; layers <= CONFIG.OBSTACLE_CONFIG.ice.maxLayers; layers += 1) {
+    ice.push(bake((ctx, size) => paintIceOverlay(ctx, size, layers)));
+  }
+  const snow = [];
+  for (let layers = 1; layers <= CONFIG.OBSTACLE_CONFIG.snow.maxLayers; layers += 1) {
+    snow.push(bake((ctx, size) => paintSnowBlock(ctx, size, layers)));
+  }
+  return { ice, snow };
+}
+
+/**
+ * 冰块覆层：半透明冰蓝底 + 白色描边 + 两道固定的裂纹 + 右上角层数角标。
+ * 5.4 要求「半透明叠加」，故本图层的透明度是**功能性**的（让冰里的动物可辨），
+ * 不属于红线 3 的「修饰性底色」。裂纹位置固定，避免每局观感抖动。
+ */
+function paintIceOverlay(ctx, size, layers) {
+  const inset = size * ICE_INSET_RATIO;
+  const box = size - inset * 2;
+  roundRectPath(ctx, inset, inset, box, box, box * ICE_RADIUS_RATIO);
+  ctx.fillStyle = ICE_FILL_COLOR;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, size * ICE_EDGE_WIDTH_RATIO);
+  ctx.strokeStyle = ICE_EDGE_COLOR;
+  ctx.stroke();
+
+  ctx.strokeStyle = ICE_CRACK_COLOR;
+  ctx.lineWidth = Math.max(1, size * ICE_CRACK_WIDTH_RATIO);
+  for (const [[x0, y0], [x1, y1]] of ICE_CRACKS) {
+    ctx.beginPath();
+    ctx.moveTo(inset + box * x0, inset + box * y0);
+    ctx.lineTo(inset + box * x1, inset + box * y1);
+    ctx.stroke();
+  }
+  paintLayerBadge(ctx, size, layers);
+}
+
+/** 雪块：白色不透明占格 + 冷色描边 + 底部一点点堆积感的内阴影 + 右上角层数角标。 */
+function paintSnowBlock(ctx, size, layers) {
+  const inset = size * SNOW_INSET_RATIO;
+  const box = size - inset * 2;
+  roundRectPath(ctx, inset, inset, box, box, box * ICE_RADIUS_RATIO);
+  ctx.fillStyle = SNOW_FILL_COLOR;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, size * ICE_EDGE_WIDTH_RATIO);
+  ctx.strokeStyle = SNOW_EDGE_COLOR;
+  ctx.stroke();
+
+  // 内阴影：不用阴影模糊 API（红线 1），改用底部半透明弧带模拟堆积
+  ctx.beginPath();
+  ctx.ellipse(size / 2, inset + box * SNOW_MOUND_Y_RATIO, box * 0.32, box * 0.16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = SNOW_MOUND_COLOR;
+  ctx.fill();
+  paintLayerBadge(ctx, size, layers);
+}
+
+/** 右上角层数角标：深色圆底 + 白色数字（5.4 的「清晰层数显示」）。 */
+function paintLayerBadge(ctx, size, layers) {
+  const cx = size * BADGE_X_RATIO;
+  const cy = size * BADGE_Y_RATIO;
+  const radius = size * BADGE_R_RATIO;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = BADGE_FILL_COLOR;
+  ctx.fill();
+  ctx.fillStyle = BADGE_TEXT_COLOR;
+  ctx.font = `bold ${Math.round(radius * 1.5)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(layers), cx, cy);
 }
 
 /**

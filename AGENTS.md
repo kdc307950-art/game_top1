@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.11
+> 版本：v1.12
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.11 → v1.12 关键变更）
+
+本次修订经**用户明确批准**，为 Step 11（冰块与雪块）补齐 3.4 的规则口径、3.5 的计分口径，以及三条纯追加契约。不改变任何既有玩法行为与数值。
+
+1. **3.4 补全冰块与雪块口径**：冰块内的动物被消除后，该格**从上方补位并继续被冰块覆盖**（冰层归零后冰块消失），因此 3 层冰需要三次消除；**同一级联层内每格障碍物最多减少一层** —— 无论该层有多少颗相邻动物被消除、特效扫过多少格，一次「被波及」就是一层。
+2. **3.4 明确两类障碍**：`ice`/`vine` 是**覆层障碍**（格内有动物，动物参与匹配、可移动；动物被消除后该格补位而障碍物保留）；`snow`/`choc` 是**占格障碍**（格内没有动物，不参与匹配、不补位、不下落，把所在列切成上下互不相通的两段）。这使 4.1 的 `color` 语义与 D014 第 5 条的分工成为明文，并修正「冰块格在动物被消除后被误判为屏障」这一潜伏缺陷。
+3. **3.5 明确障碍物计分口径**：层数分**另算、不参与特效倍数** —— 单层结算分 = 动物数 × 10 × 特效倍数 + 连消加分 + 障碍物层数分；冰块连消（同一局中第 n ≥ 2 层清掉冰块）额外加 `(n − 1) × 1000`，与普通连消的 +30/档并存。
+4. **4.2 三条纯追加**：`Obstacle = { type, layers }`（`obstacles.createObstacle` 的返回值，此前只有名字）；`ObstacleDamage = { r, c, type, layersRemoved, cleared }` 以及 `ResolveLevel.damaged` / `ResolveResult.damaged`（逐层障碍物受损明细，供计分与 UI 显示层数变化）；`LevelScore.obstacle`（该层障碍物得分，含冰块连消加分）。三者的缺省行为与既有调用完全一致。
 
 ---
 
@@ -349,6 +360,13 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 
 障碍物不参与三消匹配，但占据格子，影响下落和交换。障碍物只能通过相邻位置的消除来被动减少层数。藤蔓中的动物不能被交换，但可以被相邻消除波及。
 
+障碍物分两类（v1.12 明文，实现见 `board.js` 的洞/屏障判定）：
+
+- **覆层障碍**（`ice` / `vine`）：格内有动物，动物照常参与匹配、可被交换（藤蔓例外，见上）。动物被消除后该格**从上方补位**，障碍物本身留在原格 —— 冰块因此可以被反复消除，3 层冰需要三次消除；冰层归零时冰块消失。
+- **占格障碍**（`snow` / `choc`）：格内没有动物，不参与匹配、不补位、不下落，把所在列切成上下互不相通的两段（3.4「占据格子，影响下落」）。
+
+**一层 = 一次「被波及」**：同一个级联层内，每格障碍物最多减少一层 —— 无论该层有多少颗相邻动物被消除、特效扫过多少格，都只算一次。冰块由其上的动物被消除而受损；雪块由**相邻（上下左右）**动物被消除、或被特效波及（特效范围覆盖到该格）而受损。
+
 ### 3.5 计分规则
 
 基础消除：每个动物 10 分。
@@ -370,6 +388,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 连续消除（连消）加分：**第 1 次消除（交换本身造成的消除）不计连消**；自第 2 层起每次递增一档，第 n 层（n ≥ 2）加 `(n − 1) × 30` 分，依次为 30、60、90、120。冰块连消每次 +1000 分，同样自第 2 层起依次叠加。
 
 剩余步数转化：关卡结束时，每剩余一步约转化为 30 分连续消除加分。
+
+障碍物计分（v1.12 明确）：层数分**另算、不参与特效倍数** —— 单层结算分 = 动物数 × 10 × 特效倍数 + 连消加分 + 障碍物层数分。冰块连消（同一局中第 n ≥ 2 层清掉冰块）额外加 `(n − 1) × 1000`，与普通连消的 +30/档并存（即 3.5 原文「冰块连消每次 +1000 分，同样自第 2 层起依次叠加」的落地口径）。
 
 > 以上所有数值均为项目约定值，集中在 `config.js` 的 `SCORE_CONFIG` 中定义。修改数值必须同步更新本表与附录 B。
 
@@ -465,6 +485,7 @@ ResolveResult = {
   cascades: number,
   levels: ResolveLevel[],
   cleared: Cell[],                 // 展平后的被消除格子（含 color，供计分）
+  damaged: ObstacleDamage[],       // 展平后的障碍物受损明细（v1.12 补，供 3.5 层数分与 UI 显示层数变化）
   spawned: Cell[],
   capped: boolean,                 // 是否触发级联层数上限（上限 = 棋盘格数，见 ROADMAP Step 3）
   scoreDelta: number,
@@ -481,8 +502,13 @@ DeadlockResolution = {
   after: Board        // 重排后快照
 }
 
-ResolveLevel = { level: number, groups: MatchGroup[], cleared: Cell[], moves: MoveRecord[], spawned: Cell[], board: Board }
-LevelScore   = { level: number, base: number, multiplier: number, bonus: number, gained: number }
+ResolveLevel = { level: number, groups: MatchGroup[], cleared: Cell[], moves: MoveRecord[], spawned: Cell[], damaged: ObstacleDamage[], board: Board }
+LevelScore   = { level: number, base: number, multiplier: number, bonus: number, obstacle: number, gained: number }
+// v1.12：LevelScore.gained = base × multiplier + bonus + obstacle（3.5 的层数分另算，见上文 3.5）。
+
+// v1.12 补：3.4 的「一层 = 一次被波及」需要把受损结果对上层公开，既用于 3.5 的层数分，也用于 UI 显示层数变化。
+Obstacle       = { type: 'ice' | 'snow' | 'vine' | 'choc', layers: number }   // obstacles.createObstacle 的返回值
+ObstacleDamage = { r: number, c: number, type: string, layersRemoved: number, cleared: boolean }
 
 GameSnapshot = {
   levelId: number, rows: number, cols: number, colorCount: number,
@@ -829,6 +855,7 @@ node tests/integration.test.js
 | v1.9 | 2026-09-20 | Agent  | 收尾扩展前 Bug Audit：修正第 9 节与第 17 节的旧门禁引用；明确结束日志按步数用尽/死局重排失败区分；明确极窄视口棋盘尺寸服从可用空间，避免最小尺寸造成溢出 | 8.4、9、17、`app.js`、`render.js` |
 | v1.10 | 2026-09-20 | Agent（用户批准） | 登记「路线图先行」的既成事实（ROADMAP v1.10 已先行引入 0.1-0.8），使两文件头部版本一致并关闭 P3-1；`candy.js` 职责补全为「条纹 / 包装 / 魔力鸟特效」（Step 8 起它还要画包装，Step 9 起为魔力鸟）；一致性脚本恢复「头部版本必须相等」的严格判定 | 2.2、2.3、11、`_build/consistency_check.py` |
 | v1.11 | 2026-09-20 | Agent（用户批准） | Step 9 魔力鸟的规则口径与契约：3.2 补「清全屏该色（含被交换格与自身）、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被其它特效波及时不额外触发」；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）；ROADMAP 头部同步升到 v1.11 | 3.2、4.2、4.3、11、`ROADMAP.md` |
+| v1.12 | 2026-09-20 | Agent（用户批准） | Step 11 冰块与雪块的口径与契约：3.4 补「冰块内的动物被消除后该格补位且冰块保留（3 层冰需三次消除）」「同一级联层内每格障碍物最多 −1 层」「覆层障碍（ice/vine）与占格障碍（snow/choc）两类」，并修正「冰块格在动物被消除后被误判为屏障」的潜伏缺陷；3.5 补「层数分另算、不参与特效倍数」「冰块连消 (n−1)×1000 与普通连消并存」；4.2 三条纯追加（`Obstacle`、`ObstacleDamage` 与 `ResolveLevel/ResolveResult.damaged`、`LevelScore.obstacle`）；ROADMAP 头部同步升到 v1.12 | 3.4、3.5、4.2、11、`ROADMAP.md` |
 
 ---
 

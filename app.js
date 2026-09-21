@@ -8,10 +8,11 @@
 //   - 5.4：逻辑先全部算完（game.trySwap 同步结算），再按时间线播放快照 —— 动画不阻塞逻辑更新；
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
 
-import { CELL_TYPE, CONFIG, GOAL_TYPE, STORAGE_KEYS } from './config.js';
+import { CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
 import { createGame, getState as getGameState, trySwap as gameTrySwap } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
+import { buildDemoLevelConfig } from './level.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
 const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -95,7 +96,7 @@ function init() {
 /** 开新一局：重建 GameState 并复位视图侧状态。 */
 function startNewGame() {
   timeline.stop(); // 防御性：正常路径下不会在回放中重开
-  view.game = createGame(buildLevelConfig());
+  view.game = createGame(buildDemoLevelConfig());
   view.newRecord = false;
   view.selected = null;
   view.firstGroups = [];
@@ -112,19 +113,8 @@ function startNewGame() {
   if (view.sizePx > 0) drawFrame();
 }
 
-/** 4.4 的 LevelConfig：数值全部取自 config.js 已登记的键（无需改附录 B）。 */
-function buildLevelConfig() {
-  return {
-    id: 1,
-    rows: CONFIG.BOARD_SIZE,
-    cols: CONFIG.BOARD_SIZE,
-    colorCount: CONFIG.COLOR_COUNT,
-    steps: CONFIG.LEVEL_DEFAULTS.steps,
-    goal: { type: GOAL_TYPE.SCORE, target: CONFIG.LEVEL_DEFAULTS.starThresholds[0] },
-    starThresholds: [...CONFIG.LEVEL_DEFAULTS.starThresholds],
-    obstacles: []
-  };
-}
+// 4.4 的 LevelConfig 由 level.js 提供（2.3：关卡配置属 level.js 的职责；
+// Step 11 加障碍物后 app.js 越过第 6 节的 300 行，配置表因此回到 level.js）。
 
 /** 应用尺寸（5.2：后备缓冲按 DPR 适配，棋盘保持正方形）。 */
 function applyLayout() {

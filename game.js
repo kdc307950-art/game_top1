@@ -10,7 +10,7 @@
 //   （无效交换回退且不扣步数、只有有效交换才扣步数）与 3.5 的计分接入。
 // 【Step 6】死局检测与重排（3.8）；【Step 7-10】特殊元素与组合（3.2/3.3）。
 
-import { CELL_TYPE, CONFIG, GOAL_TYPE } from './config.js';
+import { CELL_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
 import {
   cloneBoard,
   createBoard,
@@ -20,6 +20,8 @@ import {
 // Step 6.1：可移动性/死局检测/重排来自 shuffle.js（与 board.js 的棋盘机制分离）
 import { hasPossibleMove, isCellMovable, shuffleBoard } from './shuffle.js';
 import { findAllMatchGroups, matchShapeToSpecial } from './match.js';
+// Step 11：障碍物层数分（3.5「冰块/雪块每层 1000 分」，另算、不参与特效倍数）
+import { getObstacleScore } from './obstacles.js';
 // Step 9：魔力鸟的全屏同色目标集合（v1.11 登记的纯追加函数）
 // Step 10：两颗相邻特效交换的组合效果（3.3 / 4.3.9）
 import { COMBO_TYPES, getMagicTargets, resolveSpecialCombo } from './special.js';
@@ -122,9 +124,10 @@ export function resolveBoard(state, options = {}) {
     const base = calcBaseScore(level.cleared);
     const multiplier = multiplierForLevel(level); // 3.5：条纹糖果（4 消/触发）= 1.5
     const bonus = calcCascadeBonus(level.level, base);
-    const gained = calcFinalScore(base, multiplier, bonus);
+    const obstacle = obstacleScoreForLevel(level); // 3.5（v1.12）：层数分另算，不乘倍数
+    const gained = calcFinalScore(base, multiplier, bonus) + obstacle;
     scoreDelta += gained;
-    levelScores.push({ level: level.level, base, multiplier, bonus, gained });
+    levelScores.push({ level: level.level, base, multiplier, bonus, obstacle, gained });
   }
 
   state.level.currentScore += scoreDelta;
@@ -149,6 +152,25 @@ function ensurePlayable(state) {
     before,
     after: cloneBoard(state.board)
   };
+}
+
+/**
+ * 3.5（v1.12）：本层障碍物得分 = 层数分（冰块/雪块每层 1000，**另算、不参与特效倍数**）
+ * + 冰块连消加分（第 n ≥ 2 层清掉冰块时额外 (n − 1) × cascadeIceStep，与普通连消的 30/档并存）。
+ * 层数分只按「本层实际减掉的层数」计，故同层多次波及同一格不会重复计分（一层 = 一次被波及）。
+ */
+function obstacleScoreForLevel(level) {
+  const damaged = Array.isArray(level.damaged) ? level.damaged : [];
+  let score = 0;
+  let iceLayers = 0;
+  for (const hit of damaged) {
+    score += getObstacleScore(hit.type, hit.layersRemoved);
+    if (hit.type === OBSTACLE_TYPE.ICE) iceLayers += hit.layersRemoved;
+  }
+  if (iceLayers > 0 && level.level >= 2) {
+    score += (level.level - 1) * CONFIG.SCORE_CONFIG.cascadeIceStep;
+  }
+  return score;
 }
 
 /**

@@ -10,9 +10,38 @@
 // consumeStep 不在 4.2 的清单里，属**契约扩展**：宪法 2.3 规定 level.js 的职责包含
 // 「步数消耗」，而 4.2 未给出对应签名，故在此登记（见 D016）。
 
-import { CONFIG, GOAL_TYPE } from './config.js';
+import { CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
 
 const GOAL_TYPES = new Set(Object.values(GOAL_TYPE));
+
+/**
+ * Step 11：当前可玩关卡的配置（4.4 的 LevelConfig）。
+ * 为什么放在 level.js 而不是 app.js：2.3 规定本模块的职责就是「关卡配置、目标追踪、步数消耗、三星判定」；
+ * Step 11 加入障碍物后 app.js 的纯代码行数越过第 6 节的 300 行上限，故把配置表挪回它该在的地方
+ * （顺带为 Step 12 的关卡目标/三星评分留出位置）。数值仍全部取自 config.js 已登记的键。
+ *
+ * obstacles 是一组**演示用**布局：4 颗 2 层冰块 + 2 块 3 层雪块 —— 覆盖覆层与占格两类障碍，
+ * 层数也都留出「需要多次消除」的观感又不至于 30 步内破不掉。
+ */
+export function buildDemoLevelConfig() {
+  return {
+    id: 1,
+    rows: CONFIG.BOARD_SIZE,
+    cols: CONFIG.BOARD_SIZE,
+    colorCount: CONFIG.COLOR_COUNT,
+    steps: CONFIG.LEVEL_DEFAULTS.steps,
+    goal: { type: GOAL_TYPE.SCORE, target: CONFIG.LEVEL_DEFAULTS.starThresholds[0] },
+    starThresholds: [...CONFIG.LEVEL_DEFAULTS.starThresholds],
+    obstacles: [
+      { r: 2, c: 2, type: OBSTACLE_TYPE.ICE, layers: 2 },
+      { r: 2, c: 5, type: OBSTACLE_TYPE.ICE, layers: 2 },
+      { r: 5, c: 2, type: OBSTACLE_TYPE.ICE, layers: 2 },
+      { r: 5, c: 5, type: OBSTACLE_TYPE.ICE, layers: 2 },
+      { r: 3, c: 3, type: OBSTACLE_TYPE.SNOW, layers: 3 },
+      { r: 4, c: 4, type: OBSTACLE_TYPE.SNOW, layers: 3 }
+    ]
+  };
+}
 
 /**
  * 4.2 / 4.4：createLevel(config) —— 校验并构造关卡状态。
