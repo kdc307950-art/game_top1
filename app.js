@@ -12,17 +12,21 @@ import { CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
 import { createGame, getState as getGameState, trySwap as gameTrySwap } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
-import { buildDemoLevelConfig } from './level.js';
+import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
+import { LEVEL_COUNT, getLevelConfig } from './level.js';
+import { createStorage } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
 const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
+// v1.16：所有 localStorage 读写都经过 storage.js（唯一允许碰存档的模块），日志用本文件的 log
+const storage = createStorage((level, message) => log(level, message));
 const MIN_LOG_RANK = LOG_RANK.info;
 const MAX_DPR = 3; // 后备缓冲上限（与 render.js 的绘制预算一致）
 
 const renderer = createRenderer();
 const timeline = createTimeline({
   onFrame: (phase, progress) => {
-    view.hudScore = hudScoreAt(phase.levelIndex); // 连消的收益逐层显示
+    view.hudScore = view.playback ? hudScoreAt(view.playback, phase.levelIndex) : view.game.level.currentScore; // 连消收益逐层显示
     drawFrame(phase, progress);
   },
   onDone: finishTimeline
@@ -36,6 +40,12 @@ const view = {
   best: 0, // 最高分（localStorage，属 UI 侧状态）
   newRecord: false,
   stars: 0, // 3.7：本局通关星级（结束面板用；失败时为 0）
+  levelId: 1, // 当前关卡 id（Step 12.2 的选关与「下一关」流转）
+  screen: 'playing', // 'playing' | 'select'：选关界面与对局界面
+  levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
+  levelRects: [], // 选关界面的每格命中矩形（由 render.js 返回）
+  nextRect: null, // 结束面板的「下一关」
+  selectRect: null, // 结束面板的「选关」
   sizePx: 0,
   dpr: 1,
   layout: null, // render.js 的 boardRect(sizePx) 结果（prepare 时复用）
@@ -66,7 +76,8 @@ function init() {
 
   view.canvas = canvas;
   view.ctx = ctx;
-  view.best = readBestScore();
+  view.best = storage.readBestScore();
+  view.levelStars = storage.readLevelStars(); // Step 12.2：载入每关星级（选关界面用）
   view.systemReducedMotion = prefersReducedMotion();
   startNewGame();
   applyLayout();
@@ -97,7 +108,8 @@ function init() {
 /** 开新一局：重建 GameState 并复位视图侧状态。 */
 function startNewGame() {
   timeline.stop(); // 防御性：正常路径下不会在回放中重开
-  view.game = createGame(buildDemoLevelConfig());
+  view.game = createGame(getLevelConfig(view.levelId));
+  view.screen = 'playing';
   view.newRecord = false;
   view.stars = 0;
   view.selected = null;
@@ -107,11 +119,7 @@ function startNewGame() {
   view.restartRect = null;
 
   const snapshot = getGameState(view.game);
-  log(
-    'info',
-    `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，` +
-      `步数 ${snapshot.remainingSteps}，最高分 ${view.best}`
-  );
+  log('info', `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，步数 ${snapshot.remainingSteps}，最高分 ${view.best}`);
   if (view.sizePx > 0) drawFrame();
 }
 
@@ -158,7 +166,25 @@ function onSwipe({ x0, y0, step }) {
 
 function onTap({ x1, y1 }) {
   if (view.game.gameOver) {
-    if (hitTest(view.canvas, x1, y1, view.restartRect)) startNewGame();
+    if (view.screen === 'select') {
+    const tile = view.levelRects.find((rect) => hitTest(view.canvas, x1, y1, rect));
+    if (tile) {
+      view.levelId = Math.min(Math.max(Math.round(tile.id), 1), LEVEL_COUNT);
+      startNewGame();
+    }
+    return;
+  }
+  if (hitTest(view.canvas, x1, y1, view.nextRect)) {
+    view.levelId = Math.min(view.levelId + 1, LEVEL_COUNT); // 通关后的「下一关」
+    startNewGame();
+    return;
+  }
+  if (hitTest(view.canvas, x1, y1, view.selectRect)) {
+    view.screen = 'select'; // Step 12.2：只切视图状态，不重置当前对局
+    drawFrame();
+    return;
+  }
+  if (hitTest(view.canvas, x1, y1, view.restartRect)) startNewGame();
     else log('info', '本局已结束：点按「再来一局」开始新一局');
     return;
   }
@@ -227,18 +253,18 @@ function attemptSwap(a, b) {
   }
   // Step 7/8 的日志摘要：本步触发了多少颗特殊元素（4.3.8），配合上面的形状列表即可核对 3.2 的生成
   const specialsTriggered = result.resolve.cleared.filter((cell) => cell.type !== CELL_TYPE.NORMAL).length;
+  const shapes = firstLevelGroups.map((group) => group.shape).join(', ');
+  const total = result.scoreDelta + scoreBefore;
   log(
     'info',
-    `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${firstLevelGroups.length} 组匹配` +
-      `[${firstLevelGroups.map((group) => group.shape).join(', ')}]，级联 ${result.cascades} 层，` +
-      `共消除 ${result.resolve.cleared.length} 格，新生成 ${result.resolve.spawned.length} 格，` +
-      `触发特效 ${specialsTriggered}，` +
-      `本步 +${result.scoreDelta} 分（本局 ${result.scoreDelta + scoreBefore}），剩余步数 ${result.stepsLeft}`
+    `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${firstLevelGroups.length} 组匹配[${shapes}]，` +
+      `级联 ${result.cascades} 层，共消除 ${result.resolve.cleared.length} 格，新生成 ${result.resolve.spawned.length} 格，` +
+      `触发特效 ${specialsTriggered}，本步 +${result.scoreDelta} 分（本局 ${total}），剩余步数 ${result.stepsLeft}`
   );
 
   // 3.8：死局与重排的结果（成功：提示 + 重排动画；失败：结束流程，不消耗步数）
   const deadlock = result.resolve.deadlock;
-  view.endReason = 'steps';
+  view.endReason = view.game.level.completed ? 'won' : 'steps';
   if (view.game.level.completed) {
     // 3.6 / 3.7：通关优先于「步数用尽」——最后一步达成目标也算通关（此时剩余步数已被转化）
     view.endReason = 'won';
@@ -271,26 +297,15 @@ function attemptSwap(a, b) {
  */
 function startTimeline(result, scoreBefore) {
   const levelTotal = result.resolve.levelScores.reduce((sum, item) => sum + item.gained, 0);
+  // tailBonus = 3.5 的剩余步数转化（关卡级一次性结算，不在逐层明细里）；不记下来 HUD 会先少一段再跳回去
   view.playback = {
     scoreBefore,
     levelScores: result.resolve.levelScores,
     pendingGameOver: result.gameOver,
-    // 通关时 3.5 的剩余步数转化是「关卡级一次性结算」，不在逐层明细里；
-    // 单独记下尾款，HUD 才不会在回放中少一段再突然跳回去
     tailBonus: result.scoreDelta - levelTotal
   };
   const motion = motionDurations(view.systemReducedMotion);
   timeline.play(buildPhases(result.resolve, result.afterSwap, motion));
-}
-
-/** 播放期间 HUD 分数逐层累加；终值与 GameState 的总分一致。 */
-function hudScoreAt(levelIndex) {
-  const playback = view.playback;
-  if (!playback) return view.game.level.currentScore;
-  let gained = 0;
-  for (let i = 0; i <= levelIndex && i < playback.levelScores.length; i += 1) gained += playback.levelScores[i].gained;
-  const tail = levelIndex >= playback.levelScores.length - 1 ? playback.tailBonus : 0;
-  return playback.scoreBefore + gained + tail;
 }
 
 function finishTimeline() {
@@ -306,19 +321,6 @@ function finishTimeline() {
 // 绘制：把状态整理成 render.js 需要的「场景描述」
 // ---------------------------------------------------------------------------
 
-/** 目标的一句话摘要（只用于日志，让「这一关要干什么」在控制台里可读）。 */
-function describeGoal(goal) {
-  if (!goal) return '无目标';
-  if (goal.type === 'score') return `分数达到 ${goal.target}`;
-  if (goal.type === 'clearIce') return `消除 ${goal.target} 层冰块`;
-  if (goal.type === 'collect') return `收集 ${Object.entries(goal.targets).map(([k, v]) => `${k}×${v}`).join(' + ')}`;
-  const parts = [];
-  if (goal.score !== undefined) parts.push(`分数 ${goal.score}`);
-  if (goal.clearIce !== undefined) parts.push(`冰块 ${goal.clearIce} 层`);
-  if (goal.collect) parts.push(`收集 ${Object.entries(goal.collect).map(([k, v]) => `${k}×${v}`).join(' + ')}`);
-  return `混合目标（${parts.join(' + ')}）`;
-}
-
 function drawFrame(entry = null, progress = 1) {
   if (view.sizePx === 0) return;
   const scene = {
@@ -330,6 +332,8 @@ function drawFrame(entry = null, progress = 1) {
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
     banner: entry && entry.phase === 'shuffle' ? entry.banner : null, // 5.5：重排前给出明确提示
+    // Step 12.2：选关界面（只画 HUD + 关卡网格，棋盘层跳过）
+    select: view.screen === 'select' ? { count: LEVEL_COUNT, stars: view.levelStars } : null,
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,
       steps: view.game.level.remainingSteps,
@@ -347,11 +351,13 @@ function drawFrame(entry = null, progress = 1) {
             best: view.best,
             newRecord: view.newRecord,
             reason: view.endReason,
-            stars: view.stars
+            stars: view.stars,
+            hasNext: view.levelId < LEVEL_COUNT // 通关且不是最后一关 → 显示「下一关」
           }
         : null
   };
-  view.restartRect = renderer.draw(view.ctx, scene).restartRect;
+  const hit = renderer.draw(view.ctx, scene);
+  ({ restartRect: view.restartRect, nextRect: view.nextRect, selectRect: view.selectRect, levelRects: view.levelRects } = hit);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,18 +368,19 @@ function drawFrame(entry = null, progress = 1) {
 function finishGame() {
   const snapshot = getGameState(view.game);
   const isRecord = snapshot.currentScore > view.best;
-  const endReasonText =
-    view.endReason === 'won'
-      ? `关卡完成（${snapshot.stars} 星）`
-      : view.endReason === 'stuck'
-        ? '无可消除组合（重排失败）'
-        : '步数用尽';
+  const reasonText = { won: `关卡完成（${snapshot.stars} 星）`, stuck: '无可消除组合（重排失败）', steps: '步数用尽' };
+  const endReasonText = reasonText[view.endReason] ?? reasonText.steps;
   if (isRecord) {
     view.best = snapshot.currentScore;
-    writeBestScore(view.best);
+    storage.writeBestScore(view.best);
   }
   view.newRecord = isRecord;
   view.stars = snapshot.stars; // 3.7：结束面板据此画星星（未通关时为 0）
+  if (snapshot.won) {
+    // Step 12.2：每关只记录最佳星级（重玩更好才覆盖），并立刻落盘（v1.16：落盘在 storage.js）
+    const starRecord = storage.recordLevelStars(view.levelStars, view.levelId, snapshot.stars);
+    log('info', `第 ${view.levelId} 关星级记录为 ${starRecord.best} 星（${starRecord.updated ? '更新' : '沿用旧纪录'}，已写入 localStorage）`);
+  }
   log(
     'info',
     `${view.endReason === 'won' ? '关卡结果' : '游戏结束'}：${endReasonText}。本局得分 ${snapshot.currentScore}，` +
@@ -383,27 +390,6 @@ function finishGame() {
   drawFrame();
 }
 
-/** 读取最高分；localStorage 不可用（隐私模式等）时回落到 0，不让整局崩掉。 */
-function readBestScore() {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEYS.BEST_SCORE);
-    const value = Number.parseInt(raw ?? '', 10);
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  } catch (error) {
-    log('warn', `读取最高分失败（localStorage 不可用）：${error.message}`);
-    return 0;
-  }
-}
-
-function writeBestScore(score) {
-  try {
-    window.localStorage.setItem(STORAGE_KEYS.BEST_SCORE, String(score));
-    return true;
-  } catch (error) {
-    log('warn', `写入最高分失败：${error.message}`);
-    return false;
-  }
-}
 
 function isInsideBoard(board, r, c) {
   return Boolean(board) && r >= 0 && c >= 0 && r < board.length && c < board[r].length;

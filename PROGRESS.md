@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-09-20（Step 12.2：50 关落地 + 选关界面 + 星级存档 + 代码表巡检 —— 完成并验证）
+
+- **50 关进 `level.js`**：`PATTERNS`（10 个命名图案）+ `LEVEL_SPECS`（50 关规格）+ `getLevelConfig(id)`（组装 4.4 的 `LevelConfig`、展开障碍物、派生步数、推出三星阈值）+ `LEVEL_COUNT`。**代码表由 `LEVELS.md` 生成**（`_build/gen-level-table.mjs`），并由 `_build/check-level-table.mjs` 反向逐项巡检 → PASS。
+- **选关界面**：`hud.js` 的 `drawLevelSelect`（10×5 网格、关卡号 + 星级、返回命中矩形）；`render.js` 支持 `scene.select`（只画 HUD + 网格）；`app.js` 持有 `screen: 'playing' | 'select'`。
+- **通关流转**：结束面板按状态给按钮 —— 通关有「下一关」（最后一关除外）与「选关」，失败有「重试」与「选关」；点按关卡格直接进入该关。
+- **每关星级存档**：`STORAGE_KEYS.LEVEL_STARS`，每关只留最好成绩；读写集中在新增的 `storage.js`（宪法 v1.16：唯一允许读写 localStorage 的模块，带 logger 注入与三类容错）。
+- **`app.js` 回到 297 行**：存档 → `storage.js`；目标文案与回放分数插值 → `hud.js`（第 6 节的 300 行上限）。
+- 验证：`node tests/run-all.js` → **173 用例 / 1545 断言 / 0 失败**；`check-level-table` PASS；`lint-levels` PASS；`consistency_check` 全部通过；`_build/verify-step12.mjs` 全绿（真实页面回归）。
+- **未验证**：选关界面的像素取证与「点按某关进入该关」的真实触摸验证（待补 `verify-step12b.mjs`）；真机观感。
+
+---
 ## 2026-09-20（Step 12.2 步数派生 + 12.3 结束前引爆 —— 完成并验证）
 
 用户要求在 Step 12 内追加两条规则，三项口径经确认后（步数 = **设计期派生**、引爆 = **全部链式**、引爆成果**计入目标判定**）落地：

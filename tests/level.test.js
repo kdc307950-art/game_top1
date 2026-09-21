@@ -5,7 +5,7 @@
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
 import { CONFIG, GOAL_TYPE, STORAGE_KEYS } from '../config.js';
-import { calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getRemainingStepBonus } from '../level.js';
+import { LEVEL_COUNT, calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getLevelConfig, getRemainingStepBonus } from '../level.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -201,4 +201,41 @@ test('computeStepBudget：结果夹在 [min, max] 内，且同一配置永远算
   assertEqual(computeStepBudget(config), computeStepBudget(config), '同一配置两次结果一致（设计期派生，无随机）');
   assertTrue(computeStepBudget({ colorCount: 5, goal: null, obstacles: [] }) > 0, '缺 goal 时回落到纯基准步数，不抛错');
 });
+
+
+// ---------------------------------------------------------------- Step 12.2：50 关表
+
+test('getLevelConfig：50 关都能取出合法配置（步数 = 公式派生、障碍 ≤ 12 格且 ≤ 2 类、星阈值非递减）', () => {
+  assertEqual(LEVEL_COUNT, 50, '关卡总数');
+  for (let id = 1; id <= LEVEL_COUNT; id += 1) {
+    const config = getLevelConfig(id);
+    assertEqual(config.id, id, `L${id} id`);
+    assertTrue([5, 6].includes(config.colorCount), `L${id} 色数 ${config.colorCount}`);
+    assertTrue(config.steps >= CONFIG.STEP_BUDGET.min && config.steps <= CONFIG.STEP_BUDGET.max, `L${id} 步数 ${config.steps}`);
+    assertEqual(config.steps, computeStepBudget(config), `L${id} 步数等于公式派生`);
+    assertTrue(config.obstacles.length <= 12, `L${id} 障碍格 ${config.obstacles.length} ≤ 12`);
+    assertTrue(new Set(config.obstacles.map((o) => o.type)).size <= 2, `L${id} 障碍类型 ≤ 2`);
+    const [a, b, c] = config.starThresholds;
+    assertTrue(a <= b && b <= c, `L${id} 星阈值非递减 ${config.starThresholds.join('/')}`);
+    assertTrue(a > 0, `L${id} 1★ 为正`);
+  }
+});
+
+test('getLevelConfig：越界 id 夹到 [1, 50]，非法 id 回落第 1 关', () => {
+  assertEqual(getLevelConfig(0).id, 1, '0 → 1');
+  assertEqual(getLevelConfig(-5).id, 1, '负数 → 1');
+  assertEqual(getLevelConfig(999).id, 50, '超上限 → 50');
+  assertEqual(getLevelConfig(Number.NaN).id, 1, 'NaN → 1');
+});
+
+test('getLevelConfig：关卡曲线符合 LEVELS.md 的机制引入点', () => {
+  assertEqual(getLevelConfig(1).obstacles.length, 0, 'L1 无障碍');
+  assertTrue(getLevelConfig(4).obstacles.some((o) => o.type === 'ice'), 'L4 首次冰块');
+  assertTrue(getLevelConfig(11).obstacles.some((o) => o.type === 'snow'), 'L11 首次雪块');
+  assertEqual(getLevelConfig(13).goal.type, 'collect', 'L13 首次收集目标');
+  assertEqual(getLevelConfig(31).goal.type, 'clearIce', 'L31 首次消冰目标');
+  assertEqual(getLevelConfig(41).goal.type, 'mixed', 'L41 首次混合目标');
+  assertEqual(getLevelConfig(50).starThresholds[0], 40000, 'L50 1★ = 设计基准 40000');
+});
+
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

@@ -1,9 +1,19 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.15
+> 版本：v1.16
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.15 → v1.16 关键变更）
+
+本次修订经**用户明确批准**，把本地存档从 `app.js` 拆到新模块 `storage.js`。Step 12 的选关界面、每关星级存档与目标 HUD 让 `app.js` 涨到 366 行、越过第 6 节的 300 行上限，按第 6 节「超过则拆分」的要求拆分。行为零改动。
+
+1. **新增 `storage.js` 并登记**（2.2 节目录 + 2.3 边界）：职责是「本地存档读写 + 容错」——最高分与每关星级两张表的读写，以及无痕模式、配额、脏数据三类失败的回落。它是一个注入 logger 的工厂（`createStorage(logger)`），因此在 Node 测试里可以完全不开控制台。
+2. **「唯一允许读写 `localStorage`」的职责从 `app.js` 移到 `storage.js`**：2.3 相应改写了 `app.js` 的职责描述（不再提 `localStorage`），并新增 `storage.js` 的边界条目。9 节的「逻辑模块禁止列表」不变 —— `storage.js` 与 `app.js`、`hud.js`、`render.js` 一样属于界面/IO 层，不是逻辑模块。
+3. **`app.js` 回到 300 行以内**：255 行的存档与文案职责外移（存档 → `storage.js`；回放分数插值与目标文案 → `hud.js`），`app.js` 现为 297 行纯代码，且不再直接出现 `localStorage`。
 
 ---
 
@@ -295,7 +305,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   score.js         # 计分系统、连消倍数
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
-  app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播、localStorage 读写
+  app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播（localStorage 读写已移交 storage.js，v1.16）
+  storage.js       # 本地存档读写与容错：最高分、每关星级（唯一允许读写 localStorage 的模块，v1.16）
   render.js        # 棋盘层绘制与几何：画布尺寸/DPR、棋盘布局、静态图层烘焙、每帧贴图
   candy.js         # 糖果外观与精灵烘焙：形状路径、配色、内嵌图案、条纹 / 包装 / 魔力鸟特效（D020 / D023）
   hud.js           # 信息层绘制：HUD（分数/步数/最高分）、结束面板、重排提示
@@ -336,7 +347,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
 - `level.js`：关卡配置、目标追踪、步数消耗、三星判定。
-- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画，并**唯一**允许读写 `localStorage`。
+- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
 - `hud.js`：信息层绘制（HUD 三个信息格、结束面板、重排提示）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
@@ -918,6 +929,7 @@ node tests/integration.test.js
 | v1.11 | 2026-09-20 | Agent（用户批准） | Step 9 魔力鸟的规则口径与契约：3.2 补「清全屏该色（含被交换格与自身）、消耗 1 步、不能与空格/纯障碍交换、不参与同色匹配、被其它特效波及时不额外触发」；4.3 新增第 14 条（匹配层排除魔力鸟）；4.2 三条纯追加（`special.getMagicTargets`、`board.resolveCascades` 的 `initialClear`、`game.resolveBoard` 的透传）；ROADMAP 头部同步升到 v1.11 | 3.2、4.2、4.3、11、`ROADMAP.md` |
 | v1.12 | 2026-09-20 | Agent（用户批准） | Step 11 冰块与雪块的口径与契约：3.4 补「冰块内的动物被消除后该格补位且冰块保留（3 层冰需三次消除）」「同一级联层内每格障碍物最多 −1 层」「覆层障碍（ice/vine）与占格障碍（snow/choc）两类」，并修正「冰块格在动物被消除后被误判为屏障」的潜伏缺陷；3.5 补「层数分另算、不参与特效倍数」「冰块连消 (n−1)×1000 与普通连消并存」；4.2 三条纯追加（`Obstacle`、`ObstacleDamage` 与 `ResolveLevel/ResolveResult.damaged`、`LevelScore.obstacle`）；ROADMAP 头部同步升到 v1.12 | 3.4、3.5、4.2、11、`ROADMAP.md` |
 | v1.14 | 2026-09-20 | Agent（用户批准） | Step 12 的契约与 UI 口径：4.2 追加 `GameSnapshot` 的 `goal`/`collected`/`clearedIce`/`stars`/`won`；4.4 追加 `Level.completed`；5.5 落地 HUD 四格（分数/步数/目标进度/最高分）；附录 B 新增 `STORAGE_KEYS.LEVEL_STARS`（每关星级存档键） | 4.2、4.4、5.5、附录 B、11 |
+| v1.16 | 2026-09-20 | Agent（用户批准） | 拆出 `storage.js`（本地存档读写与容错），把「唯一允许读写 `localStorage`」的职责从 `app.js` 移到该模块；2.2 节目录与 2.3 边界同步；`app.js` 因 Step 12 的选关/星级/目标 HUD 一度涨到 366 行，拆分后回到 297 行（第 6 节的 300 行上限） | 2.2、2.3、11、`storage.js`、`app.js`、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
 

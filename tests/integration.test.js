@@ -12,7 +12,7 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
+import { CELL_TYPE, CONFIG, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
 import {
   applyGravity,
   createBoard,
@@ -272,6 +272,44 @@ test('纯障碍格不会被消除或替换（雪块保留）', () => {
   assertEqual(board[0][0].obstacleLayers, 2, '雪块层数未被改动');
   assertEqual(board[0][0].color, null, '雪块格内仍然没有动物');
   assertEqual(result.levels[0].cleared.length, 3, '第一层只消除了三连的 3 格');
+});
+
+
+
+// ---------------------------------------------------------------- Step 12.2：存档层容错（v1.16 的 storage.js）
+
+test('storage：最高分与每关星级的读写、脏数据与不可用都会回落（不抛错）', async () => {
+  const { createStorage } = await import('../storage.js');
+  const logs = [];
+  const memory = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (memory.has(k) ? memory.get(k) : null),
+      setItem: (k, v) => memory.set(k, v)
+    }
+  };
+  const storage = createStorage((level, message) => logs.push([level, message]));
+
+  assertEqual(storage.readBestScore(), 0, '空存档 → 0');
+  storage.writeBestScore(1234);
+  assertEqual(storage.readBestScore(), 1234, '写入后可读回');
+
+  memory.set(STORAGE_KEYS.BEST_SCORE, 'not-a-number');
+  assertEqual(storage.readBestScore(), 0, '脏数据 → 0');
+
+  assertDeepEqual(storage.readLevelStars(), {}, '空星级表');
+  const stars = {};
+  assertDeepEqual(storage.recordLevelStars(stars, 7, 2), { best: 2, updated: true }, '首次记录');
+  assertDeepEqual(storage.recordLevelStars(stars, 7, 1), { best: 2, updated: false }, '更差成绩沿用旧纪录');
+  assertDeepEqual(storage.readLevelStars(), { 7: 2 }, '落盘后可读回');
+  memory.set(STORAGE_KEYS.LEVEL_STARS, '[1,2,3]');
+  assertDeepEqual(storage.readLevelStars(), {}, '数组脏数据 → 空表');
+
+  globalThis.window = { localStorage: { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } } };
+  assertEqual(storage.readBestScore(), 0, 'localStorage 不可用 → 0');
+  assertDeepEqual(storage.readLevelStars(), {}, 'localStorage 不可用 → 空表');
+  assertTrue(logs.every(([level]) => level === 'warn'), '只记 warn，不抛错');
+  delete globalThis.window;
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

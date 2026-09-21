@@ -6,6 +6,21 @@
 
 ---
 
+## D031：Step 12.2 —— 50 关落地、选关界面、星级存档与 storage.js 拆分
+
+- 日期：2026-09-20
+- 背景：Step 12.2 要把 `LEVELS.md` 的 50 关落进代码，并做选关界面、每关星级存档与通关流转。落地时出现两处结构性问题：① 代码表必须与文档逐项一致，手抄必然漂移；② 选关 + 存档 + 目标 HUD 让 `app.js` 涨到 366 行、越过第 6 节上限（用户批准拆出 `storage.js`，宪法 v1.16）。
+- 决策：
+  1. **代码表由文档生成、再反向巡检**：`_build/gen-level-table.mjs` 解析 `LEVELS.md` 生成 `level.js` 的 `PATTERNS` + `LEVEL_SPECS`；`_build/check-level-table.mjs` 用 `getLevelConfig(id)` 反向逐项比对（目标/步数/色数/障碍格数与层数/三星阈值）。**文档是唯一真相源**，两侧任一改动不一致都会红。
+  2. **步数不落进数据表**：`LEVEL_SPECS` 不存步数，`getLevelConfig` 组装出 `LevelConfig` 后交给 `computeStepBudget` 派生（3.6 第 6 条），因此「步数与难度绑定」对 50 关整体生效。
+  3. **选关界面与流转**：`hud.js` 新增 `drawLevelSelect`（10×5 网格、每格关卡号 + 星级，返回每格命中矩形）；`render.js` 在 `scene.select` 时只画 HUD + 网格；`app.js` 持有 `screen: 'playing' | 'select'`，结束面板按状态给按钮（通关 → 下一关/选关；失败 → 重试/选关），**开局仍直接进第 1 关**（避免破坏既有验证脚本的「首屏即有棋盘」前提）。
+  4. **星级存档**：`STORAGE_KEYS.LEVEL_STARS`（`xxl_level_stars`，JSON `{关卡id: 星数}`），每关只留最好成绩；读写集中在 `storage.js`（唯一碰 localStorage 的模块，v1.16），它是注入 logger 的工厂，因此 Node 里可用桩替身测容错（脏数据/数组/不可用三种回落）。
+  5. **一处解析缺陷（生成器与巡检器同源）**：mixed 目标里的收集段可能跨多个物种（`收集 ladybug×20 + octopus×20`），最初的解析只取「收集」开头的那一段，导致 L49/L50 少一个物种。已改成「取所有含 ×N 的片段」，并在巡检器里同步。
+  6. **验证**：L1 169 → **173 用例 / 1545 断言 / 0 失败**（新增 50 关表形态、越界夹取、机制引入点、storage 容错）；`_build/check-level-table.mjs` PASS；`_build/lint-levels.mjs` PASS；浏览器 `_build/verify-step12.mjs` **全绿**（重构后的真实页面：启动、HUD 四格、真实滑动、步数派生、结束前引爆）。**未验证**：选关界面的像素级取证与「点按某关 → 进入该关」的真实触摸验证（下一步补 `verify-step12b.mjs`）。
+- 影响：`level.js`（50 关数据 + `getLevelConfig` + `LEVEL_COUNT`，186 行）、`hud.js`（选关界面、多按钮结束面板、`describeGoal`、`hudScoreAt`，210 行）、`render.js`（选关绘制路径）、`app.js`（流转与存档调用，297 行）、`config.js`（沿用 v1.15/v1.16 的键）、`storage.js`（新增）、`tests/level.test.js`、`tests/integration.test.js`、`AGENTS.md` v1.16、`PROGRESS.md`。
+- 替代方案：手写 50 关代码表（否决：必然与文档漂移）；把选关做成开局首页（否决：会破坏既有验证脚本与「打开即能玩」的体验）；把存档留在 app.js 并接受 366 行（否决：第 6 节硬约束，用户选择拆分）。
+
+---
 ## D030：Step 12.2/12.3 —— 步数由难度派生、结束前引爆特殊方块
 
 - 日期：2026-09-20

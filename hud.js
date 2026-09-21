@@ -19,6 +19,9 @@ const OVERLAY_RECORD_COLOR = '#ffd93b';
 const BUTTON_BG = '#ff4fd8'; // 调色板之外的洋红：不与任何糖果撞色，便于识别与程序化验证
 const BUTTON_TEXT = '#2a0b23';
 const GOAL_DONE_COLOR = '#4ecb71'; // 已完成的目标分项（与糖果绿色同为调色板内的绿）
+const SELECT_TILE_BG = 'rgba(255, 255, 255, 0.08)'; // 选关格子：未通关
+const SELECT_TILE_DONE = 'rgba(78, 203, 113, 0.32)'; // 选关格子：已通关（与目标完成的绿色一致）
+const LEVEL_SELECT_COLS = 10; // 选关网格列数（50 关 = 10 × 5）
 const BANNER_BG = 'rgba(20, 16, 34, 0.92)';
 const BANNER_TEXT_COLOR = '#ffe9a8';
 const FONT_STACK = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -167,17 +170,108 @@ export function drawGameOver(ctx, field, overlay) {
     ctx.fillText(line.text, cx, py + panelH * line.at);
   }
 
-  const btnW = panelW * 0.62;
+  // Step 12.2：通关后有「下一关」（最后一关除外），失败时是「重试」；两者都带「选关」
   const btnH = panelH * 0.17;
-  const bx = cx - btnW / 2;
-  const by = py + panelH * 0.78;
-  roundRectPath(ctx, bx, by, btnW, btnH, btnH * 0.32);
-  ctx.fillStyle = BUTTON_BG;
+  const btnY = py + panelH * 0.78;
+  const gap = panelW * 0.04;
+  const primaryLabel = overlay.hasNext ? '下一关' : overlay.reason === 'won' ? '选择关卡' : '重试';
+  const primaryW = panelW * 0.42;
+  const primaryX = cx - primaryW - gap / 2;
+  const drawButton = (x, y, w, h, label) => {
+    roundRectPath(ctx, x, y, w, h, h * 0.32);
+    ctx.fillStyle = BUTTON_BG;
+    ctx.fill();
+    ctx.font = `700 ${Math.round(field.side * 0.045)}px ${FONT_STACK}`;
+    ctx.fillStyle = BUTTON_TEXT;
+    ctx.fillText(label, x + w / 2, y + h / 2);
+    return { x, y, w, h };
+  };
+  const primary = drawButton(primaryX, btnY, primaryW, btnH, primaryLabel);
+  const select = drawButton(cx + gap / 2, btnY, primaryW, btnH, '选关');
+  return { restartRect: primary, nextRect: overlay.hasNext ? primary : null, selectRect: select };
+}
+
+/**
+ * 回放期间的 HUD 分数：逐层累加本层得分，并在最后一层之后补上「关卡级尾款」
+ * （3.5 的剩余步数转化不在逐层明细里，v1.16 从 app.js 移到这里 —— 它是纯信息层推导）。
+ */
+export function hudScoreAt(playback, levelIndex) {
+  if (!playback) return 0;
+  let gained = 0;
+  for (let i = 0; i <= levelIndex && i < playback.levelScores.length; i += 1) gained += playback.levelScores[i].gained;
+  const tail = levelIndex >= playback.levelScores.length - 1 ? playback.tailBonus : 0;
+  return playback.scoreBefore + gained + tail;
+}
+
+/**
+ * 目标的一句话摘要（日志与结束面板用）：把 GoalSpec 说成人话。
+ * 放在 hud.js 是因为它属于「信息层文案」—— 与 HUD 的目标进度显示同源，且 app.js 也复用它打日志（v1.16）。
+ */
+export function describeGoal(goal) {
+  if (!goal) return '无目标';
+  if (goal.type === 'score') return `分数达到 ${goal.target}`;
+  if (goal.type === 'clearIce') return `消除 ${goal.target} 层冰块`;
+  if (goal.type === 'collect') return `收集 ${formatTargets(goal.targets)}`;
+  const parts = [];
+  if (goal.score !== undefined) parts.push(`分数 ${goal.score}`);
+  if (goal.clearIce !== undefined) parts.push(`冰块 ${goal.clearIce} 层`);
+  if (goal.collect) parts.push(`收集 ${formatTargets(goal.collect)}`);
+  return `混合目标（${parts.join(' + ')}）`;
+}
+
+const formatTargets = (targets) => Object.entries(targets ?? {}).map(([name, need]) => `${name}×${need}`).join(' + ');
+
+/**
+ * 选关界面（Step 12.2）：在棋盘区画一个 10 列 × 5 行的关卡网格（1–50），
+ * 每格显示关卡号与已获星级；返回每格的命中矩形，供 app.js 做点按判定（本文件不做命中测试）。
+ * 只接收数据（关卡总数与每关星级），不认识游戏状态、不碰 localStorage —— 与 2.3 的边界一致。
+ */
+export function drawLevelSelect(ctx, field, { count, stars }) {
+  const pad = field.side * 0.04;
+  const titleH = field.side * 0.12;
+  ctx.fillStyle = OVERLAY_DIM;
+  ctx.fillRect(field.x, field.y, field.side, field.side);
+
+  const panelX = field.x + pad;
+  const panelY = field.y + pad;
+  const panelW = field.side - pad * 2;
+  const panelH = field.side - pad * 2;
+  roundRectPath(ctx, panelX, panelY, panelW, panelH, field.side * 0.04);
+  ctx.fillStyle = OVERLAY_PANEL;
   ctx.fill();
-  ctx.font = `700 ${Math.round(field.side * 0.05)}px ${FONT_STACK}`;
-  ctx.fillStyle = BUTTON_TEXT;
-  ctx.fillText('再来一局', cx, by + btnH / 2);
-  return { x: bx, y: by, w: btnW, h: btnH };
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 ${Math.round(field.side * 0.062)}px ${FONT_STACK}`;
+  ctx.fillStyle = OVERLAY_TITLE_COLOR;
+  ctx.fillText('选关', panelX + panelW / 2, panelY + titleH * 0.55);
+
+  const cols = LEVEL_SELECT_COLS;
+  const rows = Math.ceil(count / cols);
+  const gap = panelW * 0.012;
+  const gridW = panelW - gap * 2;
+  const gridH = panelH - titleH - gap * 2;
+  const tileW = (gridW - gap * (cols - 1)) / cols;
+  const tileH = (gridH - gap * (rows - 1)) / rows;
+  const rects = [];
+  for (let i = 0; i < count; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = panelX + gap + col * (tileW + gap);
+    const y = panelY + titleH + gap + row * (tileH + gap);
+    const earned = Number(stars?.[i + 1] ?? 0);
+    roundRectPath(ctx, x, y, tileW, tileH, tileW * 0.18);
+    ctx.fillStyle = earned > 0 ? SELECT_TILE_DONE : SELECT_TILE_BG;
+    ctx.fill();
+    ctx.font = `700 ${Math.round(tileH * 0.42)}px ${FONT_STACK}`;
+    ctx.fillStyle = HUD_VALUE_COLOR;
+    ctx.fillText(String(i + 1), x + tileW / 2, y + tileH * 0.38);
+    ctx.font = `500 ${Math.round(tileH * 0.26)}px ${FONT_STACK}`;
+    ctx.fillStyle = earned > 0 ? OVERLAY_RECORD_COLOR : HUD_LABEL_COLOR;
+    ctx.fillText('★'.repeat(earned) + '☆'.repeat(3 - Math.min(earned, 3)), x + tileW / 2, y + tileH * 0.74);
+    rects.push({ id: i + 1, x, y, w: tileW, h: tileH });
+  }
+  return rects;
 }
 
 /** 圆角矩形路径（就地一份，理由见文件头：避免与 render.js 形成模块环）。 */
