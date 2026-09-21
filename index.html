@@ -18,6 +18,15 @@
     <!-- 只放结构：AGENTS.md 2.3。棋盘绘制全部在 app.js -->
     <canvas id="board" width="0" height="0"></canvas>
 
+    <!-- Step 15（v1.20 / 3.9）道具条：结构在此、样式在 styles.css、交互与数量在 app.js。
+         它是**画布外**的元素，不占用 HUD 四格、也不改变 boardRect；render.js 会从可用高度里
+         扣除 --booster-bar-h，保证短视口下不遮挡棋盘。 -->
+    <div id="boosters" role="group" aria-label="道具">
+      <button class="booster" type="button" data-kind="refresh">刷新<span class="booster-count">0</span></button>
+      <button class="booster" type="button" data-kind="addSteps">加五步<span class="booster-count">0</span></button>
+      <button class="booster" type="button" data-kind="hammer">小木锤<span class="booster-count">0</span></button>
+    </div>
+
     <!-- 本项目源码为 ES Module，必须经 http(s) 打开，见 ROADMAP.md 第 0.9 条 -->
     <script type="module" src="app.js"></script>
   </body>

@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.19
+> 版本：v1.20
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.19 → v1.20 关键变更）
+
+本次修订为 Step 15（道具系统）补规则与契约。用户本轮预授权「需要我决定的问题若长时间没有选择就按推荐默认执行」，本修订即**推荐默认**（口径见 `DECISIONS.md` D036）；**不改变任何既有玩法数值与已验收的目标语义**。
+
+1. **新增 3.9 道具系统**：三种道具（刷新 / 加五步 / 小木锤）**都不消耗步数、也不扣时间**；刷新走 3.8 的同一条重排路径（失败则不生效也不扣除）；加五步在**时间关**改为加秒（时间关没有步数，3.6 v1.18）；小木锤**只接受含动物的格子**（空格/纯障碍/收集物无效且不扣数量）；数量是跨关卡的账号级状态、持久化在 `localStorage`；道具条是**画布外的页面元素**（不占用 HUD 四格、不改变 `boardRect`）。
+2. **4.2 补 `game.useBooster` 与 `BoosterResult`**（纯追加）：生效与否由 `used` 表达，调用方据此决定是否扣除数量。另补 `level.grantSteps` / `level.grantTime`（加五步要改的是关卡状态，按 2.3 的职责划分落在 `level.js`）。
+3. **2.3 补 UI 归属**：`index.html` 除 canvas 外还承载**道具条的结构**，`app.js` 负责绑定按钮与「小木锤待选格」，`storage.js` 增加道具数量的读写（它仍是唯一碰 `localStorage` 的模块）。
+4. **附录 B 新增 `BOOSTER_CONFIG` 4 键**（`initialCount` / `extraSteps` / `extraSeconds` / `hammerCells`），**附录 B-2 新增 `BOOSTER_KIND`**。
 
 ---
 
@@ -383,15 +394,15 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `special.js`：根据匹配形状生成特殊元素，处理激活和组合。
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
-- `level.js`：关卡配置、目标追踪、步数消耗、三星判定。
+- `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
 - `hud.js`：信息层绘制（HUD 三个信息格、结束面板、重排提示）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
 - `input.js`：触摸与鼠标手势识别（滑动阈值、主轴锁定、视口守卫），只产出 `{ kind, x0, y0, x1, y1 }` 手势事件；不认识棋盘、不碰游戏状态与存档。
 - `timeline.js`：动画时间线调度（阶段划分、时长计算、rAF 回放）。只接收阶段列表与每帧/结束回调；不读游戏状态、不碰存档、不实现游戏规则。
-- `index.html`：只放结构、viewport、引入脚本。
-- `styles.css`：移动端布局、禁止滚动、Canvas 样式。
+- `index.html`：只放结构（canvas + 道具条）、viewport、引入脚本。
+- `styles.css`：移动端布局、禁止滚动、Canvas 样式、道具条样式（`--booster-bar-h` 供 `render.js` 扣除可用高度，3.9）。
 - `tests/`：各模块的算法单元测试与集成测试。
 
 ---
@@ -530,6 +541,16 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 3. 重排不得改变障碍物布局。
 4. 重排尝试次数上限为 50 次；超过上限则判定为关卡异常，进入游戏结束流程。
 
+### 3.9 道具系统
+
+对局中可以使用三种道具（第三阶段）。**三种道具都不消耗步数、也不扣时间**；每种道具的数量是**跨关卡**的账号级状态，持久化在 `localStorage`（读写只在 `storage.js`，见 2.3）。
+
+- **刷新（`refresh`）**：重排棋盘。走 3.8 的同一条重排路径（重排后不得有初始三连、必须存在可行交换、**不改变障碍物与收集物的布局**、尝试上限 50 次）；重排失败（超过上限）时道具**不生效也不扣除**。
+- **加五步（`addSteps`）**：步数关 `剩余步数 += BOOSTER_CONFIG.extraSteps`（默认 5）；**时间关没有步数**（3.6 第 8 条），改为 `剩余时间 += BOOSTER_CONFIG.extraSeconds`（默认 10 秒）。
+- **小木锤（`hammer`）**：消除 `BOOSTER_CONFIG.hammerCells`（默认 1）个格子。**只有含动物的格子可以作为目标** —— 空格、纯障碍（雪块/巧克力）、收集物（水果/金豆荚）一律无效且**不扣除数量**。消除后照常结算得分与关卡目标（3.5 / 3.6），被点名的特殊元素按 4.3.8 优先激活。
+- **数量**：每种道具的初始数量为 `BOOSTER_CONFIG.initialCount`（默认 3）；用掉一次减 1，为 0 时不可使用。**本步不含获取途径**（商店 / 奖励 / 每日赠送）。
+- **UI（5.5 的补充）**：道具条是**画布外的页面元素**（结构在 `index.html`、样式在 `styles.css`），不占用 HUD 四格、也不改变 `boardRect`；`render.js` 的可用高度扣除 `--booster-bar-h`，保证短视口下不遮挡棋盘。
+
 ---
 
 ## 4. 数据与算法契约
@@ -577,6 +598,7 @@ board = cell[][]  // board[row][col]
 - `createGame(levelConfig: LevelConfig, options?: { rng?: () => number }): GameState`
 - `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`（有效交换扣 1 步；**时间关不扣步数**（v1.19：时间只按真实时间流逝））
 - `tickTime(state: GameState, seconds: number): { remainingTime: number, gameOver: boolean, won: boolean, resolve: ResolveResult | null }`（v1.19 纯追加：推进时间关的倒计时；`seconds` 由 UI 传入真实经过的秒数。归零时按 3.6 第 7 条先引爆盘面上的特殊方块再结算，`resolve` 为本次引爆的结算结果，未归零时为 `null`）
+- `useBooster(state: GameState, kind: string, target?: Pos): BoosterResult`（v1.20 纯追加：使用道具，见 3.9。**不消耗步数、也不扣时间**；刷新走 3.8 的重排路径，小木锤通过 `resolveBoard({ initialClear: [target] })` 消除单格。是否生效由 `used` 表达，调用方据此决定是否扣除数量）
 - `resolveBoard(state: GameState, options?: { initialClear?: Pos[] }): ResolveResult`（消除 → 下落 → 填充 → 级联，返回轨迹供动画使用；`options.initialClear` 透传给 `board.resolveCascades`，供 3.2 的魔力鸟交换使用）
 - `getState(state: GameState): GameSnapshot`（返回**深拷贝并冻结**的不可变快照，供 UI 读取）
 
@@ -627,6 +649,16 @@ ObstacleDamage = { r: number, c: number, type: string, layersRemoved: number, cl
 // 与 obstacle 不是一类；落到 COLLECTIBLE_CONFIG.exitRow 即被收走并计入 ResolveResult.collected。
 CollectibleHit  = { r: number, c: number, type: 'fruit' | 'pod' }   // 一次收集事件
 CollectibleSpec = { r: number, c: number, type: 'fruit' | 'pod' }   // 4.4 的关卡落点（LevelConfig.collectibles）
+
+// v1.20 补：道具使用结果（3.9）。三种道具都不消耗步数、也不扣时间；`used = false` 时调用方
+// **不得**扣除数量（刷新失败、小木锤目标非法、本局已结束时都会走到这里）。
+BoosterResult = {
+  used: boolean,                 // 是否真的生效
+  kind: string,                  // BOOSTER_KIND 之一
+  reason: string | null,         // used = false 的原因（'busy' | 'badKind' | 'badTarget' | 'shuffleFailed'）
+  resolve: ResolveResult | null, // 刷新/小木锤的结算结果（供 UI 回放）；加五步为 null
+  stepsLeft: number, remainingTime: number, gameOver: boolean
+}
 
 GameSnapshot = {
   levelId: number, rows: number, cols: number, colorCount: number,
@@ -696,6 +728,8 @@ GameSnapshot = {
 - `createLevel(config: LevelConfig): Level`（按 4.4 校验 `goal` 必填、`starThresholds` 为三元组且非递减、`steps` 非负且非时间关时 ≥ 1）
 - `consumeStep(level: Level): number`（扣 1 步并返回剩余步数，已为 0 时保持 0；4.3.3 的调用点在 `game.trySwap`，**时间关不调用**）
 - `consumeTime(level: Level, seconds: number): number`（v1.19 纯追加：扣减时间关的剩余秒数并返回剩余值，已为 0 时保持 0；调用点在 `game.tickTime`）
+- `grantSteps(level: Level, steps: number): number`（v1.20 纯追加：增加剩余步数并返回加后的值；调用点在 `game.useBooster` 的「加五步」，3.9）
+- `grantTime(level: Level, seconds: number): number`（v1.20 纯追加：增加时间关的剩余秒数并返回加后的值；调用点在 `game.useBooster` 的「加五步」在时间关的分支）
 - `checkGoal(level: Level, board: Board, score: number, collected: Record<string, number>): boolean`
 - `calcStars(score: number, thresholds: [number, number, number]): 0 | 1 | 2 | 3`
 - `getRemainingStepBonus(stepsLeft: number): number`
@@ -1003,6 +1037,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.20 | 2026-09-22 | Agent（用户预授权默认） | Step 15 道具系统：新增 3.9（三种道具都不消耗步数/时间、刷新复用 3.8 的重排、加五步在时间关改为加秒、小木锤只接受含动物的格子且不扣数量、数量为跨关卡状态、道具条是画布外元素）；4.2 补 `game.useBooster` 与 `BoosterResult`、`level.grantSteps`/`grantTime`；2.3 补 UI 归属（`index.html`/`styles.css`/`storage.js`）；附录 B 新增 `BOOSTER_CONFIG` 4 键；附录 B-2 新增 `BOOSTER_KIND` | 2.3、3.9、4.2、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | Step 14 三种关卡类型的**落地契约**：4.4 补 `LevelConfig.timeLimit` / `collectibles`（`CollectibleSpec`）与 `Level.remainingTime`（时间关 `steps = 0`）；4.2 补四条纯追加（`board.createBoard` 的收集物参数、`applyGravity` 的 `collectibleFall`、`ResolveResult.collected` 的 `CollectibleHit` 形状、`level.consumeTime` 与 `game.tickTime`）与 `computeTimeBudget`、`GameSnapshot` 的 `timeLimit`/`remainingTime`；3.6 补第 8 条时间关的时长派生与归零结算口径、金豆荚三星阈值更高（`STAR_CONFIG.podFactor`）；附录 B 新增 `TIME_CONFIG` 5 键与 `STAR_CONFIG` 3 键；附录 B-2 补 `COLLECTIBLE_TYPE` 并扩写 `GOAL_TYPE`；50 关表不变 | 3.6、4.1、4.2、4.4、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
 
@@ -1267,6 +1302,10 @@ const LEVEL_3 = {
 | `TIME_CONFIG.secondsPerFriction`   | 每点障碍摩擦扣减的秒数 | 3             | 3.6 v1.19 |
 | `TIME_CONFIG.minSeconds`           | 派生时长下限（秒）   | 45            | 3.6 v1.19 |
 | `TIME_CONFIG.maxSeconds`           | 派生时长上限（秒）   | 120           | 3.6 v1.19 |
+| `BOOSTER_CONFIG.initialCount`      | 每种道具的初始数量 | 3             | 3.9 v1.20 |
+| `BOOSTER_CONFIG.extraSteps`        | 加五步在步数关增加的步数 | 5        | 3.9 v1.20 |
+| `BOOSTER_CONFIG.extraSeconds`      | 加五步在时间关增加的秒数 | 10       | 3.9 v1.20 |
+| `BOOSTER_CONFIG.hammerCells`       | 小木锤一次消除的格数 | 1           | 3.9 v1.20 |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |
 | `COLOR_NAMES`                      | 颜色索引 0-5 到动物名映射 | `['frog','hippo','ladybug','octopus','chick','fox']` | 3.6 / 13 |
@@ -1294,4 +1333,5 @@ const LEVEL_3 = {
 | `MATCH_SHAPE`    | `line3` / `line4` / `line5` / `L` / `T`          | 4.2 / 4.3    |
 | `GOAL_TYPE`      | `score` / `collect` / `clearIce` / `mixed` / `fruit` / `pod` | 4.4 / 3.6    |
 | `COLLECTIBLE_TYPE` | `fruit` / `pod`                                 | 4.1 / 3.6 v1.19 |
+| `BOOSTER_KIND`   | `refresh` / `addSteps` / `hammer`                | 3.9 / 4.2 v1.20 |
 | `STORAGE_KEYS`   | 见附录 B 上表                                    | 2.3 / 9      |

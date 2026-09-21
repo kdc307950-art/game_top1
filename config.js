@@ -27,6 +27,13 @@ export const COLLECTIBLE_TYPE = Object.freeze({
   POD: 'pod'
 });
 
+/** 道具类型（AGENTS.md 3.9 / 4.2，v1.20） */
+export const BOOSTER_KIND = Object.freeze({
+  REFRESH: 'refresh',
+  ADD_STEPS: 'addSteps',
+  HAMMER: 'hammer'
+});
+
 /** 条纹方向（AGENTS.md 4.1 cell.direction） */
 export const DIRECTION = Object.freeze({
   H: 'h',
@@ -154,6 +161,15 @@ export const CONFIG = {
   // 理论上可以「引爆 → 生成 → 再引爆」循环，故给一个确定的轮数上限作为终止保证。
   ENDGAME_CONFIG: {
     maxDetonationRounds: 8
+  },
+
+  // 道具系统（AGENTS.md 3.9，v1.20）。**数量**是跨关卡的账号级状态，持久化在 STORAGE_KEYS.BOOSTERS；
+  // 本表只登记「初始数量」与三件道具的效果参数，逻辑层不出现魔法数字。
+  BOOSTER_CONFIG: {
+    initialCount: 3,   // 每种道具的初始数量（用光后不可使用，本步不含获取途径）
+    extraSteps: 5,     // 「加五步」在步数关增加的步数
+    extraSeconds: 10,  // 「加五步」在时间关增加的秒数（时间关没有步数，见 3.6 第 8 条）
+    hammerCells: 1     // 小木锤一次消除的格数（3.9）
   },
 
   LEVEL_DEFAULTS: {

@@ -12,8 +12,7 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
-import {
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';import {
   applyGravity,
   createBoard,
   refillBoard,
@@ -345,6 +344,44 @@ test('集成（v1.19）：时间关归零时先引爆盘面上的特殊方块再
   assertTrue(timedOut.resolve !== null, '归零那一刻发生了引爆结算（resolve 非空）');
   assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '引爆后盘面无特殊方块');
   assertEqual(tickTime(game, 1).resolve, null, '已结束的局不再重复引爆');
+});
+
+// ---------------------------------------------------------------- Step 15：道具数量的存档与消耗（v1.20 / 3.9）
+
+test('storage（v1.20）：道具数量的读写、脏数据回落与「0 不再扣」', async () => {
+  const { createStorage } = await import('../storage.js');
+  const memory = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (memory.has(k) ? memory.get(k) : null),
+      setItem: (k, v) => memory.set(k, v)
+    }
+  };
+  const storage = createStorage();
+
+  const defaults = storage.readBoosters();
+  assertDeepEqual(
+    defaults,
+    { refresh: CONFIG.BOOSTER_CONFIG.initialCount, addSteps: CONFIG.BOOSTER_CONFIG.initialCount, hammer: CONFIG.BOOSTER_CONFIG.initialCount },
+    '空存档 → 每种道具都是 initialCount'
+  );
+
+  memory.set(STORAGE_KEYS.BOOSTERS, JSON.stringify({ refresh: 2, hammer: -5, extra: 9 }));
+  const dirty = storage.readBoosters();
+  assertEqual(dirty.refresh, 2, '合法值原样读出');
+  assertEqual(dirty.hammer, 0, '负数夹到 0');
+  assertEqual(dirty.addSteps, CONFIG.BOOSTER_CONFIG.initialCount, '缺失的键补初始值');
+  assertFalse('extra' in dirty, '多余的键被丢弃');
+  memory.set(STORAGE_KEYS.BOOSTERS, '{oops');
+  assertEqual(storage.readBoosters().refresh, CONFIG.BOOSTER_CONFIG.initialCount, 'JSON 脏数据 → 回落到初始值');
+
+  const counts = storage.readBoosters();
+  assertDeepEqual(storage.spendBooster(counts, 'refresh'), { used: true, left: CONFIG.BOOSTER_CONFIG.initialCount - 1 }, '消耗一次');
+  assertEqual(storage.readBoosters().refresh, CONFIG.BOOSTER_CONFIG.initialCount - 1, '消耗立刻落盘');
+  counts.hammer = 0;
+  assertDeepEqual(storage.spendBooster(counts, 'hammer'), { used: false, left: 0 }, '数量为 0 时不消耗');
+  assertDeepEqual(storage.spendBooster(counts, 'nope'), { used: false, left: 0 }, '未知道具不消耗也不抛错');
+  delete globalThis.window;
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

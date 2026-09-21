@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-09-22（Step 15：道具系统（刷新 / 加五步 / 小木锤）—— 机制、数量持久化、道具条与验证）
+
+用户口径（本轮）：「剩余工作和待补账全部做完然后开始第 15 步」+ 预授权「需要我决定的问题按推荐默认执行」—— 故本步的三处口径（数量与持久化、时间关的加五步、UI 落点）按 `DECISIONS.md` **D036 的六条推荐默认**执行。
+
+### 完成项
+
+- **宪法 v1.20（用户预授权默认）**：新增 **3.9 道具系统**（三种道具都不消耗步数/时间；刷新走 3.8 的同一条重排路径且失败不扣除；加五步在**时间关改为加秒**；小木锤只接受含动物的格子且非法目标不扣数量；数量是跨关卡状态；道具条是画布外元素）；4.2 补 `game.useBooster` 与 `BoosterResult`、`level.grantSteps`/`grantTime`；2.3 补 UI 归属（`index.html`/`styles.css`/`storage.js`）；附录 B 新增 `BOOSTER_CONFIG` 4 键；附录 B-2 新增 `BOOSTER_KIND`；第 11 节与 `ROADMAP.md` 同步到 v1.20。
+- **`config.js`**：新增 `BOOSTER_KIND`（`refresh`/`addSteps`/`hammer`）与 `BOOSTER_CONFIG`（`initialCount` 3 / `extraSteps` 5 / `extraSeconds` 10 / `hammerCells` 1）。
+- **`level.js`**：新增 `grantSteps` / `grantTime`（与 `consumeStep`/`consumeTime` 对称的「恢复」入口，逻辑层不出现魔法数字）。
+- **`game.js`**：新增 `useBooster(state, kind, target)` —— 刷新复用 `shuffleBoard`（3.8 的四条约束，失败返回 `used: false` + `shuffleFailed`）；加五步按关卡类型走 `grantSteps` 或 `grantTime`；小木锤只接受**含动物**的格子（`badTarget` 时不扣数量），消除走 `resolveBoard({ initialClear })` 因此特效照常激活；本局已结束/未知道具分别返回 `busy`/`badKind`。
+- **`storage.js`**：新增 `readBoosters`（缺失补初始值、负数夹 0、多余键丢弃、JSON 脏数据回落）、`writeBoosters`、`spendBooster`（为 0 时不消耗、立刻落盘）。
+- **UI**：`index.html` 新增画布外道具条（3 个按钮，结构层）；`styles.css` 新增 `--booster-bar-h` 与道具条/徽标/禁用态/就绪态样式；`render.js` 的 `computeBoardSize` 从可用高度里**扣除道具条高度**（`readCssPx('--booster-bar-h')`），保证短视口下不遮挡棋盘；`app.js` 新增道具条绑定、「数量检查 → 逻辑层 → **生效才扣数量**」的编排、小木锤的两步式交互（点按钮 → 点格子）与日志。
+- **测试**：`tests/level.test.js` +2 例、`tests/game.test.js` +5 例、`tests/integration.test.js` +1 例（storage 层的道具数量读写、脏数据回落与「0 不再扣」）。
+
+### 验证方式（可复现）
+
+- **L1**：`node tests/run-all.js` → 8 文件、**215 用例 / 1901 断言 / 0 失败 / exit 0**（较 Step 14 的 207/1837 新增 8 例 64 断言）。
+- **L0**：`python _build/consistency_check.py` 全部通过（两文件版本 v1.20 相等；`BOOSTER_CONFIG` 4 键与 `BOOSTER_KIND` 已登记）；`node _build/check-level-table.mjs` PASS（50 关表未受影响）；`node _build/lint-levels.mjs` PASS。
+- **L2/L3**：新增 `_build/verify-step15.mjs`，**30 项全绿、连跑 2 次均 PASS**（日志 `_build/s15-verify-1/2.log`）：道具条 3 个按钮且数量为 `initialCount`、**道具条在棋盘下方且不重叠**、页面仍不可滚动；**真实触摸**点「加五步」→ 日志 `剩余步数 开局+5`、徽标 −1、`xxl_boosters` 立刻落盘；点「刷新」→ 棋盘像素指纹变化且步数不变（重排失败的那些次**都没扣数量**）；小木锤两步式（`aria-pressed` → 点格 → 棋盘变化 → 徽标 −1 → 退出就绪态）；点水果演示关的**收集物格**→ 日志写明「不是可消除的动物格」且**不扣数量**；时间关的加五步 → 日志为「剩余时间 86s」（走加秒分支，`extraSeconds` 现读自 `config.js`）；重新加载后徽标 = 存档值；把数量写成 0 后三个按钮禁用且点击无效；全程 0 error/warning/异常。
+- **本轮抓到并修掉的一处真实缺陷**：道具的回放首帧缺 `afterSwap`（小木锤走 `startTimeline` 时 `afterSwap` 为 `undefined`），导致 `timeline.buildPhases` 抛异常 —— 表现为「木锤扣了数量、棋盘却没变、按钮一直停在就绪态、控制台一条 Uncaught」。修法：在 `applyBooster` 里先 `cloneBoard` 出动作前的棋盘再传给 `startTimeline`（与 `trySwap` 的 `afterSwap` 同一语义）。
+- **本轮新登记 P3-12（刷新/死局重排的失败率）**：`shuffleBoard` 是「随机排列 + 约束校验」，8×8/5 色下每次排列同时满足「无三连 + 存在可行交换」的概率约 4–5%，50 次尝试仍有约 **10%** 的整体失败率（Node 实测 20 次里成功 18 次、平均尝试 21.3 次）。3.9 规定失败时**不扣数量**，因此用户只会「白点一下」；`verify-step15` 据此改成最多重试 5 次并把「失败不扣」也验掉。回归计划：若要彻底消除，需要改 `shuffle.js` 的重排算法（构造式重排而非纯随机），属 Step 6/3.8 契约范围内的另一项工作，本步不动。
+
+### 边界与新登记
+
+- **道具没有获取途径**（D036 第 1 条）：初始各 3 个，用光即用光；商店/奖励/每日赠送不在本步。
+- **数量是账号级状态**：换关卡、重开一局都沿用同一份数量（这也是它放在 `storage.js` 而不是 `Level` 的理由）。
+- **真机未验证**：道具条在真机上的拇指可达性、安全区避让与横屏表现未验证（横屏时道具条仍固定在布局流里，画布会被压小）。
+- **P3-12**：见上（刷新约有 10% 的失败率，失败不扣数量）。
+- **P3-10 仍开放**：环像素取证未补（Step 14/15 都动过渲染与几何；顺延到 Step 15 → Step 16 的门禁轮）。
+
+### 下一步
+
+- 进入 **Gate 0.1 第九轮**（Step 15 → Step 16 扩展前 Bug Audit）：全量回归 + 一致性 + 18 个浏览器套件（含新增的 `verify-step15`），通过后打 tag 并放行 Step 16（音效与震动反馈）。
+
+---
+
 ## 2026-09-22（Gate 0.1 第八轮：Step 14 → Step 15 扩展前 Bug Audit —— 通过，放行 Step 15）
 
 - **审计对象**：Step 14（水果关 / 时间关 / 金豆荚关：口径、实现、外观、演示关与验证）。起点 = tag `step14-start`（`02d8b17`）+ 本步的三个提交（`d4da39c` / `9763488` / `76067d8`），工作区干净。

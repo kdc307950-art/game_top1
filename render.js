@@ -32,13 +32,16 @@ const SLOT_COLOR = 'rgba(255, 255, 255, 0.045)'; // 格位槽底色（红线 3�
 const MATCH_RING_COLOR = 'rgba(255, 246, 180, 0.95)';
 const SELECT_RING_COLOR = 'rgba(255, 255, 255, 0.85)';
 
-/** 画布边长（CSS 像素）：取可用宽高中的较小者，扣除安全区与留白（5.1）。 */
+/** 画布边长（CSS 像素）：取可用宽高中的较小者，扣除安全区、留白与棋盘下方的道具条（5.1 / 3.9）。 */
 export function computeBoardSize() {
   const root = document.documentElement;
   const viewportW = root.clientWidth || window.innerWidth;
   const viewportH = root.clientHeight || window.innerHeight;
   const availW = viewportW - readSafeInset('left') - readSafeInset('right') - BOARD_MARGIN * 2;
-  const availH = viewportH - readSafeInset('top') - readSafeInset('bottom') - BOARD_MARGIN * 2;
+  // Step 15（v1.20 / 3.9）：道具条占掉棋盘下方的一条高度，可用高度必须把它扣掉，
+  // 否则短视口下画布会与道具条重叠（道具条是画布外的 DOM 元素，改不了它）。
+  const availH =
+    viewportH - readSafeInset('top') - readSafeInset('bottom') - BOARD_MARGIN * 2 - readCssPx('--booster-bar-h');
   const available = Math.min(availW, availH);
   if (available <= 0) return 1;
   // 220px 是可读性目标；更窄的设备必须服从实际可用空间，避免棋盘横向溢出。
@@ -292,6 +295,13 @@ function strokeRing(ctx, field, pos, radius, lineWidth, color) {
 
 function readSafeInset(side) {
   const raw = getComputedStyle(document.documentElement).getPropertyValue(`--safe-${side}`);
+  const px = Number.parseFloat(raw);
+  return Number.isFinite(px) ? px : 0;
+}
+
+/** 读取一个 CSS 长度型自定义属性（如 `--booster-bar-h`）；取不到时按 0 处理（不阻断布局）。 */
+function readCssPx(name) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
   const px = Number.parseFloat(raw);
   return Number.isFinite(px) ? px : 0;
 }

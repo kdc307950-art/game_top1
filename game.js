@@ -10,7 +10,7 @@
 //   （无效交换回退且不扣步数、只有有效交换才扣步数）与 3.5 的计分接入。
 // 【Step 6】死局检测与重排（3.8）；【Step 7-10】特殊元素与组合（3.2/3.3）。
 
-import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, BOOSTER_KIND } from './config.js';
 import {
   cloneBoard,
   createBoard,
@@ -31,7 +31,7 @@ import {
   calcFinalScore,
   calcSpecialMultiplier
 } from './score.js';
-import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, getRemainingStepBonus, isTimeLevel } from './level.js';
+import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, getRemainingStepBonus, grantSteps, grantTime, isTimeLevel } from './level.js';
 
 /**
  * 4.2：createGame(levelConfig, options?) —— 建一局游戏。
@@ -322,6 +322,62 @@ function magicClearTargets(board, a, b) {
   if (target.type !== CELL_TYPE.NORMAL) return null;
 
   return [...getMagicTargets(board, target.color), { r: magicAt.r, c: magicAt.c }];
+}
+
+/**
+ * 3.9（v1.20）：使用道具。三种道具都**不消耗步数、也不扣时间**；是否生效由 `used` 表达，
+ * 调用方（UI）据此决定是否扣除数量 —— 逻辑层不认识道具数量（它是跨关卡的账号级状态，2.3）。
+ *   refresh  —— 重排棋盘：走 3.8 的同一条路径（只搬普通动物格，不动障碍物与收集物）；失败时 `used = false`。
+ *   addSteps —— 步数关 `+extraSteps` 步；时间关 `+extraSeconds` 秒（时间关没有步数，3.6 第 8 条）。
+ *   hammer   —— 消除 `target`（Pos 或 Pos[]，最多 `hammerCells` 格）：只接受**含动物**的格子，
+ *               消除走 `resolveBoard({ initialClear })`，因此被点名的特殊元素按 4.3.8 照常激活。
+ */
+export function useBooster(state, kind, target) {
+  const level = state.level;
+  const base = {
+    used: false,
+    kind,
+    reason: null,
+    resolve: null,
+    stepsLeft: level.remainingSteps,
+    remainingTime: level.remainingTime ?? 0,
+    gameOver: state.gameOver
+  };
+  if (state.gameOver) return { ...base, reason: 'busy' };
+
+  if (kind === BOOSTER_KIND.REFRESH) {
+    const stats = { tries: 0 };
+    const shuffled = shuffleBoard(state.board, { rng: state.rng, stats });
+    return { ...base, used: shuffled, reason: shuffled ? null : 'shuffleFailed' };
+  }
+
+  if (kind === BOOSTER_KIND.ADD_STEPS) {
+    if (isTimeLevel(level)) {
+      return { ...base, used: true, remainingTime: grantTime(level, CONFIG.BOOSTER_CONFIG.extraSeconds) };
+    }
+    return { ...base, used: true, stepsLeft: grantSteps(level, CONFIG.BOOSTER_CONFIG.extraSteps) };
+  }
+
+  if (kind === BOOSTER_KIND.HAMMER) {
+    const targets = (Array.isArray(target) ? target : [target])
+      .filter((pos) => isHammerTarget(state.board, pos))
+      .slice(0, Math.max(1, Math.trunc(CONFIG.BOOSTER_CONFIG.hammerCells)));
+    if (targets.length === 0) return { ...base, reason: 'badTarget' };
+
+    const resolve = resolveBoard(state, { initialClear: targets.map((pos) => ({ r: pos.r, c: pos.c })) });
+    // 木锤不消耗步数，但结算照常可能达成目标（3.6）—— 结束判定与一次交换同一套口径
+    state.gameOver = state.gameOver || state.level.completed;
+    return { ...base, used: true, resolve, stepsLeft: level.remainingSteps, gameOver: state.gameOver };
+  }
+
+  return { ...base, reason: 'badKind' };
+}
+
+/** 3.9：小木锤只接受「含动物的格子」—— 空格 / 纯障碍（雪块·巧克力）/ 收集物（水果·金豆荚）一律无效。 */
+function isHammerTarget(board, target) {
+  if (!target || !Number.isInteger(target.r) || !Number.isInteger(target.c)) return false;
+  const cell = board?.[target.r]?.[target.c];
+  return Boolean(cell) && cell.color !== null && cell.color !== undefined;
 }
 
 /**

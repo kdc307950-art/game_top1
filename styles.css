@@ -7,6 +7,9 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+  /* Step 15（v1.20 / 3.9）：道具条高度。render.js 从可用高度里扣除它，
+     道具条自身的高度也取同一个变量 —— 两边只有一个真相源。 */
+  --booster-bar-h: 56px;
 }
 
 html,
@@ -25,6 +28,7 @@ body {
 
 body {
   display: flex;
+  flex-direction: column; /* Step 15：canvas 与道具条纵向排列（道具条在棋盘下方） */
   align-items: center;
   justify-content: center;
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
@@ -38,14 +42,62 @@ body {
   display: block;
   touch-action: none; /* AGENTS.md 5.1：禁止滚动与手势缩放 */
   /* 精确尺寸由 app.js 按 devicePixelRatio 与可用视口计算并写为行内 px（保持正方形，AGENTS.md 5.2）。
-     下面的规则是 app.js 生效前的兜底：保证首帧仍是正方形可见区域，且短视口（横屏）不溢出。 */
-  width: min(100%, calc(100vh - 32px - var(--safe-top) - var(--safe-bottom)));
+     下面的规则是 app.js 生效前的兜底：保证首帧仍是正方形可见区域，且短视口（横屏）不溢出。
+     v1.20 起还要扣除道具条高度，否则兜底尺寸会与 app.js 算出的尺寸差一截。 */
+  width: min(100%, calc(100vh - 32px - var(--booster-bar-h) - var(--safe-top) - var(--safe-bottom)));
   height: auto;
   aspect-ratio: 1 / 1;
   max-width: 720px;
   border-radius: 14px;
   background: #1b1830;
   -webkit-user-drag: none;
+}
+
+/* Step 15（v1.20 / 3.9）道具条：画布外的页面元素，固定高度由 --booster-bar-h 决定。
+   按钮用 DOM 而不是画布绘制 —— 命中测试、可访问性与「不改变 boardRect」三者都因此更简单。 */
+#boosters {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: var(--booster-bar-h);
+  width: 100%;
+  touch-action: manipulation;
+}
+
+.booster {
+  position: relative;
+  min-width: 76px;
+  padding: 8px 14px 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #ff4fd8;
+  color: #2a0b23;
+  font: 700 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.booster[aria-pressed='true'] {
+  outline: 2px solid #ffd93b; /* 小木锤「已选好、等格子」的状态 */
+  background: #ff77e4;
+}
+
+.booster[disabled] {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.45);
+  cursor: default;
+}
+
+.booster-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: rgba(42, 11, 35, 0.85);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* AGENTS.md 5.4 / Step 5：跟随系统「减少动效」。

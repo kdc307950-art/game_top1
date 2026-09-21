@@ -351,6 +351,23 @@ export function consumeTime(level, seconds) {
 }
 
 /**
+ * 步数恢复（v1.20，3.9 的「加五步」）：增加剩余步数并返回加后的值。
+ * 与 `consumeStep` 对称；调用点在 `game.useBooster`，**道具本身不消耗步数**。
+ */
+export function grantSteps(level, steps) {
+  const amount = Number.isFinite(steps) ? Math.max(0, Math.trunc(steps)) : 0;
+  level.remainingSteps = Math.max(0, (Number.isFinite(level.remainingSteps) ? level.remainingSteps : 0) + amount);
+  return level.remainingSteps;
+}
+
+/** 时间恢复（v1.20）：`game.useBooster` 的「加五步」在**时间关**走这条分支（时间关没有步数，3.6 第 8 条）。 */
+export function grantTime(level, seconds) {
+  const amount = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  level.remainingTime = Math.max(0, (Number.isFinite(level.remainingTime) ? level.remainingTime : 0) + amount);
+  return level.remainingTime;
+}
+
+/**
  * 4.2：checkGoal(level, board, score, collected) —— 本局是否已达成通关目标（3.6）。
  * 四种目标：`score` 比分数；`collect` 比收集计数（键为 `COLOR_NAMES` 里的动物名）；
  * `clearIce` 比冰块层数；`mixed` 要求列出的每个分项都达标（未列出的分项不参与判定）。

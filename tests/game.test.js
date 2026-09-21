@@ -12,8 +12,8 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
-import { createGame, getState, resolveBoard, tickTime, trySwap } from '../game.js';
+import { BOOSTER_KIND, CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
+import { createGame, getState, resolveBoard, tickTime, trySwap, useBooster } from '../game.js';
 import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
 
@@ -888,6 +888,106 @@ test('时间关（v1.19）：tickTime 递减、归零判负；归零前达成目
   assertEqual(winning.level.completed, true, '目标达成 → completed');
   assertEqual(winning.gameOver, true, '达成目标即结束本局');
   assertEqual(tickTime(winning, 1).won, true, '结束后再推进，won 仍为真');
+});
+
+// ---------------------------------------------------------------- Step 15：道具（v1.20 / 3.9）
+
+test('useBooster（v1.20）：加五步在步数关 +5 且不消耗步数，在时间关改加秒', () => {
+  const normal = createGame({ steps: 10, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(31) });
+  const before = normal.level.remainingSteps;
+  const result = useBooster(normal, BOOSTER_KIND.ADD_STEPS);
+  assertEqual(result.used, true, '步数关生效');
+  assertEqual(normal.level.remainingSteps, before + CONFIG.BOOSTER_CONFIG.extraSteps, `步数 +${CONFIG.BOOSTER_CONFIG.extraSteps}`);
+  assertEqual(result.resolve, null, '加五步没有结算结果');
+  assertEqual(result.reason, null, '没有失败原因');
+  assertEqual(normal.gameOver, false, '加步数不会结束本局');
+
+  const timed = createGame({ steps: 0, timeLimit: 12, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(33) });
+  const timeBefore = timed.level.remainingTime;
+  const timedResult = useBooster(timed, BOOSTER_KIND.ADD_STEPS);
+  assertEqual(timedResult.used, true, '时间关同样生效');
+  assertEqual(timed.level.remainingTime, timeBefore + CONFIG.BOOSTER_CONFIG.extraSeconds, `时间 +${CONFIG.BOOSTER_CONFIG.extraSeconds} 秒`);
+  assertEqual(timed.level.remainingSteps, 0, '时间关的步数仍是 0');
+});
+
+test('useBooster（v1.20）：刷新重排棋盘、不消耗步数、满足 3.8 的四条约束', () => {
+  const game = createGame({
+    steps: 12,
+    goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 },
+    obstacles: [{ r: 2, c: 2, type: OBSTACLE_TYPE.ICE, layers: 2 }],
+    collectibles: [{ r: 0, c: 4, type: COLLECTIBLE_TYPE.FRUIT }]
+  }, { rng: seededRng(37) });
+
+  const beforeIds = game.board.flat().map((cell) => cell.id).join(',');
+  const result = useBooster(game, BOOSTER_KIND.REFRESH);
+
+  assertTrue(result.used, '刷新生效');
+  assertEqual(game.level.remainingSteps, 12, '刷新不消耗步数（3.9）');
+  assertTrue(game.board.flat().map((cell) => cell.id).join(',') !== beforeIds, '棋盘排列确实变了');
+  assertEqual(findMatches(game.board).length, 0, '重排后无三连（3.8 约束 1）');
+  assertTrue(hasPossibleMove(game.board), '重排后存在可行交换（3.8 约束 2）');
+  assertEqual(game.board[2][2].obstacle, OBSTACLE_TYPE.ICE, '障碍物没被搬动（3.8 约束 3）');
+  assertEqual(game.board[2][2].obstacleLayers, 2, '障碍物层数不变');
+  assertEqual(game.board[0][4].collectible, COLLECTIBLE_TYPE.FRUIT, '收集物也没被搬动（3.9）');
+});
+
+test('useBooster（v1.20）：小木锤消除单格、不消耗步数、特效应照常激活', () => {
+  const game = createGame({ steps: 9, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(41) });
+  paintFixture(game.board, singleLevelBoard);
+
+  const target = { r: 4, c: 0 };
+  const cellBefore = game.board[4][0].color;
+  const scoreBefore = game.level.currentScore;
+  const result = useBooster(game, BOOSTER_KIND.HAMMER, target);
+
+  assertTrue(result.used, '木锤生效');
+  assertTrue(result.resolve.cleared.length >= 1, '至少消除 1 格');
+  assertTrue(game.level.currentScore > scoreBefore, `得分增加（${scoreBefore} → ${game.level.currentScore}）`);
+  assertEqual(game.level.remainingSteps, 9, '木锤不消耗步数（3.9）');
+  assertTrue(cellBefore !== null, '目标原来是含动物的格子');
+
+  // 点特效格：initialClear 会把它当激活种子 → 波及范围远大于 1 格（4.3.8）
+  const game2 = createGame({ steps: 9, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(43) });
+  paintFixture(game2.board, singleLevelBoard);
+  game2.board[4][0].type = CELL_TYPE.STRIPED;
+  game2.board[4][0].direction = DIRECTION.H;
+  const striped = useBooster(game2, BOOSTER_KIND.HAMMER, { r: 4, c: 0 });
+  assertTrue(striped.used && striped.resolve.cleared.length > 3, `点条纹格触发整行（消除 ${striped.resolve.cleared.length} 格）`);
+});
+
+test('useBooster（v1.20）：小木锤的非法目标一律无效（空格/纯障碍/收集物/越界）', () => {
+  const game = createGame({
+    steps: 9,
+    goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 },
+    obstacles: [{ r: 5, c: 5, type: OBSTACLE_TYPE.SNOW, layers: 1 }],
+    collectibles: [{ r: 0, c: 6, type: COLLECTIBLE_TYPE.POD }]
+  }, { rng: seededRng(47) });
+  game.board[3][3].color = null; // 夹具：把 (3,3) 清成空格（4.1 约束：先经 createBoard 构造）
+
+  for (const [pos, label] of [
+    [{ r: 3, c: 3 }, '空格'],
+    [{ r: 5, c: 5 }, '纯障碍（雪块）'],
+    [{ r: 0, c: 6 }, '收集物（金豆荚）'],
+    [{ r: 99, c: 0 }, '越界'],
+    [null, '缺目标']
+  ]) {
+    const result = useBooster(game, BOOSTER_KIND.HAMMER, pos);
+    assertFalse(result.used, `${label} → 无效`);
+    assertEqual(result.reason, 'badTarget', `${label} → 原因是 badTarget（调用方因此不扣数量）`);
+    assertEqual(game.level.remainingSteps, 9, `${label} → 不消耗步数`);
+  }
+});
+
+test('useBooster（v1.20）：未知道具与已结束的本局都不生效（used = false）', () => {
+  const game = createGame({ steps: 9, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(53) });
+  assertFalse(useBooster(game, 'nope').used, '未知道具');
+  assertEqual(useBooster(game, 'nope').reason, 'badKind', '原因是 badKind');
+
+  game.gameOver = true;
+  const busy = useBooster(game, BOOSTER_KIND.ADD_STEPS);
+  assertFalse(busy.used, '已结束 → 不生效');
+  assertEqual(busy.reason, 'busy', '原因是 busy');
+  assertEqual(game.level.remainingSteps, 9, '已结束时加五步也不会改状态');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

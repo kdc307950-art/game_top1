@@ -8,8 +8,15 @@
 //   - 5.4：逻辑先全部算完（game.trySwap 同步结算），再按时间线播放快照 —— 动画不阻塞逻辑更新；
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
 
-import { CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
-import { createGame, getState as getGameState, tickTime as gameTickTime, trySwap as gameTrySwap } from './game.js';
+import { BOOSTER_KIND, CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
+import { cloneBoard } from './board.js'; // v1.20：道具的回放首帧快照（与 trySwap 的 afterSwap 同语义）
+import {
+  createGame,
+  getState as getGameState,
+  tickTime as gameTickTime,
+  trySwap as gameTrySwap,
+  useBooster as gameUseBooster
+} from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
@@ -62,7 +69,10 @@ const view = {
   // （回放动画期间只记账不结算，保证逻辑串行，见 5.4「动画不阻塞逻辑」）。
   clockTimer: 0,
   clockLast: 0,
-  timeDebt: 0
+  timeDebt: 0,
+  // Step 15（v1.20 / 3.9）：道具数量（storage.js 持久化）与「小木锤已就绪」的待选格状态
+  boosters: null,
+  hammerArmed: false
 };
 
 init();
@@ -84,9 +94,11 @@ function init() {
   view.ctx = ctx;
   view.best = storage.readBestScore();
   view.levelStars = storage.readLevelStars(); // Step 12.2：载入每关星级（选关界面用）
+  view.boosters = storage.readBoosters(); // Step 15（3.9）：载入道具数量
   view.systemReducedMotion = prefersReducedMotion();
   startNewGame();
   applyLayout();
+  bindBoosters(); // Step 15：道具条（画布外的 DOM 元素）
 
   bindInput({
     target: canvas,
@@ -139,11 +151,13 @@ function startNewGame() {
   view.playback = null;
   view.hudScore = null;
   view.restartRect = null;
+  view.hammerArmed = false; // 3.9：重开一局时退出「小木锤待选格」
 
   const snapshot = getGameState(view.game);
   const timing = snapshot.timeLimit ? `倒计时 ${snapshot.timeLimit} 秒` : `步数 ${snapshot.remainingSteps}`;
   log('info', `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，${timing}，最高分 ${view.best}`);
   startClock(); // 3.6 第 8 条：时间关由真实时间驱动倒计时；其它关卡不启动
+  updateBoosterBar();
   if (view.sizePx > 0) drawFrame();
 }
 
@@ -277,7 +291,21 @@ function onTap({ x1, y1 }) {
     return;
   }
   const cell = cellAt(view.canvas, x1, y1, view.sizePx);
+  // 3.9（v1.20）：小木锤是两步式交互 —— 已就绪时这一下点在格子上而不是做选中/交换
+  if (cell && view.hammerArmed) {
+    tryHammer(cell);
+    return;
+  }
   if (cell) handleTap(cell);
+}
+
+/** 3.9：小木锤落点 —— 只接受含动物的格子；非法目标由逻辑层判 `badTarget`，数量不扣。 */
+function tryHammer(cell) {
+  const result = applyBooster(BOOSTER_KIND.HAMMER, { r: cell.r, c: cell.c });
+  if (result && !result.used) {
+    log('info', `小木锤：(${cell.r},${cell.c}) 不是可消除的动物格（空格/纯障碍/收集物），道具未消耗`);
+  }
+  armHammer(false);
 }
 
 /** 后备交互（5.3）：第一次点击选中，第二次点相邻格交换；点同格取消，点远处改选。 */
@@ -406,6 +434,97 @@ function finishTimeline() {
   if (pendingGameOver) finishGame();
 }
 // ---------------------------------------------------------------------------
+// 道具条（Step 15，v1.20；AGENTS.md 3.9）
+//
+// 结构与样式在 index.html / styles.css（画布外的 DOM 元素），这里只做编排：
+//   数量在 storage.js（唯一碰 localStorage 的模块）→ 逻辑层 `game.useBooster` → **生效才扣数量**。
+// 道具本身不消耗步数、也不扣时间；小木锤是两步式（先点按钮，再点格子）。
+// ---------------------------------------------------------------------------
+
+function bindBoosters() {
+  const bar = document.getElementById('boosters');
+  if (!bar) {
+    log('warn', '未找到 #boosters 道具条，道具不可用（不影响对局）');
+    return;
+  }
+  for (const button of bar.querySelectorAll('.booster')) {
+    button.addEventListener('click', () => handleBoosterClick(button.dataset.kind));
+  }
+  updateBoosterBar();
+}
+
+function handleBoosterClick(kind) {
+  if (view.screen !== 'playing') return; // 选关界面不响应道具
+  if (kind === BOOSTER_KIND.HAMMER) {
+    armHammer(!view.hammerArmed);
+    log('info', view.hammerArmed ? '小木锤已就绪：点一个格子即可消除它' : '小木锤已取消');
+    return;
+  }
+  armHammer(false);
+  applyBooster(kind);
+}
+
+function armHammer(armed) {
+  view.hammerArmed = armed;
+  updateBoosterBar();
+  drawFrame();
+}
+
+/** 数量检查 → 逻辑层 → 生效才扣数量；任何一步不成立都**不扣数量**（3.9）。 */
+function applyBooster(kind, target = null) {
+  if (view.game.gameOver || timeline.running) {
+    log('info', '道具未使用：本局已结束或动画播放中');
+    return null;
+  }
+  if ((view.boosters?.[kind] ?? 0) <= 0) {
+    log('info', `道具未使用：${boosterLabel(kind)} 数量为 0（用光后本步不提供获取途径）`);
+    return null;
+  }
+
+  const scoreBefore = view.game.level.currentScore;
+  // 回放的首帧要用「动作之前」的棋盘（与 trySwap 的 afterSwap 同一语义）：木锤要先看见被敲的那一格
+  const beforeBoard = cloneBoard(view.game.board);
+  const result = gameUseBooster(view.game, kind, target);
+  if (!result.used) {
+    log('info', `道具未生效（${result.reason}），不消耗数量：${boosterLabel(kind)}`);
+    return result;
+  }
+
+  const spend = storage.spendBooster(view.boosters, kind); // v1.16：落盘只在 storage.js
+  updateBoosterBar();
+  log('info', `使用道具：${boosterLabel(kind)}，剩余 ${spend.left} 个，剩余${progressLabel()} ${progressValue(result)}`);
+
+  if (result.resolve) {
+    view.endReason = view.game.level.completed ? 'won' : view.endReason;
+    // 木锤的结算同样要按 5.4 播完快照：afterSwap 传「敲之前」的棋盘快照
+    startTimeline({ resolve: result.resolve, gameOver: result.gameOver, afterSwap: beforeBoard }, scoreBefore);
+  } else {
+    drawFrame(); // 加五步 / 刷新只有 HUD 与棋盘排列变化，没有分层回放
+  }
+  return result;
+}
+
+/** 道具条的数量与可用状态；只在状态变化时调用（不是每帧绘制）。 */
+function updateBoosterBar() {
+  const bar = document.getElementById('boosters');
+  if (!bar) return;
+  for (const button of bar.querySelectorAll('.booster')) {
+    const kind = button.dataset.kind;
+    const left = view.boosters?.[kind] ?? 0;
+    const badge = button.querySelector('.booster-count');
+    if (badge) badge.textContent = String(left);
+    button.disabled = left <= 0 || Boolean(view.game && view.game.gameOver);
+    button.setAttribute('aria-pressed', kind === BOOSTER_KIND.HAMMER && view.hammerArmed ? 'true' : 'false');
+  }
+}
+
+function boosterLabel(kind) {
+  if (kind === BOOSTER_KIND.REFRESH) return '刷新';
+  if (kind === BOOSTER_KIND.ADD_STEPS) return '加五步';
+  return '小木锤';
+}
+
+// ---------------------------------------------------------------------------
 // 绘制：把状态整理成 render.js 需要的「场景描述」
 // ---------------------------------------------------------------------------
 
@@ -460,6 +579,7 @@ function drawFrame(entry = null, progress = 1) {
 /** 本局结束：刷新并持久化最高分（5.5 的页面内面板由 render.js 绘制，禁止 alert）。 */
 function finishGame() {
   stopClock(); // v1.19：本局结束，倒计时停止（3.6 第 8 条）
+  view.hammerArmed = false; // 3.9：本局结束后不再接受木锤落点
   const snapshot = getGameState(view.game);
   const isRecord = snapshot.currentScore > view.best;
   const reasonText = {
@@ -486,6 +606,7 @@ function finishGame() {
       `最高分 ${view.best}` +
       (isRecord ? '（新纪录，已写入 localStorage）' : '')
   );
+  updateBoosterBar();
   drawFrame();
 }
 

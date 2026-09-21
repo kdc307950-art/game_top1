@@ -4,7 +4,7 @@
 // Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
-import { COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
+import { BOOSTER_KIND, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
 import {
   DEMO_LEVEL_ID,
   DEMO_LEVEL_IDS,
@@ -19,6 +19,8 @@ import {
   createLevel,
   getLevelConfig,
   getRemainingStepBonus,
+  grantSteps,
+  grantTime,
   isTimeLevel
 } from '../level.js';
 
@@ -391,6 +393,29 @@ test('Step 14 不改 50 关表：三种类型都不在 1-50 关里（v1.18 第 4
     assertEqual(config.timeLimit, undefined, `L${id} 不是时间关`);
     assertDeepEqual(config.collectibles, [], `L${id} 没有收集物`);
   }
+});
+
+// ---------------------------------------------------------------- Step 15：道具（v1.20 / 3.9）
+
+test('grantSteps/grantTime（v1.20）：加五步在两种关卡上分别加步数 / 加秒数', () => {
+  const normal = createLevel(levelConfig({ steps: 10 }));
+  assertEqual(grantSteps(normal, 5), 15, '步数关 +5');
+  assertEqual(grantSteps(normal, -3), 15, '负数不加');
+  assertEqual(grantSteps(normal, Number.NaN), 15, 'NaN 不加');
+  assertEqual(grantSteps(normal, 2.7), 17, '小数按整数加成');
+
+  const timed = createLevel(levelConfig({ steps: 0, timeLimit: 20 }));
+  assertEqual(grantTime(timed, CONFIG.BOOSTER_CONFIG.extraSeconds), 20 + CONFIG.BOOSTER_CONFIG.extraSeconds, '时间关加秒');
+  assertEqual(timed.remainingSteps, 0, '时间关的步数始终是 0（3.6 第 8 条）');
+  assertEqual(grantTime(timed, -5), 20 + CONFIG.BOOSTER_CONFIG.extraSeconds, '负数不加秒');
+});
+
+test('BOOSTER_CONFIG（v1.20）：四个键都取自 config.js（逻辑层不写魔法数字）', () => {
+  assertEqual(CONFIG.BOOSTER_CONFIG.initialCount, 3, '初始数量');
+  assertEqual(CONFIG.BOOSTER_CONFIG.extraSteps, 5, '加五步的步数');
+  assertEqual(CONFIG.BOOSTER_CONFIG.extraSeconds, 10, '时间关的秒数');
+  assertEqual(CONFIG.BOOSTER_CONFIG.hammerCells, 1, '小木锤的格数');
+  assertDeepEqual(Object.values(BOOSTER_KIND).sort(), ['addSteps', 'hammer', 'refresh'], '道具类型常量');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
