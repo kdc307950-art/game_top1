@@ -21,6 +21,12 @@ export const OBSTACLE_TYPE = Object.freeze({
   CHOC: 'choc'
 });
 
+/** 可掉落的收集物类型（AGENTS.md 4.1 cell.collectible / 3.6 水果关与金豆荚关，v1.18） */
+export const COLLECTIBLE_TYPE = Object.freeze({
+  FRUIT: 'fruit',
+  POD: 'pod'
+});
+
 /** 条纹方向（AGENTS.md 4.1 cell.direction） */
 export const DIRECTION = Object.freeze({
   H: 'h',
@@ -41,7 +47,9 @@ export const GOAL_TYPE = Object.freeze({
   SCORE: 'score',
   COLLECT: 'collect',
   CLEAR_ICE: 'clearIce',
-  MIXED: 'mixed'
+  MIXED: 'mixed',
+  FRUIT: 'fruit', // v1.18：水果关（收集 N 个水果）
+  POD: 'pod'      // v1.18：金豆荚关（收集 N 个金豆荚）
 });
 
 /** localStorage 键名（读写只允许发生在 app.js，见 AGENTS.md 2.3 / ROADMAP Step 4） */
@@ -104,6 +112,26 @@ export const CONFIG = {
     fruitFallPerStep: 99,
     podFallPerStep: 1,
     exitRow: 7
+  },
+
+  // 时间关的时长派生（AGENTS.md 3.6 第 8 条，v1.19）。
+  // v1.18 要求「初始秒数与下限必须走 config.js」；这里给的是**完整的派生公式系数**：
+  //   秒数 = clamp(round(initialSeconds + 目标工作量 × secondsPerWorkload − 障碍摩擦 × secondsPerFriction), min, max)
+  // 目标工作量与障碍摩擦的定义与 STEP_BUDGET 完全一致（同一套单位键），保证两种关卡的难度观感一致。
+  TIME_CONFIG: {
+    initialSeconds: 60,     // 基准秒数
+    secondsPerWorkload: 12, // 每个「目标工作量单位」折算的秒数
+    secondsPerFriction: 3,  // 每点障碍摩擦扣减的秒数
+    minSeconds: 45,         // 秒数下限
+    maxSeconds: 120         // 秒数上限
+  },
+
+  // 三星阈值（AGENTS.md 3.7 / 3.6，v1.19）：二星/三星 = 1★ 基准分 × 倍率，取整到 500。
+  // podFactor 只作用于金豆荚关（v1.18：「与水果关的区别只在掉落节奏与三星阈值更高」）。
+  STAR_CONFIG: {
+    secondFactor: 1.7,
+    thirdFactor: 2.5,
+    podFactor: 1.2
   },
 
   // 步数由难度派生（Step 12.2，用户批准）：「难度分 → 步数」公式的系数（附录 B 逐键登记）。

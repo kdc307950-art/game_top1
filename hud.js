@@ -8,6 +8,7 @@
 
 export const HUD_RATIO = 0.13; // HUD 带高度 / 画布边长（render.js 据此切分棋盘区）
 const HUD_LOW_STEPS = 5; // 剩余步数 ≤ 此值时用警示色
+const HUD_LOW_TIME = 10; // 剩余秒数 ≤ 此值时用警示色（3.6 v1.18 的时间关）
 const HUD_CELL_BG = 'rgba(255, 255, 255, 0.06)'; // 修饰性底色；透明度 ≤ 0.1（REFERENCES §3.5 红线 3）
 const HUD_LABEL_COLOR = 'rgba(255, 255, 255, 0.55)';
 const HUD_VALUE_COLOR = '#ffffff';
@@ -40,12 +41,16 @@ export function hudCellBackground() {
   return HUD_CELL_BG;
 }
 
-/** HUD 常驻信息（5.5 / v1.14）：分数 / 剩余步数 / 关卡目标进度 / 最高分。 */
+/** HUD 常驻信息（5.5 / v1.14）：分数 / 剩余步数 / 关卡目标进度 / 最高分。
+ *  v1.19：时间关**没有步数**，第二格改显示剩余时间（3.6 第 8 条 + 5.5）。 */
 export function drawHud(ctx, { sizePx, hudHeight, hud }) {
   const boxes = hudCells(sizePx, hudHeight);
+  const timed = Number.isFinite(hud.timeLimit) && hud.timeLimit > 0;
   const stats = [
     { label: '分数', value: String(hud.score), warn: false },
-    { label: '步数', value: String(hud.steps), warn: hud.steps <= HUD_LOW_STEPS },
+    timed
+      ? { label: '时间', value: `${Math.max(0, Math.ceil(hud.remainingTime ?? 0))}s`, warn: (hud.remainingTime ?? 0) <= HUD_LOW_TIME }
+      : { label: '步数', value: String(hud.steps), warn: hud.steps <= HUD_LOW_STEPS },
     { label: '目标', value: '', warn: false, lines: goalLines(hud) },
     { label: '最高分', value: String(hud.best), warn: false }
   ];
@@ -86,6 +91,9 @@ function goalLines(hud) {
 
   if (goal.type === 'score') entries.push(progress(`${hud.score}`, `${goal.target}`, hud.score >= goal.target));
   if (goal.type === 'clearIce') entries.push(progress(`冰 ${hud.clearedIce ?? 0}`, `${goal.target}`, (hud.clearedIce ?? 0) >= goal.target));
+  // 3.6（v1.18）：水果关/金豆荚关的进度就是「已收到几个」
+  if (goal.type === 'fruit') entries.push(progress(`水果 ${hud.collectedFruit ?? 0}`, `${goal.target}`, (hud.collectedFruit ?? 0) >= goal.target));
+  if (goal.type === 'pod') entries.push(progress(`豆荚 ${hud.collectedPod ?? 0}`, `${goal.target}`, (hud.collectedPod ?? 0) >= goal.target));
   if (goal.type === 'collect' || goal.type === 'mixed') {
     const targets = goal.type === 'collect' ? goal.targets : goal.collect;
     for (const [name, need] of Object.entries(targets ?? {})) {
@@ -132,7 +140,12 @@ export function drawBanner(ctx, field, text) {
 
 export function drawGameOver(ctx, field, overlay) {
   // overlay.reason：'won'（达成 3.6 的目标）/ 'steps'（步数用尽）/ 'stuck'（3.8 约束 4：死局重排超限）
-  const title = overlay.reason === 'won' ? '关卡完成' : overlay.reason === 'stuck' ? '无可消除组合' : '步数用尽';
+  // / 'time'（v1.19：时间关倒计时归零且目标未达成，3.6 v1.18）
+  const title =
+    overlay.reason === 'won' ? '关卡完成'
+      : overlay.reason === 'stuck' ? '无可消除组合'
+        : overlay.reason === 'time' ? '时间到'
+          : '步数用尽';
   const stars = Number.isFinite(overlay.stars) ? overlay.stars : 0;
   ctx.fillStyle = OVERLAY_DIM;
   ctx.fillRect(field.x, field.y, field.side, field.side);
@@ -212,6 +225,8 @@ export function describeGoal(goal) {
   if (goal.type === 'score') return `分数达到 ${goal.target}`;
   if (goal.type === 'clearIce') return `消除 ${goal.target} 层冰块`;
   if (goal.type === 'collect') return `收集 ${formatTargets(goal.targets)}`;
+  if (goal.type === 'fruit') return `收集 ${goal.target} 个水果`;   // 3.6 v1.18
+  if (goal.type === 'pod') return `收集 ${goal.target} 个金豆荚`;    // 3.6 v1.18
   const parts = [];
   if (goal.score !== undefined) parts.push(`分数 ${goal.score}`);
   if (goal.clearIce !== undefined) parts.push(`冰块 ${goal.clearIce} 层`);

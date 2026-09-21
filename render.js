@@ -12,7 +12,7 @@
 // 外观方案经用户批准（深色描边 + 内阴影 + 内嵌图案 + 高光 + 条纹/方向箭头），见 DECISIONS.md D020。
 
 import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
-import { buildObstacleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
+import { buildCollectibleAtlas, buildObstacleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
 import { HUD_RATIO, drawBanner, drawGameOver, drawHud, drawLevelSelect, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
@@ -88,7 +88,8 @@ export function createRenderer() {
       cellCss: layout.field.side / CONFIG.BOARD_SIZE,
       chrome: buildChrome(sizePx, dpr, layout),
       sprites: buildSpriteAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr),
-      obstacles: buildObstacleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr) // Step 11：冰块/雪块
+      obstacles: buildObstacleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr), // Step 11：冰块/雪块
+      collectibles: buildCollectibleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr) // Step 14：水果/金豆荚
     };
   }
 
@@ -106,6 +107,7 @@ export function createRenderer() {
     }
 
     drawCandies(ctx, cache, scene, field);
+    drawCollectibles(ctx, cache, scene, field); // 3.6（v1.19）：水果/金豆荚占格、独立于糖果绘制
     drawObstacles(ctx, cache, scene, field); // 5.4：冰块覆层要盖在糖果之上
     drawRings(ctx, scene, field);
     if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的明确提示
@@ -191,6 +193,34 @@ function drawCandies(ctx, cache, scene, field) {
       const item = board[r]?.[c];
       if (!item || item.color === null || item.color === undefined) continue;
       blit(ctx, spriteFor(cache, item), field.x + c * cell, field.y + r * cell, cell, scale, alpha);
+    }
+  }
+}
+
+/**
+ * 收集物层（Step 14，3.6 的水果关 / 金豆荚关）：水果与金豆荚是**占格的不透明精灵**，
+ * 与糖果同一套下落插值（按 `cell.id` 从 `scene.falling.moves` 取轨迹），因此「金豆荚每次只下落 1 格」
+ * 的节奏在画面上是可见的（规则在 board.applyGravity，渲染只负责表现）。
+ * 收集物不会被消除，故不参与 `scene.clearing` 的缩放淡出分支。
+ */
+function drawCollectibles(ctx, cache, scene, field) {
+  const cell = cache.cellCss;
+  const board = scene.board;
+  for (let r = 0; r < board.length; r += 1) {
+    for (let c = 0; c < board[r].length; c += 1) {
+      const item = board[r][c];
+      const sprite = cache.collectibles?.[item.collectible];
+      if (!sprite) continue;
+
+      const move = scene.falling ? scene.falling.moves.get(item.id) : undefined;
+      let row = r;
+      let col = c;
+      if (move) {
+        const t = scene.falling.progress * scene.falling.progress; // 与糖果同一条重力缓动
+        row = move.from.r + (move.to.r - move.from.r) * t;
+        col = move.from.c + (move.to.c - move.from.c) * t;
+      }
+      ctx.drawImage(sprite, field.x + col * cell, field.y + row * cell, cell, cell);
     }
   }
 }

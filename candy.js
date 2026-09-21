@@ -11,7 +11,7 @@
 //   3) 修饰性底色透明度 ≤ 0.1（本文件的图案/高光属有意义的造型，不在此列）。
 // 色盲友好（5.4）：颜色 ↔ 形状 ↔ 内嵌图案三重区分，形状与图案都由 color 索引唯一决定。
 
-import { CONFIG, DIRECTION } from './config.js';
+import { COLLECTIBLE_TYPE, CONFIG, DIRECTION } from './config.js';
 
 export const CELL_RADIUS_RATIO = 0.36; // 糖果半径 / 格子边长（5.2 正方形棋盘）
 const RIM_MIX = 0.45; // 描边/暗边 = base 与黑的混合比例
@@ -69,6 +69,21 @@ const BADGE_R_RATIO = 0.15;
 const BADGE_FILL_COLOR = 'rgba(36, 31, 58, 0.85)';
 const BADGE_TEXT_COLOR = '#ffffff';
 
+// Step 14（v1.18/v1.19）收集物：水果与金豆荚。它们**占格**（格内没有动物），因此是不透明精灵。
+// 配色刻意避开调色板（`BASE_COLORS`）与障碍物用色，便于 5.4 的「一眼可辨」与像素取证：
+//   水果 = 深红果身 + 深绿叶 + 棕色果柄；金豆荚 = 琥珀色荚身 + 奶白豆粒 + 深棕荚缝。
+const FRUIT_BODY_COLOR = '#c62828';
+const FRUIT_BODY_DARK = '#7f1616';
+const FRUIT_LEAF_COLOR = '#2e7d32';
+const FRUIT_STEM_COLOR = '#6d4c41';
+const FRUIT_INSET_RATIO = 0.18;   // 果身半径 / 格子边长的一半（留出描边与高光空间）
+const POD_BODY_COLOR = '#d9a441';
+const POD_BODY_DARK = '#7a5220';
+const POD_BEAN_COLOR = '#fdf3d0';
+const POD_BEAN_COUNT = 3;
+const POD_HALF_W_RATIO = 0.30;    // 荚身半宽 / 格子边长（整荚 0.60 格宽，留出与邻格的间隔）
+const POD_HALF_H_RATIO = 0.40;    // 荚身半高 / 格子边长（整荚 0.80 格高）
+
 // 颜色索引（0-5）→ 调色板。顺序对应 CONFIG.COLOR_NAMES，改动顺序等于改动视觉语义。
 export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff', '#a06bff'];
 
@@ -109,6 +124,97 @@ export function buildSpriteAtlas(cellCss, dpr) {
     };
   });
 }
+
+/**
+ * 收集物精灵图集（Step 14，3.6 的水果关 / 金豆荚关）：
+ * 返回 `{ fruit, pod }`，每张正好覆盖一格。收集物**占格且格内没有动物**（4.1），
+ * 所以两张都是不透明绘制（与雪块/巧克力同一类「盖住格位槽」的画法）。
+ * 每张都烘焙一次、每帧只 drawImage，符合 15 节的性能预算（红线 2）。
+ */
+export function buildCollectibleAtlas(cellCss, dpr) {
+  const px = Math.max(8, Math.round(cellCss * dpr));
+  const bake = (paint) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = px;
+    canvas.height = px;
+    paint(canvas.getContext('2d'), px);
+    return canvas;
+  };
+  return {
+    [COLLECTIBLE_TYPE.FRUIT]: bake(paintFruit),
+    [COLLECTIBLE_TYPE.POD]: bake(paintPod)
+  };
+}
+
+/** 水果：深红果身 + 深绿叶 + 棕色果柄 + 左上高光（全程序化，零素材，见 D009）。 */
+function paintFruit(ctx, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.56;
+  const r = size * FRUIT_INSET_RATIO * 1.35;
+
+  ctx.lineWidth = Math.max(1, size * 0.045);
+  ctx.strokeStyle = FRUIT_STEM_COLOR;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 0.75);
+  ctx.lineTo(cx + r * 0.12, cy - r * 1.35);
+  ctx.stroke();
+
+  ctx.fillStyle = FRUIT_LEAF_COLOR;
+  ctx.beginPath();
+  ctx.ellipse(cx + r * 0.42, cy - r * 1.05, r * 0.42, r * 0.2, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = FRUIT_BODY_DARK;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 1.06, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = FRUIT_BODY_COLOR;
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.06, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = HIGHLIGHT_COLOR;
+  ctx.beginPath();
+  ctx.ellipse(cx - r * 0.34, cy - r * 0.36, r * 0.28, r * 0.18, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** 金豆荚：琥珀色荚身 + 三颗奶白豆粒 + 深棕荚缝（与水果的区别一眼可辨）。 */
+function paintPod(ctx, size) {
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const halfW = size * POD_HALF_W_RATIO;
+  const halfH = size * POD_HALF_H_RATIO;
+
+  const podPath = () => {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, halfW, halfH, 0, 0, Math.PI * 2);
+  };
+
+  podPath();
+  ctx.fillStyle = POD_BODY_DARK;
+  ctx.fill();
+
+  podPath();
+  ctx.fillStyle = POD_BODY_COLOR;
+  ctx.save();
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(cx - size * 0.02, cy - size * 0.02, halfW * 0.92, halfH * 0.94, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 豆粒：沿荚身中轴等距排布，让「分阶段掉落」的收集物读起来像一荚豆子而不是一颗糖
+  ctx.fillStyle = POD_BEAN_COLOR;
+  for (let i = 0; i < POD_BEAN_COUNT; i += 1) {
+    const t = (i + 0.5) / POD_BEAN_COUNT;
+    const y = cy - halfH * 0.62 + halfH * 1.24 * t;
+    ctx.beginPath();
+    ctx.arc(cx, y, halfW * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 
 /**
  * 障碍物精灵图集（Step 11，5.4「冰块半透明叠加、雪块白色覆盖」+ 清晰的层数显示）。

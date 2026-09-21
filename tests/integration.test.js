@@ -12,13 +12,14 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, CONFIG, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
 import {
   applyGravity,
   createBoard,
   refillBoard,
   resolveCascades
 } from '../board.js';
+import { createGame, getState, tickTime, trySwap } from '../game.js';
 import { findMatches } from '../match.js';
 
 const SIZE = 8;
@@ -310,6 +311,40 @@ test('storage：最高分与每关星级的读写、脏数据与不可用都会�
   assertDeepEqual(storage.readLevelStars(), {}, 'localStorage 不可用 → 空表');
   assertTrue(logs.every(([level]) => level === 'warn'), '只记 warn，不抛错');
   delete globalThis.window;
+});
+
+// ---------------------------------------------------------------- Step 14：收集物与时间关的整条流程
+
+test('集成（v1.19）：水果「下落 → 出口收集 → 补位」后棋盘仍满足无空洞、无匹配的收尾不变量', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 6, c: 3, type: COLLECTIBLE_TYPE.FRUIT }]);
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) board[r][c].color = (r + c) % 2;
+  }
+  board[6][3].color = null; // 收集物格（占格、无动物）
+
+  // 直接清掉出口行那一格：水果直落到出口 → 被收走
+  const result = resolveCascades(board, COLORS, { rng: cycleRng([0.1, 0.5, 0.9]), initialClear: [{ r: 7, c: 3 }] });
+
+  assertDeepEqual(result.collected, [{ r: 7, c: 3, type: COLLECTIBLE_TYPE.FRUIT }], '出口收集');
+  assertEqual(board.flat().filter((cell) => cell.collectible).length, 0, '收集物已离开棋盘');
+  assertEqual(findMatches(board).length, 0, '收尾后无残留匹配');
+  assertEqual(board.flat().filter((cell) => cell.color === null).length, 0, '收尾后无空洞（出口格被补位）');
+});
+
+test('集成（v1.19）：时间关归零时先引爆盘面上的特殊方块再结算（3.6 第 7 条）', () => {
+  const game = createGame({ steps: 0, timeLimit: 5, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } });
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) game.board[r][c].color = (r + c) % 2;
+  }
+  game.board[4][4].type = CELL_TYPE.STRIPED;
+  game.board[4][4].direction = 'h';
+  game.board[4][4].color = 0;
+
+  const timedOut = tickTime(game, 5);
+  assertEqual(timedOut.gameOver, true, '时间归零 → 本局结束');
+  assertTrue(timedOut.resolve !== null, '归零那一刻发生了引爆结算（resolve 非空）');
+  assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '引爆后盘面无特殊方块');
+  assertEqual(tickTime(game, 1).resolve, null, '已结束的局不再重复引爆');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

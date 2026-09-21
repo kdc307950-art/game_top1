@@ -12,8 +12,8 @@ import {
   assertDeepEqual,
   summarize
 } from './assert.js';
-import { CELL_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
-import { createGame, getState, resolveBoard, trySwap } from '../game.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
+import { createGame, getState, resolveBoard, tickTime, trySwap } from '../game.js';
 import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
 
@@ -791,4 +791,103 @@ test('12.3：通关（还有剩余步数）时同样会引爆盘面特殊方块'
   // 30（本手）+ 29×30（剩余步数转化）+ 引爆分（整列 80）
   assertTrue(getState(game).currentScore >= 30 + 29 * 30, `总分含剩余步数转化：${getState(game).currentScore}`);
 });
+// ---------------------------------------------------------------- Step 14：收集物与时间关（3.6 v1.18 / v1.19）
+
+test('createGame（v1.19）：收集物按关卡配置落到棋盘顶部，且 getState 暴露时间与收集进度', () => {
+  const game = createGame({
+    steps: 10,
+    goal: { type: GOAL_TYPE.FRUIT, target: 2 },
+    collectibles: [
+      { r: 0, c: 1, type: COLLECTIBLE_TYPE.FRUIT },
+      { r: 0, c: 4, type: COLLECTIBLE_TYPE.FRUIT }
+    ]
+  }, { rng: seededRng(3) });
+
+  const onBoard = game.board.flat().filter((cell) => cell.collectible === COLLECTIBLE_TYPE.FRUIT);
+  assertEqual(onBoard.length, 2, '两枚水果都落到了棋盘上');
+  assertEqual(game.board[0][1].collectible, COLLECTIBLE_TYPE.FRUIT, '(0,1) 有水果');
+  assertEqual(game.board[0][4].collectible, COLLECTIBLE_TYPE.FRUIT, '(0,4) 有水果');
+  assertEqual(onBoard.every((cell) => cell.color === null), true, '收集物格内没有动物');
+
+  const snapshot = getState(game);
+  assertEqual(snapshot.collectedFruit, 0, '水果计数初值');
+  assertEqual(snapshot.collectedPod, 0, '豆荚计数初值');
+  assertEqual(snapshot.timeLimit, null, '非时间关 timeLimit 为 null');
+  assertEqual(snapshot.remainingTime, 0, '非时间关 remainingTime 为 0');
+});
+
+test('水果关（v1.19）：收集物落到出口行即计数，集满目标即通关（3.6 v1.18）', () => {
+  const game = createGame({
+    steps: 5,
+    goal: { type: GOAL_TYPE.FRUIT, target: 1 },
+    starThresholds: [1, 2, 3],
+    collectibles: [{ r: 6, c: 2, type: COLLECTIBLE_TYPE.FRUIT }]
+  }, { rng: seededRng(7) });
+
+  assertEqual(game.board[6][2].collectible, COLLECTIBLE_TYPE.FRUIT, '水果放在出口行上方');
+  // 清掉它正下方那一格：水果直落一格到出口行 → 被收走 → 目标达成
+  const result = resolveBoard(game, { initialClear: [{ r: 7, c: 2 }] });
+
+  assertDeepEqual(result.collected, [{ r: 7, c: 2, type: COLLECTIBLE_TYPE.FRUIT }], '本层发生一次收集');
+  assertEqual(game.level.collectedFruit, 1, '关卡进度 +1');
+  assertEqual(game.level.completed, true, '集满 1 个水果即通关（3.6）');
+  assertTrue(getState(game).stars >= 1, '通关至少 1 星（3.7）');
+});
+
+test('金豆荚关（v1.19）：每次消除只下落 1 格，需多次消除才能到出口', () => {
+  const game = createGame({
+    steps: 20,
+    goal: { type: GOAL_TYPE.POD, target: 1 },
+    collectibles: [{ r: 3, c: 5, type: COLLECTIBLE_TYPE.POD }]
+  }, { rng: seededRng(13) });
+
+  // 连续两层都把豆荚下方的动物清掉：每层它只下移 1 格
+  resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
+  const afterFirst = game.board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
+  resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
+  const afterSecond = game.board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
+
+  assertTrue(afterFirst > 3, `第一次消除后豆荚下移（3 → ${afterFirst}）`);
+  assertTrue(afterSecond <= afterFirst + 1, `第二次消除最多再下移 1 格（${afterFirst} → ${afterSecond}）`);
+  assertEqual(game.level.collectedPod, 0, '还没到出口，不应计数');
+});
+
+test('时间关（v1.19）：消除不扣步数、开局不判负，倒计时归零才失败（3.6 第 8 条）', () => {
+  const game = createGame({
+    steps: 0,
+    timeLimit: 30,
+    goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 }
+  }, { rng: seededRng(17) });
+  paintFixture(game.board, singleLevelBoard);
+
+  const snapshot = getState(game);
+  assertEqual(snapshot.timeLimit, 30, 'timeLimit 透出快照（5.5 的 HUD 第二格用）');
+  assertEqual(snapshot.remainingTime, 30, 'remainingTime 初值');
+  assertEqual(game.gameOver, false, '时间关不会因为 steps = 0 而开局判负');
+
+  const swapped = trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
+  assertTrue(swapped.valid, '该交换有效');
+  assertEqual(game.level.remainingSteps, 0, '时间关没有步数可扣');
+  assertEqual(game.level.remainingTime, 30, '消除不扣时间（只有 tickTime 会扣）');
+  assertEqual(game.gameOver, false, '目标远未达成，时间也没到，游戏继续');
+});
+
+test('时间关（v1.19）：tickTime 递减、归零判负；归零前达成目标即通关', () => {
+  const losing = createGame({ steps: 0, timeLimit: 10, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }, { rng: seededRng(19) });
+  assertEqual(tickTime(losing, 4).remainingTime, 6, '扣 4 秒');
+  const timedOut = tickTime(losing, 6);
+  assertEqual(timedOut.remainingTime, 0, '归零');
+  assertEqual(timedOut.gameOver, true, '归零且未达成 → 失败');
+  assertEqual(timedOut.won, false, '不算通关');
+  assertEqual(tickTime(losing, 5).gameOver, true, '已结束后再推进仍为结束（幂等）');
+
+  // 目标分 0：第一次结算就达标（最小夹具，用于验证「归零前达成」这一分支）
+  const winning = createGame({ steps: 0, timeLimit: 10, goal: { type: GOAL_TYPE.SCORE, target: 0 } }, { rng: seededRng(23) });
+  paintFixture(winning.board, singleLevelBoard);
+  assertTrue(trySwap(winning, { r: 4, c: 2 }, { r: 5, c: 2 }).valid, '有效交换');
+  assertEqual(winning.level.completed, true, '目标达成 → completed');
+  assertEqual(winning.gameOver, true, '达成目标即结束本局');
+  assertEqual(tickTime(winning, 1).won, true, '结束后再推进，won 仍为真');
+});
+
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

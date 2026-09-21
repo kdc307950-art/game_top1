@@ -4,8 +4,23 @@
 // Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
-import { CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
-import { DEMO_LEVEL_ID, LEVEL_COUNT, calcStars, checkGoal, computeStepBudget, consumeStep, createLevel, getLevelConfig, getRemainingStepBonus } from '../level.js';
+import { COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
+import {
+  DEMO_LEVEL_ID,
+  DEMO_LEVEL_IDS,
+  LEVEL_COUNT,
+  calcStars,
+  checkGoal,
+  collectibleSpecsFor,
+  computeStepBudget,
+  computeTimeBudget,
+  consumeStep,
+  consumeTime,
+  createLevel,
+  getLevelConfig,
+  getRemainingStepBonus,
+  isTimeLevel
+} from '../level.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -248,6 +263,134 @@ test('Step 13 演示关（id 0）：含藤蔓与巧克力，并满足 3.6 的硬
   assertEqual(demo.steps, computeStepBudget(demo), '步数仍是公式派生（3.6 第 6 条）');
   assertTrue(demo.steps >= CONFIG.STEP_BUDGET.min && demo.steps <= CONFIG.STEP_BUDGET.max, '步数夹在 [min, max]');
   assertTrue(demo.obstacles.every((o) => o.layers >= 1), '障碍物层数都 ≥ 1（v1.17 上限均为 1）');
+});
+
+// ---------------------------------------------------------------- Step 14：关卡类型（水果关 / 时间关 / 金豆荚关）
+
+test('createLevel（v1.19）：时间关 steps = 0、remainingTime = timeLimit，非时间关不受影响', () => {
+  const timed = createLevel(levelConfig({ steps: 0, timeLimit: 60 }));
+  assertEqual(timed.remainingTime, 60, 'remainingTime 初值 = timeLimit');
+  assertTrue(isTimeLevel(timed), 'isTimeLevel 为真');
+  assertEqual(timed.remainingSteps, 0, '时间关没有步数');
+
+  const normal = createLevel(levelConfig());
+  assertEqual(normal.remainingTime, 0, '非时间关 remainingTime 为 0');
+  assertFalse(isTimeLevel(normal), '非时间关 isTimeLevel 为假');
+});
+
+test('createLevel（v1.19）：steps/timeLimit 的边界校验逐条生效', () => {
+  assertThrows(() => createLevel(levelConfig({ steps: 0 })), '非时间关 steps 为 0 仍非法');
+  assertThrows(() => createLevel(levelConfig({ timeLimit: 0 })), 'timeLimit 为 0 非法');
+  assertThrows(() => createLevel(levelConfig({ timeLimit: 1.5 })), 'timeLimit 非整数非法');
+  assertThrows(() => createLevel(levelConfig({ timeLimit: -3 })), 'timeLimit 为负非法');
+  assertTrue(createLevel(levelConfig({ steps: 0, timeLimit: 1 })).timeLimit === 1, 'timeLimit = 1 合法');
+});
+
+test('createLevel（v1.19）：collectibles 不与外部配置共享引用', () => {
+  const spec = { r: 0, c: 1, type: COLLECTIBLE_TYPE.FRUIT };
+  const config = levelConfig({ collectibles: [spec] });
+  const level = createLevel(config);
+  level.collectibles.push({ r: 1, c: 1, type: COLLECTIBLE_TYPE.FRUIT });
+  assertEqual(config.collectibles.length, 1, '外部 collectibles 未被改写');
+  assertDeepEqual(level.collectibles[0], spec, '收集物落点原样保留');
+});
+
+test('consumeTime（v1.19）：按秒递减，归零后保持 0（3.6 第 8 条）', () => {
+  const level = createLevel(levelConfig({ steps: 0, timeLimit: 10 }));
+  assertEqual(consumeTime(level, 3), 7, '第一次');
+  assertEqual(consumeTime(level, 4.5), 2.5, '小数秒也接受（UI 传真实经过时间）');
+  assertEqual(consumeTime(level, 99), 0, '归零');
+  assertEqual(consumeTime(level, 1), 0, '不再变负');
+  assertEqual(consumeTime(level, -5), 0, '负数秒不增加时间');
+});
+
+test('checkGoal（v1.19）：水果关/金豆荚关比各自的收集计数', () => {
+  const fruit = createLevel(levelConfig({ goal: { type: GOAL_TYPE.FRUIT, target: 2 } }));
+  assertFalse(checkGoal(fruit, null, 0, {}), '一个都没收 → 未达成');
+  fruit.collectedFruit = 1;
+  assertFalse(checkGoal(fruit, null, 999999, {}), '分数再高也不算达成水果目标');
+  fruit.collectedFruit = 2;
+  assertTrue(checkGoal(fruit, null, 0, {}), '收满 2 个 → 达成');
+
+  const pod = createLevel(levelConfig({ goal: { type: GOAL_TYPE.POD, target: 1 } }));
+  assertFalse(checkGoal(pod, null, 0, {}), '豆荚未收 → 未达成');
+  pod.collectedPod = 1;
+  assertTrue(checkGoal(pod, null, 0, {}), '豆荚收满 → 达成');
+  pod.collectedFruit = 5;
+  assertTrue(checkGoal(pod, null, 0, {}), '水果计数不影响豆荚目标');
+});
+
+test('computeTimeBudget（v1.19）：夹在 [min, max]、确定性、障碍越多越短、目标越大越长', () => {
+  const base = { colorCount: 5, obstacles: [], goal: { type: GOAL_TYPE.SCORE, target: 3000 } };
+  const value = computeTimeBudget(base);
+  assertEqual(value, computeTimeBudget(base), '同一配置永远算出同一时长（设计期派生）');
+  assertTrue(value >= CONFIG.TIME_CONFIG.minSeconds && value <= CONFIG.TIME_CONFIG.maxSeconds, `夹在 [min,max]：${value}`);
+
+  const heavier = computeTimeBudget({ ...base, obstacles: [{ r: 0, c: 0, type: 'ice', layers: 3 }, { r: 0, c: 1, type: 'snow', layers: 5 }] });
+  assertTrue(heavier < value, `障碍摩擦扣时间：${heavier} < ${value}`);
+
+  const bigger = computeTimeBudget({ ...base, goal: { type: GOAL_TYPE.SCORE, target: 20000 } });
+  assertTrue(bigger > value, `目标越大时间越多：${bigger} > ${value}`);
+  assertEqual(computeTimeBudget({ ...base, goal: { type: GOAL_TYPE.SCORE, target: 10 ** 9 } }), CONFIG.TIME_CONFIG.maxSeconds, '上限');
+});
+
+test('computeStepBudget/computeTimeBudget（v1.19）：收集物目标也折算工作量', () => {
+  const fruit = { colorCount: 5, obstacles: [], goal: { type: GOAL_TYPE.FRUIT, target: 12 } };
+  const pod = { colorCount: 5, obstacles: [], goal: { type: GOAL_TYPE.POD, target: 12 } };
+  const one = { colorCount: 5, obstacles: [], goal: { type: GOAL_TYPE.FRUIT, target: 4 } };
+  assertEqual(computeStepBudget(fruit), computeStepBudget(pod), '两种收集物目标的工作量相同（同用 collectUnit）');
+  assertTrue(computeStepBudget(fruit) > computeStepBudget(one), '目标越大步数越多');
+  assertTrue(computeTimeBudget(fruit) > computeTimeBudget(one), '目标越大时长越长');
+});
+
+test('collectibleSpecsFor（v1.19）：数量 = 目标数、坐标唯一、全部落在棋盘顶部', () => {
+  const specs = collectibleSpecsFor({ type: GOAL_TYPE.FRUIT, target: 4 }, 8, 8);
+  assertEqual(specs.length, 4, '数量 = 目标数');
+  assertEqual(new Set(specs.map((s) => `${s.r},${s.c}`)).size, 4, '落点互不重叠（否则会互相覆盖）');
+  assertTrue(specs.every((s) => s.r === 0), '4 个水果都在第 0 行（棋盘顶部，3.6 v1.18）');
+  assertTrue(specs.every((s) => s.type === COLLECTIBLE_TYPE.FRUIT), '类型正确');
+  assertTrue(specs.every((s) => s.c >= 0 && s.c < 8), '列号在棋盘内');
+
+  const overflow = collectibleSpecsFor({ type: GOAL_TYPE.POD, target: 20 }, 8, 8);
+  assertEqual(overflow.length, 20, '超过一行时向下一行铺开');
+  assertEqual(new Set(overflow.map((s) => `${s.r},${s.c}`)).size, 20, '跨行也互不重叠');
+  assertTrue(overflow.every((s) => s.r >= 0 && s.r < 8), '行号在棋盘内');
+  assertDeepEqual(collectibleSpecsFor({ type: GOAL_TYPE.SCORE, target: 5 }, 8, 8), [], '非收集物目标不产生落点');
+});
+
+test('Step 14 演示关（id 51/52/53）：三种类型各自满足 v1.18/v1.19 的口径', () => {
+  const fruit = getLevelConfig(DEMO_LEVEL_IDS.fruit);
+  assertEqual(fruit.goal.type, GOAL_TYPE.FRUIT, '51 = 水果关');
+  assertEqual(fruit.collectibles.length, fruit.goal.target, '水果数量 = 目标数');
+  assertTrue(fruit.collectibles.every((s) => s.type === COLLECTIBLE_TYPE.FRUIT), '落点都是水果');
+  assertEqual(fruit.steps, computeStepBudget(fruit), '步数仍是公式派生（3.6 第 6 条）');
+
+  const pod = getLevelConfig(DEMO_LEVEL_IDS.pod);
+  assertEqual(pod.goal.type, GOAL_TYPE.POD, '53 = 金豆荚关');
+  assertTrue(pod.collectibles.every((s) => s.type === COLLECTIBLE_TYPE.POD), '落点都是金豆荚');
+
+  const timed = getLevelConfig(DEMO_LEVEL_IDS.time);
+  assertEqual(timed.steps, 0, '52 = 时间关：没有步数（3.6 v1.18）');
+  assertEqual(timed.timeLimit, computeTimeBudget(timed), '时长由公式派生（3.6 第 8 条）');
+  assertTrue(isTimeLevel(createLevel(timed)), 'createLevel 后仍被识别为时间关');
+  assertDeepEqual(timed.collectibles, [], '时间关本身不产出收集物');
+});
+
+test('金豆荚关的三星阈值更高（3.6 v1.18 + STAR_CONFIG.podFactor）', () => {
+  const fruit = getLevelConfig(DEMO_LEVEL_IDS.fruit);
+  const pod = getLevelConfig(DEMO_LEVEL_IDS.pod);
+  assertEqual(fruit.starThresholds[0], pod.starThresholds[0], '1★ 都是设计基准分（3.7 不变）');
+  assertTrue(pod.starThresholds[1] > fruit.starThresholds[1], `2★ 更高：${pod.starThresholds[1]} > ${fruit.starThresholds[1]}`);
+  assertTrue(pod.starThresholds[2] > fruit.starThresholds[2], `3★ 更高：${pod.starThresholds[2]} > ${fruit.starThresholds[2]}`);
+});
+
+test('Step 14 不改 50 关表：三种类型都不在 1-50 关里（v1.18 第 4 条）', () => {
+  for (let id = 1; id <= LEVEL_COUNT; id += 1) {
+    const config = getLevelConfig(id);
+    assertFalse([GOAL_TYPE.FRUIT, GOAL_TYPE.POD].includes(config.goal.type), `L${id} 的目标不是水果/豆荚关`);
+    assertEqual(config.timeLimit, undefined, `L${id} 不是时间关`);
+    assertDeepEqual(config.collectibles, [], `L${id} 没有收集物`);
+  }
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) summarize();

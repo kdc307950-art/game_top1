@@ -1,5 +1,5 @@
-// app.js — 应用编排：视图状态、动画调度、调用游戏逻辑，并**唯一**允许读写 localStorage。
-// 见 AGENTS.md 2.2 / 2.3 / 5.4 / 15 节。
+// app.js — 应用编排：视图状态、动画调度、调用游戏逻辑。见 AGENTS.md 2.2 / 2.3 / 5.4 / 15 节。
+// 本地存档的唯一读写点是 storage.js（v1.16 起）。
 //
 // 【Step 5 · ROADMAP】本文件按宪法 2.2/2.3 拆出四个 UI 模块，只保留编排职责：
 //   - `render.js`（棋盘层绘制与几何）、`hud.js`（HUD 与结束面板）、
@@ -9,11 +9,11 @@
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
 
 import { CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
-import { createGame, getState as getGameState, trySwap as gameTrySwap } from './game.js';
+import { createGame, getState as getGameState, tickTime as gameTickTime, trySwap as gameTrySwap } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
-import { DEMO_LEVEL_ID, LEVEL_COUNT, getLevelConfig } from './level.js';
+import { DEMO_LEVEL_IDS, LEVEL_COUNT, getLevelConfig, isTimeLevel } from './level.js';
 import { createStorage } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
@@ -22,6 +22,7 @@ const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
 const storage = createStorage((level, message) => log(level, message));
 const MIN_LOG_RANK = LOG_RANK.info;
 const MAX_DPR = 3; // 后备缓冲上限（与 render.js 的绘制预算一致）
+const CLOCK_INTERVAL_MS = 250; // 时间关倒计时的刷新间隔（3.6 第 8 条：时间只按真实时间流逝）
 
 const renderer = createRenderer();
 const timeline = createTimeline({
@@ -40,7 +41,7 @@ const view = {
   best: 0, // 最高分（localStorage，属 UI 侧状态）
   newRecord: false,
   stars: 0, // 3.7：本局通关星级（结束面板用；失败时为 0）
-  levelId: demoLevelRequested() ? DEMO_LEVEL_ID : 1, // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=1` 进 Step 13 演示关）
+  levelId: demoLevelRequested(), // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=` 进演示关）
   screen: 'playing', // 'playing' | 'select'：选关界面与对局界面
   levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
   levelRects: [], // 选关界面的每格命中矩形（由 render.js 返回）
@@ -56,7 +57,12 @@ const view = {
   hudScore: null, // 播放期间按层累加的分数；null 表示直接读 GameState
   restartRect: null,
   systemReducedMotion: false,
-  frameRequest: 0
+  frameRequest: 0,
+  // Step 14.2（v1.19）：时间关的倒计时。clockTimer 是 setInterval 句柄；timeDebt 是「已过去但还没结算」的秒数
+  // （回放动画期间只记账不结算，保证逻辑串行，见 5.4「动画不阻塞逻辑」）。
+  clockTimer: 0,
+  clockLast: 0,
+  timeDebt: 0
 };
 
 init();
@@ -105,10 +111,20 @@ function init() {
   );
 }
 
-/** Step 13：URL 带 `?demo=1` 或 `#demo` 时进入演示关（id 0，不是 50 关表里的一关）。 */
+/**
+ * Step 13/14：URL 的 `?demo=` 决定进哪个演示关（都不在 50 关表内）：
+ *   `?demo=1` / `#demo`  → id 0（藤蔓与巧克力，v1.17）
+ *   `?demo=fruit|time|pod` → id 51/52/53（水果关 / 时间关 / 金豆荚关，v1.19）
+ * 没有演示参数时返回第 1 关。
+ */
 function demoLevelRequested() {
-  if (typeof window === 'undefined') return false;
-  return /(^|[?&])demo=1(&|$)/.test(window.location.search) || window.location.hash === '#demo';
+  if (typeof window === 'undefined') return 1;
+  const match = /(^|[?&])demo=([^&]*)/.exec(window.location.search);
+  const raw = match ? match[2] : window.location.hash === '#demo' ? '1' : '';
+  if (!raw) return 1;
+  if (raw === '1' || raw === 'obstacles') return DEMO_LEVEL_IDS.obstacles;
+  if (raw === 'fruit' || raw === 'time' || raw === 'pod') return DEMO_LEVEL_IDS[raw];
+  return 1;
 }
 
 /** 开新一局：重建 GameState 并复位视图侧状态。 */
@@ -125,7 +141,9 @@ function startNewGame() {
   view.restartRect = null;
 
   const snapshot = getGameState(view.game);
-  log('info', `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，步数 ${snapshot.remainingSteps}，最高分 ${view.best}`);
+  const timing = snapshot.timeLimit ? `倒计时 ${snapshot.timeLimit} 秒` : `步数 ${snapshot.remainingSteps}`;
+  log('info', `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，${timing}，最高分 ${view.best}`);
+  startClock(); // 3.6 第 8 条：时间关由真实时间驱动倒计时；其它关卡不启动
   if (view.sizePx > 0) drawFrame();
 }
 
@@ -158,6 +176,70 @@ function scheduleLayout() {
     view.frameRequest = 0;
     applyLayout();
   });
+}
+
+// ---------------------------------------------------------------------------
+// 时间关的倒计时（Step 14.2，v1.19；AGENTS.md 3.6 第 8 条）
+//
+// 规则侧只提供 `game.tickTime(state, seconds)`：**消除不扣时间**，时间只按真实经过的秒数流逝。
+// 这里负责把「真实时间」量出来并串行地交给逻辑层：回放动画期间只记账（timeDebt），
+// 动画结束后再一次性结算 —— 这样不会在动画中途改动棋盘（5.4）。
+// ---------------------------------------------------------------------------
+
+function startClock() {
+  stopClock();
+  if (!isTimeLevel(view.game.level)) return;
+  view.clockLast = nowMs();
+  view.timeDebt = 0;
+  view.clockTimer = window.setInterval(tickClock, CLOCK_INTERVAL_MS);
+}
+
+function stopClock() {
+  if (view.clockTimer) window.clearInterval(view.clockTimer);
+  view.clockTimer = 0;
+}
+
+function tickClock() {
+  if (!view.game || view.game.gameOver) {
+    stopClock();
+    return;
+  }
+  const now = nowMs();
+  const elapsed = Math.max(0, (now - view.clockLast) / 1000);
+  view.clockLast = now;
+  view.timeDebt += elapsed;
+  if (timeline.running) return; // 回放中：只记账，等 finishTimeline 再结算
+  applyTimeDebt();
+}
+
+/** 把记账的真实秒数交给逻辑层；归零时逻辑层会先引爆盘面，这里负责把它播完再进结束面板。 */
+function applyTimeDebt() {
+  const debt = view.timeDebt;
+  if (debt <= 0) return;
+  view.timeDebt = 0;
+
+  const result = gameTickTime(view.game, debt);
+  if (!result.resolve) {
+    view.hudScore = null;
+    drawFrame();
+    return;
+  }
+
+  stopClock();
+  view.endReason = result.won ? 'won' : 'time';
+  log(
+    'info',
+    `倒计时归零（3.6 v1.18）：先引爆盘面上的特殊方块并结算，本局 ${view.game.level.currentScore} 分` +
+      (result.won ? '（引爆达成目标，算通关）' : '（目标未达成，失败）')
+  );
+  startTimeline(
+    { resolve: result.resolve, gameOver: true },
+    view.game.level.currentScore - result.resolve.scoreDelta
+  );
+}
+
+function nowMs() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +329,7 @@ function attemptSwap(a, b) {
 
   if (!result.valid) {
     view.firstGroups = [];
-    log('info', `交换无效，已回退：(${a.r},${a.c}) ↔ (${b.r},${b.c})（不消耗步数，剩余 ${result.stepsLeft}）`);
+    log('info', `交换无效，已回退：(${a.r},${a.c}) ↔ (${b.r},${b.c})（不消耗${progressLabel()}，剩余 ${progressValue(result)})`);
     drawFrame();
     return;
   }
@@ -265,7 +347,8 @@ function attemptSwap(a, b) {
     'info',
     `交换有效：(${a.r},${a.c}) ↔ (${b.r},${b.c})，识别到 ${firstLevelGroups.length} 组匹配[${shapes}]，` +
       `级联 ${result.cascades} 层，共消除 ${result.resolve.cleared.length} 格，新生成 ${result.resolve.spawned.length} 格，` +
-      `触发特效 ${specialsTriggered}，本步 +${result.scoreDelta} 分（本局 ${total}），剩余步数 ${result.stepsLeft}`
+      `触发特效 ${specialsTriggered}，本步 +${result.scoreDelta} 分（本局 ${total}），剩余${progressLabel()} ${progressValue(result)}` +
+      (result.resolve.collected.length > 0 ? `，收集 ${result.resolve.collected.length} 个` : '')
   );
 
   // 3.8：死局与重排的结果（成功：提示 + 重排动画；失败：结束流程，不消耗步数）
@@ -322,7 +405,6 @@ function finishTimeline() {
   drawFrame();
   if (pendingGameOver) finishGame();
 }
-
 // ---------------------------------------------------------------------------
 // 绘制：把状态整理成 render.js 需要的「场景描述」
 // ---------------------------------------------------------------------------
@@ -348,7 +430,12 @@ function drawFrame(entry = null, progress = 1) {
       // 不调用 getState（那会每帧深拷贝并冻结整个棋盘）
       goal: view.game.level.goal,
       collected: view.game.level.collected,
-      clearedIce: view.game.level.clearedIce
+      clearedIce: view.game.level.clearedIce,
+      // v1.19（5.5）：时间关的第二格改为显示剩余时间；非时间关 timeLimit 为 null
+      timeLimit: isTimeLevel(view.game.level) ? view.game.level.timeLimit : null,
+      remainingTime: view.game.level.remainingTime ?? 0,
+      collectedFruit: view.game.level.collectedFruit ?? 0,
+      collectedPod: view.game.level.collectedPod ?? 0
     },
     overlay:
       view.game.gameOver && !timeline.running
@@ -372,9 +459,15 @@ function drawFrame(entry = null, progress = 1) {
 
 /** 本局结束：刷新并持久化最高分（5.5 的页面内面板由 render.js 绘制，禁止 alert）。 */
 function finishGame() {
+  stopClock(); // v1.19：本局结束，倒计时停止（3.6 第 8 条）
   const snapshot = getGameState(view.game);
   const isRecord = snapshot.currentScore > view.best;
-  const reasonText = { won: `关卡完成（${snapshot.stars} 星）`, stuck: '无可消除组合（重排失败）', steps: '步数用尽' };
+  const reasonText = {
+    won: `关卡完成（${snapshot.stars} 星）`,
+    stuck: '无可消除组合（重排失败）',
+    time: '时间到（倒计时归零且目标未达成）',
+    steps: '步数用尽'
+  };
   const endReasonText = reasonText[view.endReason] ?? reasonText.steps;
   if (isRecord) {
     view.best = snapshot.currentScore;
@@ -399,6 +492,15 @@ function finishGame() {
 
 function isInsideBoard(board, r, c) {
   return Boolean(board) && r >= 0 && c >= 0 && r < board.length && c < board[r].length;
+}
+
+/** v1.19（3.6 第 8 条）：时间关的「剩余」是秒，其它关卡是步数 —— 日志文案统一从这里取。 */
+function progressLabel() {
+  return isTimeLevel(view.game.level) ? '时间' : '步数';
+}
+
+function progressValue(result) {
+  return isTimeLevel(view.game.level) ? `${Math.ceil(view.game.level.remainingTime)}s` : result.stepsLeft;
 }
 
 /** 正式日志入口（AGENTS.md 6 节：不使用调试用 console.log）。 */

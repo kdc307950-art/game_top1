@@ -10,7 +10,7 @@
 //   （无效交换回退且不扣步数、只有有效交换才扣步数）与 3.5 的计分接入。
 // 【Step 6】死局检测与重排（3.8）；【Step 7-10】特殊元素与组合（3.2/3.3）。
 
-import { CELL_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
 import {
   cloneBoard,
   createBoard,
@@ -31,7 +31,7 @@ import {
   calcFinalScore,
   calcSpecialMultiplier
 } from './score.js';
-import { calcStars, checkGoal, consumeStep, createLevel, getRemainingStepBonus } from './level.js';
+import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, getRemainingStepBonus, isTimeLevel } from './level.js';
 
 /**
  * 4.2：createGame(levelConfig, options?) —— 建一局游戏。
@@ -42,7 +42,8 @@ export function createGame(levelConfig = {}, options = {}) {
   const level = createLevel(normalizeLevelConfig(levelConfig));
   return {
     level,
-    board: createBoard(level.rows, level.cols, level.colorCount, level.obstacles),
+    // v1.19：收集物（水果/金豆荚）随关卡配置一起落到棋盘顶部（3.6 的水果关/金豆荚关）
+    board: createBoard(level.rows, level.cols, level.colorCount, level.obstacles, level.collectibles),
     gameOver: false,
     rng: typeof options.rng === 'function' ? options.rng : Math.random
   };
@@ -88,18 +89,22 @@ export function trySwap(state, a, b) {
   const afterSwap = cloneBoard(state.board);
   // 4.3.3：只有有效交换才扣步数。**先扣步再结算** —— 3.5 的剩余步数转化用的是「通关那一刻」的真实剩余，
   // 把刚用掉的这一步也算进去会多给一份分（Step 12.1 的用例抓到过这个 off-by-one）。
-  consumeStep(state.level);
+  // v1.19（3.6 v1.18）：时间关**没有步数概念**，消除不扣时间（时间只按真实时间流逝，见 game.tickTime）。
+  const timed = isTimeLevel(state.level);
+  if (!timed) consumeStep(state.level);
   const moveResult = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
 
   // Step 12.3（用户批准）：走完最后一步（步数用尽）或已经达成目标时，**先引爆盘面上的特殊方块再最终结算**。
   // 引爆是链式的（引爆过程中新生成的特殊方块继续引爆），成果照常计入目标进度与分数 ——
-  // 因此「最后一步引爆刚好达成目标」算通关。
-  const endgame = state.level.remainingSteps <= 0 || state.level.completed ? detonateSpecials(state) : null;
+  // 因此「最后一步引爆刚好达成目标」算通关。时间关没有「最后一步」，改由归零那一刻引爆（tickTime）。
+  const stepsExhausted = !timed && state.level.remainingSteps <= 0;
+  const endgame = stepsExhausted || state.level.completed ? detonateSpecials(state) : null;
   const resolve = endgame ? mergeResolveResults([moveResult, endgame]) : moveResult;
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
-  // Step 12.1：结束有三种原因 —— 通关（3.6）、步数用尽、死局且重排失败（3.8 约束 4）
-  state.gameOver = state.level.completed || state.level.remainingSteps <= 0 || stuck;
+  // Step 12.1：结束有三种原因 —— 通关（3.6）、步数用尽、死局且重排失败（3.8 约束 4）。
+  // v1.19：时间关的失败原因是倒计时归零（由 tickTime 置位），不在这里判定。
+  state.gameOver = state.level.completed || stepsExhausted || stuck;
 
   return {
     valid: true,
@@ -172,6 +177,34 @@ function accumulateProgress(level, result) {
   for (const hit of result.damaged) {
     if (hit.type === OBSTACLE_TYPE.ICE) level.clearedIce += hit.layersRemoved;
   }
+  // v1.19（3.6 v1.18）：水果关/金豆荚关的进度 —— 收集物落到出口行即计数（board 已把它移出棋盘）
+  for (const hit of result.collected ?? []) {
+    if (hit.type === COLLECTIBLE_TYPE.FRUIT) level.collectedFruit += 1;
+    else if (hit.type === COLLECTIBLE_TYPE.POD) level.collectedPod += 1;
+  }
+}
+
+/**
+ * 3.6 第 8 条（v1.19）：推进时间关的倒计时，`seconds` 由 UI 传入**真实经过的秒数**（消除不扣时间）。
+ * 归零那一刻按第 7 条先引爆盘面上的特殊方块再结算 —— 引爆若达成目标即算通关，否则判失败。
+ * 返回 `{ remainingTime, gameOver, won, resolve }`：`resolve` 是引爆的结算结果（未归零或非时间关时为 null），
+ * 供 UI 用与一次交换相同的回放路径播完最后一波。
+ */
+export function tickTime(state, seconds) {
+  const level = state.level;
+  const timed = isTimeLevel(level);
+  if (state.gameOver || !timed) {
+    return { remainingTime: level.remainingTime ?? 0, gameOver: state.gameOver, won: level.completed, resolve: null };
+  }
+
+  const remainingTime = consumeTime(level, seconds);
+  if (remainingTime > 0) {
+    return { remainingTime, gameOver: false, won: level.completed, resolve: null };
+  }
+
+  const resolve = detonateSpecials(state); // 3.6 第 7 条：本局结束前引爆特殊方块
+  state.gameOver = true;
+  return { remainingTime, gameOver: true, won: level.completed, resolve };
 }
 
 /**
@@ -312,6 +345,11 @@ export function getState(state) {
     goal: Object.freeze({ ...state.level.goal }),
     collected: Object.freeze({ ...state.level.collected }),
     clearedIce: state.level.clearedIce,
+    collectedFruit: state.level.collectedFruit, // v1.19：水果关进度
+    collectedPod: state.level.collectedPod,     // v1.19：金豆荚关进度
+    // v1.19（5.5）：HUD 的第二格在时间关显示剩余时间；非时间关 timeLimit 为 null、步数有效
+    timeLimit: isTimeLevel(state.level) ? state.level.timeLimit : null,
+    remainingTime: state.level.remainingTime ?? 0,
     stars: starsOf(state.level),
     won: state.level.completed,
     board: Object.freeze(board)
@@ -334,6 +372,9 @@ function normalizeLevelConfig(config) {
     cols: config.cols ?? CONFIG.BOARD_SIZE,
     colorCount: config.colorCount ?? CONFIG.COLOR_COUNT,
     steps: config.steps ?? CONFIG.LEVEL_DEFAULTS.steps,
+    // v1.19：时间关（3.6 第 8 条）与收集物落点（水果关/金豆荚关）；缺省时行为与既有调用完全一致
+    timeLimit: config.timeLimit,
+    collectibles: config.collectibles ?? [],
     goal: config.goal ?? { type: GOAL_TYPE.SCORE, target: CONFIG.LEVEL_DEFAULTS.starThresholds[0] },
     starThresholds: config.starThresholds ?? [...CONFIG.LEVEL_DEFAULTS.starThresholds],
     obstacles: config.obstacles ?? []
@@ -383,6 +424,7 @@ function mergeResolveResults(results) {
     levels: [],
     cleared: [],
     damaged: [],
+    collected: [], // v1.19（3.6）：收集事件也要合并，否则引爆轮的收集会丢
     spawned: [],
     capped: false,
     scoreDelta: 0,
@@ -395,6 +437,7 @@ function mergeResolveResults(results) {
     merged.levels.push(...result.levels);
     merged.cleared.push(...result.cleared);
     merged.damaged.push(...result.damaged);
+    merged.collected.push(...(result.collected ?? []));
     merged.spawned.push(...result.spawned);
     merged.capped = merged.capped || result.capped;
     merged.scoreDelta += result.scoreDelta;

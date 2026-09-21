@@ -13,8 +13,8 @@ import {
   assertThrows,
   summarize
 } from './assert.js';
-import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
-import { createBoard, swapCells, cloneBoard } from '../board.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, OBSTACLE_TYPE } from '../config.js';
+import { applyGravity, createBoard, refillBoard, resolveCascades, swapCells, cloneBoard } from '../board.js';
 // Step 6.1：可移动性/死局检测/重排已从 board.js 移到 shuffle.js
 import { hasPossibleMove, isCellMovable, shuffleBoard } from '../shuffle.js';
 import { createGame, resolveBoard } from '../game.js';
@@ -336,6 +336,91 @@ test('正常盘不会被误判死局（hasPossibleMove 为真时不触发重排�
   const state = createGame({ steps: 30 }, { rng: seededRng(11) });
   const result = resolveBoard(state);
   assertEqual(result.deadlock, null, 'createBoard 保证有可行交换，故不应触发重排');
+});
+// ---------------------------------------------------------------- Step 14：可掉落的收集物（3.6 / 4.1 v1.18）
+
+/** 把若干格清成空洞（夹具：棋盘必须先经 createBoard 构造，见 4.1 约束）。 */
+function makeHoles(board, positions) {
+  for (const [r, c] of positions) board[r][c].color = null;
+}
+
+/** 收集物所在坐标（用于断言它是否还在棋盘上、落到哪一行）。 */
+function collectibleAt(board, type) {
+  for (let r = 0; r < board.length; r += 1) {
+    for (let c = 0; c < board[r].length; c += 1) {
+      if (board[r][c].collectible === type) return { r, c };
+    }
+  }
+  return null;
+}
+
+test('createBoard：收集物占格、color 为 null、不参与匹配、不可交换（3.6 / 4.1 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 0, c: 1, type: COLLECTIBLE_TYPE.FRUIT }]);
+  const cell = board[0][1];
+  assertEqual(cell.collectible, COLLECTIBLE_TYPE.FRUIT, 'collectible 字段落下');
+  assertEqual(cell.color, null, '收集物格内没有动物（color = null）');
+  assertFalse(isCellMovable(board, 0, 1), '收集物不能被交换');
+  assertEqual(findMatches(board).length, 0, '开局仍无初始三连（收集物不参与匹配）');
+  assertEqual(createBoard(SIZE, SIZE, COLORS, [], [{ r: 0, c: 1, type: 'nope' }])[0][1].collectible, null, '未登记类型被忽略');
+});
+
+test('收集物不是空洞：refillBoard 不会用新动物盖掉它（3.6 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 4, c: 4, type: COLLECTIBLE_TYPE.POD }]);
+  const id = board[4][4].id;
+  makeHoles(board, [[5, 4], [6, 4], [7, 4]]);
+  refillBoard(board, COLORS, () => 0.5);
+  assertEqual(board[4][4].id, id, '收集物格没有被覆盖');
+  assertEqual(board[4][4].collectible, COLLECTIBLE_TYPE.POD, '收集物仍在原格');
+  assertEqual(board[7][4].color !== null, true, '真正的空洞被补上');
+});
+
+test('applyGravity：水果整列直落（单层落格数不受限，3.6 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 0, c: 4, type: COLLECTIBLE_TYPE.FRUIT }]);
+  makeHoles(board, [[1, 4], [2, 4], [3, 4]]);
+  const moves = applyGravity(board);
+  assertEqual(collectibleAt(board, COLLECTIBLE_TYPE.FRUIT).r, 3, '水果落进下方空洞（0 → 3）');
+  assertTrue(moves.some((m) => m.from.r === 0 && m.to.r === 3), '下落轨迹被记录（供动画）');
+});
+
+test('applyGravity：金豆荚每次只下落 1 格（3.6 v1.18 的分阶段节奏）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 0, c: 4, type: COLLECTIBLE_TYPE.POD }]);
+  makeHoles(board, [[1, 4], [2, 4], [3, 4], [4, 4]]);
+  applyGravity(board);
+  assertEqual(collectibleAt(board, COLLECTIBLE_TYPE.POD).r, 1, '第一次重力只下移 1 格（尽管下方有 4 个空洞）');
+  applyGravity(board);
+  assertEqual(collectibleAt(board, COLLECTIBLE_TYPE.POD).r, 2, '下一次重力再下移 1 格');
+});
+
+test('applyGravity：收集物对上方格子充当本层屏障（上方动物停在它上面）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 6, c: 4, type: COLLECTIBLE_TYPE.POD }]);
+  makeHoles(board, [[7, 4]]);
+  applyGravity(board);
+  const pod = collectibleAt(board, COLLECTIBLE_TYPE.POD);
+  assertEqual(pod.r, 7, '下方有洞时豆荚下移 1 格到出口行');
+  assertEqual(board[6][4].color !== null, true, '原来它上方那一格的动物压到它上面（不会穿过它）');
+});
+
+test('resolveCascades：落到出口行的收集物被收走并返回 collected（含 type，3.6 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 7, c: 2, type: COLLECTIBLE_TYPE.FRUIT }]);
+  const result = resolveCascades(board, COLORS, { rng: () => 0.1, initialClear: [{ r: 6, c: 2 }] });
+  assertDeepEqual(result.collected, [{ r: 7, c: 2, type: COLLECTIBLE_TYPE.FRUIT }], '收集事件');
+  assertEqual(collectibleAt(board, COLLECTIBLE_TYPE.FRUIT), null, '收集物已离开棋盘');
+  assertEqual(board[7][2].color !== null, true, '出口格照常补位（收集发生在填充之前）');
+});
+
+test('收集物不能被消除：即使坐标被 initialClear 直接点名也不消失（3.6 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 4, c: 4, type: COLLECTIBLE_TYPE.FRUIT }]);
+  const result = resolveCascades(board, COLORS, { rng: () => 0.2, initialClear: [{ r: 4, c: 4 }] });
+  assertFalse(result.cleared.some((cell) => cell.collectible), 'cleared 里不含收集物');
+  assertDeepEqual(collectibleAt(board, COLLECTIBLE_TYPE.FRUIT), { r: 4, c: 4 }, '收集物仍在原格');
+});
+
+test('重排不搬动收集物（3.8 约束 3 的同类口径：3.6 v1.18）', () => {
+  const board = createBoard(SIZE, SIZE, COLORS, [], [{ r: 2, c: 2, type: COLLECTIBLE_TYPE.POD }]);
+  const id = board[2][2].id;
+  shuffleBoard(board, { rng: seededRng(5) });
+  assertEqual(board[2][2].id, id, '收集物格原地不动');
+  assertEqual(board[2][2].collectible, COLLECTIBLE_TYPE.POD, 'collectible 字段未被重排带走');
 });
 
 

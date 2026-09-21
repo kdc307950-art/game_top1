@@ -10,7 +10,7 @@
 // consumeStep 不在 4.2 的清单里，属**契约扩展**：宪法 2.3 规定 level.js 的职责包含
 // 「步数消耗」，而 4.2 未给出对应签名，故在此登记（见 D016）。
 
-import { CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
+import { COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
 
 const GOAL_TYPES = new Set(Object.values(GOAL_TYPE));
 
@@ -100,7 +100,8 @@ const LEVEL_SPECS = [
  */
 export function getLevelConfig(id) {
   const wanted = Number.isFinite(id) ? Math.round(id) : 1;
-  if (wanted === DEMO_LEVEL_ID) return demoLevelConfig();
+  const demo = demoLevelConfig(wanted);
+  if (demo) return demo;
   const spec = LEVEL_SPECS.find((item) => item.id === Math.min(Math.max(wanted, 1), LEVEL_COUNT)) ?? LEVEL_SPECS[0];
   const coords = PATTERNS[spec.pattern] ?? [];
   const obstacles = [];
@@ -119,7 +120,8 @@ export function getLevelConfig(id) {
     colorCount: spec.colors,
     goal: spec.goal,
     starThresholds: starThresholdsOf(spec.star1),
-    obstacles
+    obstacles,
+    collectibles: collectibleSpecsFor(spec.goal, CONFIG.BOARD_SIZE, CONFIG.BOARD_SIZE)
   };
   return { ...config, steps: computeStepBudget(config) };
 }
@@ -129,10 +131,30 @@ export function getLevelConfig(id) {
  * 查看与验证藤蔓/巧克力（`index.html?demo=1`）。它同时使用两种新障碍，满足 3.6 的
  * 「单关障碍物类型 ≤ 2 种、障碍格 ≤ 12 格」硬指标；步数同样由 computeStepBudget 派生。
  * 之所以不做进 50 关表：把新障碍排进关卡属「文档先行」的另一步（见 DECISIONS D033）。
+ *
+ * Step 14（v1.19）追加三个演示关：51 水果 / 52 时间 / 53 金豆荚，由 `index.html?demo=fruit|time|pod`
+ * 进入。它们同样**不进 50 关表**（v1.18 第 4 条：三种类型各自验收前不得入表，见 D035 第 8 条）。
  */
 export const DEMO_LEVEL_ID = 0;
 
-function demoLevelConfig() {
+/** 演示关 id → 名称（app.js 解析 `?demo=` 与日志用；不进选关网格）。 */
+export const DEMO_LEVEL_IDS = Object.freeze({
+  obstacles: DEMO_LEVEL_ID,
+  fruit: 51,
+  time: 52,
+  pod: 53
+});
+
+/** 演示关配置工厂：命中演示关 id 时返回配置，否则返回 null（交回 50 关表）。 */
+function demoLevelConfig(id) {
+  if (id === DEMO_LEVEL_IDS.obstacles) return obstacleDemoConfig();
+  if (id === DEMO_LEVEL_IDS.fruit) return collectibleDemoConfig(id, GOAL_TYPE.FRUIT, 4);
+  if (id === DEMO_LEVEL_IDS.pod) return collectibleDemoConfig(id, GOAL_TYPE.POD, 3);
+  if (id === DEMO_LEVEL_IDS.time) return timeDemoConfig(id);
+  return null;
+}
+
+function obstacleDemoConfig() {
   const vines = [[3, 3], [4, 4]];
   const chocs = [[2, 2], [2, 5], [5, 2], [5, 5]];
   const obstacles = [
@@ -144,17 +166,73 @@ function demoLevelConfig() {
     rows: CONFIG.BOARD_SIZE,
     cols: CONFIG.BOARD_SIZE,
     colorCount: 5,
-    goal: { type: 'score', target: 4000 },
+    goal: { type: GOAL_TYPE.SCORE, target: 4000 },
     starThresholds: starThresholdsOf(4000),
-    obstacles
+    obstacles,
+    collectibles: []
   };
   return { ...config, steps: computeStepBudget(config) };
 }
 
-/** 3.7 的三星阈值：1★ = 设计基准分，2★ ≈ 1.7×、3★ ≈ 2.5×（取整到 500，与 LEVELS.md 口径一致）。 */
-function starThresholdsOf(star1) {
+/** 水果关/金豆荚演示关：只在目标与掉落节奏上有别（3.6 v1.18）。 */
+function collectibleDemoConfig(id, type, target) {
+  const config = {
+    id,
+    rows: CONFIG.BOARD_SIZE,
+    cols: CONFIG.BOARD_SIZE,
+    colorCount: 5,
+    goal: { type, target },
+    starThresholds: starThresholdsOf(3000, { pod: type === GOAL_TYPE.POD }),
+    obstacles: [],
+    collectibles: collectibleSpecsFor({ type, target }, CONFIG.BOARD_SIZE, CONFIG.BOARD_SIZE)
+  };
+  return { ...config, steps: computeStepBudget(config) };
+}
+
+/** 时间关演示关（3.6 第 8 条）：`steps: 0` + 派生出的 `timeLimit`，由 `game.tickTime` 推进倒计时。 */
+function timeDemoConfig(id) {
+  const config = {
+    id,
+    rows: CONFIG.BOARD_SIZE,
+    cols: CONFIG.BOARD_SIZE,
+    colorCount: 5,
+    goal: { type: GOAL_TYPE.SCORE, target: 3000 },
+    starThresholds: starThresholdsOf(3000),
+    obstacles: [],
+    collectibles: []
+  };
+  return { ...config, steps: 0, timeLimit: computeTimeBudget(config) };
+}
+
+/**
+ * 3.6（v1.19）：水果关/金豆荚关的收集物落点 —— 从棋盘**顶部**按列均匀铺开（v1.18 原文：「棋盘顶部生成水果」）。
+ * 纯函数、无随机：同一目标数量永远得到同一布局，演示关因此可复现、可在巡检里比对。
+ */
+export function collectibleSpecsFor(goal, rows, cols) {
+  const type = goal?.type === GOAL_TYPE.FRUIT
+    ? COLLECTIBLE_TYPE.FRUIT
+    : goal?.type === GOAL_TYPE.POD
+      ? COLLECTIBLE_TYPE.POD
+      : null;
+  if (!type) return [];
+  const target = Number.isFinite(goal.target) ? Math.max(0, Math.trunc(goal.target)) : 0;
+  const specs = [];
+  for (let i = 0; i < Math.min(target, rows * cols); i += 1) {
+    const band = Math.floor(i / cols);
+    const inBand = i % cols;
+    const colsInBand = Math.min(target - band * cols, cols);
+    const c = Math.min(cols - 1, Math.floor(((inBand + 0.5) * cols) / colsInBand));
+    specs.push({ r: band, c, type });
+  }
+  return specs;
+}
+
+/** 3.7 的三星阈值：1★ = 设计基准分，2★/3★ = 基准分 × `STAR_CONFIG` 的倍率（取整到 500，与 LEVELS.md 口径一致）。 */
+function starThresholdsOf(star1, { pod = false } = {}) {
+  const stars = CONFIG.STAR_CONFIG;
   const round500 = (value) => Math.round(value / 500) * 500;
-  return [star1, round500(star1 * 1.7), round500(star1 * 2.5)];
+  const bonus = pod ? stars.podFactor : 1; // 3.6 v1.18：金豆荚关的三星阈值更高
+  return [star1, round500(star1 * stars.secondFactor * bonus), round500(star1 * stars.thirdFactor * bonus)];
 }
 /**
  * Step 12.2（用户批准）：难度 → 步数。**设计期派生**，不引入运行时随机性 ——
@@ -168,25 +246,51 @@ function starThresholdsOf(star1) {
  */
 export function computeStepBudget(config) {
   const budget = CONFIG.STEP_BUDGET;
+  const { workload, friction } = difficultyOf(config);
+  const raw = budget.base + workload * budget.workload - friction;
+  return Math.min(Math.max(Math.round(raw), budget.min), budget.max);
+}
+
+/**
+ * Step 14.2（v1.19，3.6 第 8 条）：时间关的时长派生 —— **倒计时替代步数**，故时间关不适用第 6 条的步数公式。
+ * 公式与步数同构，只是把「步」换成「秒」并把障碍摩擦单独折算：
+ *   `秒数 = clamp(round(initialSeconds + 目标工作量 × secondsPerWorkload − 障碍摩擦 × secondsPerFriction), min, max)`
+ * 目标工作量与障碍摩擦的定义与 `computeStepBudget` 完全一致（同一套单位键），因此两种关卡的难度观感一致。
+ * 纯函数、无随机；系数全部来自 `CONFIG.TIME_CONFIG`（附录 B）。
+ */
+export function computeTimeBudget(config) {
+  const time = CONFIG.TIME_CONFIG;
+  const { workload, friction } = difficultyOf(config);
+  const raw = time.initialSeconds + workload * time.secondsPerWorkload - friction * time.secondsPerFriction;
+  return Math.min(Math.max(Math.round(raw), time.minSeconds), time.maxSeconds);
+}
+
+/** 难度度量：目标工作量（`STEP_BUDGET` 的单位键）与障碍摩擦 —— 步数与时长派生共用同一定义。 */
+function difficultyOf(config) {
+  const budget = CONFIG.STEP_BUDGET;
   const obstacles = config?.obstacles ?? [];
   const cells = obstacles.length;
   const layers = obstacles.reduce((sum, spec) => sum + (Number.isFinite(spec?.layers) ? spec.layers : 0), 0);
   const colors = config?.colorCount ?? CONFIG.COLOR_COUNT;
   const friction = cells * budget.perCell + layers * budget.perLayer + Math.max(0, colors - 5) * budget.perColor;
-  const raw = budget.base + goalWorkload(config?.goal, budget) * budget.workload - friction;
-  return Math.min(Math.max(Math.round(raw), budget.min), budget.max);
+  return { workload: goalWorkload(config?.goal, budget), friction };
 }
 
-/** 目标工作量：把四种目标折算到同一个「单位」上（`mixed` 相加）。 */
+/**
+ * 目标工作量：把各种目标折算到同一个「单位」上（`mixed` 相加）。
+ * v1.19：水果关/金豆荚关的「收集 N 个」与 `collect` 同类，共用 `collectUnit`。
+ */
 function goalWorkload(goal, budget) {
   if (!goal || typeof goal !== 'object') return 0;
   const score = (value) => (Number.isFinite(value) ? value / budget.scoreUnit : 0);
   const collect = (targets) => Object.values(targets ?? {}).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0) / budget.collectUnit;
   const ice = (value) => (Number.isFinite(value) ? value / budget.iceUnit : 0);
+  const count = (value) => (Number.isFinite(value) ? value / budget.collectUnit : 0);
 
   if (goal.type === GOAL_TYPE.SCORE) return score(goal.target);
   if (goal.type === GOAL_TYPE.COLLECT) return collect(goal.targets);
   if (goal.type === GOAL_TYPE.CLEAR_ICE) return ice(goal.target);
+  if (goal.type === GOAL_TYPE.FRUIT || goal.type === GOAL_TYPE.POD) return count(goal.target);
   if (goal.type === GOAL_TYPE.MIXED) return score(goal.score) + ice(goal.clearIce) + collect(goal.collect);
   return 0;
 }
@@ -198,17 +302,33 @@ function goalWorkload(goal, budget) {
  */
 export function createLevel(config) {
   validateLevelConfig(config);
+  const timeLimit = timeLimitOf(config);
   return {
     ...config,
     // 数组字段做一层拷贝：关卡状态不应与外层配置共享可变引用（4.4 的 Level 是本局私有状态）
     starThresholds: [...config.starThresholds],
     obstacles: [...(config.obstacles ?? [])],
+    collectibles: [...(config.collectibles ?? [])],
     remainingSteps: config.steps,
+    // v1.19（3.6 第 8 条）：时间关的倒计时；非时间关为 0（此时以步数计时）
+    remainingTime: timeLimit ?? 0,
     collected: {},
     clearedIce: 0,
+    collectedFruit: 0, // v1.19：水果关的进度（落到底部出口计数）
+    collectedPod: 0,   // v1.19：金豆荚关的进度
     currentScore: 0,
     completed: false // 4.4（v1.14）：本局是否已达成通关目标
   };
+}
+
+/** 3.6 第 8 条（v1.19）：`timeLimit > 0` 即时间关；未配置/非法时返回 null（普通步数关）。 */
+export function isTimeLevel(level) {
+  return Number.isFinite(level?.timeLimit) && level.timeLimit > 0;
+}
+
+function timeLimitOf(config) {
+  const value = config?.timeLimit;
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 /**
@@ -218,6 +338,16 @@ export function createLevel(config) {
 export function consumeStep(level) {
   level.remainingSteps = Math.max(0, level.remainingSteps - 1);
   return level.remainingSteps;
+}
+
+/**
+ * 时间消耗（v1.19，3.6 第 8 条）：时间关的倒计时递减，返回剩余秒数（已为 0 时保持 0）。
+ * 调用点在 `game.tickTime`；**消除本身不扣时间**（3.6 v1.18 原文），故 `trySwap` 不调用本函数。
+ */
+export function consumeTime(level, seconds) {
+  const amount = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  level.remainingTime = Math.max(0, (Number.isFinite(level.remainingTime) ? level.remainingTime : 0) - amount);
+  return level.remainingTime;
 }
 
 /**
@@ -236,6 +366,9 @@ export function checkGoal(level, board, score, collected = {}) {
   if (goal.type === GOAL_TYPE.SCORE) return reached >= goal.target;
   if (goal.type === GOAL_TYPE.COLLECT) return meetsCollect(goal.targets, counts);
   if (goal.type === GOAL_TYPE.CLEAR_ICE) return (level.clearedIce ?? 0) >= goal.target;
+  // v1.19（3.6 v1.18）：水果关/金豆荚关的进度分别由 board 的收集事件累加而来
+  if (goal.type === GOAL_TYPE.FRUIT) return (level.collectedFruit ?? 0) >= goal.target;
+  if (goal.type === GOAL_TYPE.POD) return (level.collectedPod ?? 0) >= goal.target;
   if (goal.type === GOAL_TYPE.MIXED) {
     const parts = [];
     if (goal.score !== undefined) parts.push(reached >= goal.score);
@@ -280,10 +413,21 @@ function validateLevelConfig(config) {
   if (!config || typeof config !== 'object') throw new Error('createLevel: 缺少关卡配置');
   const { rows, cols, colorCount, steps, goal, starThresholds } = config;
 
-  for (const [name, value] of [['rows', rows], ['cols', cols], ['colorCount', colorCount], ['steps', steps]]) {
+  for (const [name, value] of [['rows', rows], ['cols', cols], ['colorCount', colorCount]]) {
     if (!Number.isInteger(value) || value < 1) {
       throw new Error(`createLevel: ${name} 必须是正整数，收到 ${value}`);
     }
+  }
+  // 4.4（v1.19）：时间关没有步数概念，故 steps 允许为 0；普通关卡仍必须 ≥ 1
+  if (!Number.isInteger(steps) || steps < 0) {
+    throw new Error(`createLevel: steps 必须是非负整数，收到 ${steps}`);
+  }
+  const timeLimit = timeLimitOf(config);
+  if (steps < 1 && timeLimit === null) {
+    throw new Error('createLevel: 非时间关的 steps 必须 ≥ 1（4.4 v1.19）');
+  }
+  if (config.timeLimit !== undefined && timeLimit === null) {
+    throw new Error(`createLevel: timeLimit 必须是正整数秒（4.4 v1.19），收到 ${config.timeLimit}`);
   }
   if (!goal || typeof goal !== 'object' || !GOAL_TYPES.has(goal.type)) {
     throw new Error(`createLevel: goal.type 必须是 ${[...GOAL_TYPES].join(' / ')} 之一（4.4）`);

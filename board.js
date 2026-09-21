@@ -17,7 +17,7 @@
 //     终止该列的下落查找 —— 本项目对应「纯障碍格是屏障」。该实现另有**对角下落**变体，
 //     但宪法 4.3 只规定「下落填充」，故**不采纳**对角下落（见 D015）。
 
-import { CELL_TYPE, CONFIG, OBSTACLE_TYPE } from './config.js';
+import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, OBSTACLE_TYPE } from './config.js';
 import { findAllMatchGroups, findMatches } from './match.js';
 // Step 7：4 连生成条纹糖果、被消除时优先激活（3.2 / 4.3.8）
 import { activateSpecial, createSpecial } from './special.js';
@@ -42,15 +42,19 @@ const NEIGHBORS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 // 少于 3 色时无法保证「无初始三连」，见 createBoard 的兜底说明
 const MIN_COLOR_COUNT = 3;
 
+// 收集物类型的合法取值（3.6 / 4.1 v1.18）：非法类型一律忽略，避免静默写入非法状态
+const COLLECTIBLE_TYPES = new Set(Object.values(COLLECTIBLE_TYPE));
+
 let nextCellId = 1;
 
 /**
- * 4.2：createBoard(rows, cols, colorCount, obstacles?) —— 生成可玩棋盘。
+ * 4.2：createBoard(rows, cols, colorCount, obstacles?, collectibles?) —— 生成可玩棋盘。
  * 保证：无初始三连（否则开局就会自动消除）、且至少存在一个有效交换（3.8 的可玩性要求）。
  * 重试上限复用 CONFIG.ANIMATION_CONFIG.shuffleMaxTries（读取，不修改其默认值，见 D014）。
  * obstacles 只落障碍物元数据；障碍物的行为（层数减少、影响下落）属 Step 11/13。
+ * collectibles（v1.19，3.6 的水果关/金豆荚关）只落「收集物」元数据：它占格、color 为 null、随重力下落。
  */
-export function createBoard(rows, cols, colorCount, obstacles = []) {
+export function createBoard(rows, cols, colorCount, obstacles = [], collectibles = []) {
   if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) {
     throw new Error(`createBoard: 非法尺寸 ${rows}×${cols}`);
   }
@@ -65,6 +69,7 @@ export function createBoard(rows, cols, colorCount, obstacles = []) {
   for (let attempt = 0; attempt < maxTries; attempt += 1) {
     board = buildColorLayer(rows, cols, colorCount, blocking);
     applyObstacles(board, obstacles);
+    applyCollectibles(board, collectibles);
     if (findMatches(board).length === 0 && hasPossibleMove(board)) return board;
   }
 
@@ -117,14 +122,24 @@ export function cloneBoard(board) {
 // ---------------------------------------------------------------------------
 
 /**
- * 4.2：applyGravity(board) —— **原地**让动物下落（3.1「消除后下落填充」），返回下落轨迹。
+ * 4.2：applyGravity(board, options?) —— **原地**让动物下落（3.1「消除后下落填充」），返回下落轨迹。
  * MoveRecord = { id, from: {r,c}, to: {r,c}, color }（4.2 未给出 MoveRecord 结构，见 D015）；
  * 只记录真正发生位移的格子，供动画使用（Step 5 按下落距离缩放时长）。
+ *
+ * v1.19（3.6 的水果关 / 金豆荚关）：收集物**与动物一同参与下落**，区别只在单层下落格数 ——
+ * 动物的落格数不限，收集物受 `options.collectibleFall`（缺省 `COLLECTIBLE_CONFIG`）限制，
+ * 于是「金豆荚每次消除只下落 1 格」由重力本身表达，而不是靠动画假装。具体分两步：
+ *   ① 收集物把所在静态段切成若干「动物子段」，每个子段各自压实 —— 收集物因此对上方格子
+ *      充当本层屏障（上方动物压不下来，只能停在它上面）；
+ *   ② 收集物自下而上各下移至多 `fallPerStep` 格，且只能吃它正下方的**连续空洞** ——
+ *      子段压实后正下方空出的格数就是它这一步能走的距离，下一层若被新动物填上就停住。
+ * 这也是为什么「消除它下方的动物」才能推动它下落（3.6 v1.18 的原文口径）。
  */
-export function applyGravity(board) {
+export function applyGravity(board, options = {}) {
   if (!board || board.length === 0) return [];
   const rows = board.length;
   const cols = board[0].length;
+  const fallPerStep = options.collectibleFall ?? CONFIG.COLLECTIBLE_CONFIG;
   const moves = [];
 
   for (let c = 0; c < cols; c += 1) {
@@ -132,12 +147,107 @@ export function applyGravity(board) {
     // r 递减到 -1 是为了让「列顶端」也被当作一条边界，从而统一处理最后一段
     for (let r = rows - 1; r >= -1; r -= 1) {
       if (r >= 0 && !isBarrierCell(board[r][c])) continue;
-      if (segmentEnd > r) compactSegment(board, c, r + 1, segmentEnd, moves);
+      if (segmentEnd > r) settleSegment(board, c, r + 1, segmentEnd, moves, fallPerStep);
       segmentEnd = r - 1;
     }
   }
 
   return moves;
+}
+
+/**
+ * 在一个静态段内结算下落：先按「收集物为界」的子段压实动物，再让收集物按单层上限下移。
+ * 顺序不能颠倒 —— 收集物必须在**填充之前**落进子段刚腾出的空洞，否则新补的动物会挡在它下面（D035 第 3 条）。
+ */
+function settleSegment(board, c, start, end, moves, fallPerStep) {
+  const pivots = [];
+  for (let r = start; r <= end; r += 1) {
+    if (isCollectible(board[r][c])) pivots.push(r);
+  }
+
+  // ① 动物子段：收集物之间（含段首尾）的区间各自压实
+  const bounds = subSegmentsOf(start, end, pivots);
+  for (const [from, to] of bounds) compactAnimals(board, c, from, to, moves);
+
+  // ② 收集物自下而上：每个最多下移 fallPerStep[type] 格，只吃正下方的连续空洞
+  const landed = [];
+  for (let i = pivots.length - 1; i >= 0; i -= 1) {
+    const from = pivots[i];
+    const limit = collectibleFallLimit(board[from][c], fallPerStep);
+    let to = from;
+    while (to < end && to - from < limit && isHole(board[to + 1][c])) to += 1;
+    moveCell(board, c, from, to, moves);
+    landed.unshift(to);
+  }
+
+  // ③ 收集物让位后再压实它上方的子段：否则它原来那一格会空着等新动物，
+  //    观感上像是「凭空出现在收集物上方」，而正确的规则是上方的动物压下来（3.1 的重力）。
+  let upperStart = start;
+  for (const landedAt of landed) {
+    compactAnimals(board, c, upperStart, landedAt - 1, moves);
+    upperStart = landedAt + 1;
+  }
+  compactAnimals(board, c, upperStart, end, moves);
+}
+
+/** 以收集物为界把一个静态段切成若干「动物子段」（收集物自身不属于任何子段）。 */
+function subSegmentsOf(start, end, pivots) {
+  const bounds = [];
+  let subStart = start;
+  for (const pivot of pivots) {
+    bounds.push([subStart, pivot - 1]);
+    subStart = pivot + 1;
+  }
+  bounds.push([subStart, end]);
+  return bounds;
+}
+
+/** 收集物的单层下落格数上限（3.6 v1.18；键名与附录 B 一致：`fruitFallPerStep` / `podFallPerStep`）。 */
+function collectibleFallLimit(cell, fallPerStep) {
+  const limit = Number(fallPerStep?.[`${cell.collectible}FallPerStep`]);
+  if (!Number.isFinite(limit) || limit < 0) return Number.MAX_SAFE_INTEGER;
+  return Math.floor(limit);
+}
+
+/** 把一段静态段内的动物压到底部并记录位移（收集物已按子段边界排除在外）。 */
+function compactAnimals(board, c, start, end, moves) {
+  if (start > end) return;
+  let write = end;
+  for (let r = end; r >= start; r -= 1) {
+    const cell = board[r][c];
+    if (!carriesAnimal(cell)) continue; // 空洞：跳过，等上面的动物压下来
+    moveCell(board, c, r, write, moves);
+    write -= 1;
+  }
+  for (let r = write; r >= start; r -= 1) {
+    const slot = board[r][c];
+    const keep = snapshotObstacle(slot);
+    board[r][c] = makeCell(null);
+    restoreObstacle(board[r][c], keep);
+  }
+}
+
+/**
+ * 把一个格子从 (from,c) 搬到 (to,c) 并记录位移；from === to 时什么也不做。
+ * 3.4/3.8：障碍物属于**格子**而不是动物 —— 两端的障碍物字段各自快照后还原，
+ * 冰块因此不会随动物下落（重排同理：3.8 要求重排不改变障碍物布局）。
+ */
+function moveCell(board, c, from, to, moves) {
+  if (from === to) return;
+  const cell = board[from][c];
+  const srcObstacle = snapshotObstacle(cell);
+  const destObstacle = snapshotObstacle(board[to][c]);
+  board[to][c] = cell;
+  board[from][c] = makeCell(null);
+  restoreObstacle(board[to][c], destObstacle);
+  restoreObstacle(board[from][c], srcObstacle); // 动物离开的格子若原本带冰，留下「带冰的空洞」等待补位
+  moves.push({ id: cell.id, from: { r: from, c }, to: { r: to, c }, color: cell.color });
+}
+
+function snapshotObstacle(cell) {
+  return cell && cell.obstacle !== null && cell.obstacle !== undefined
+    ? { obstacle: cell.obstacle, obstacleLayers: cell.obstacleLayers }
+    : null;
 }
 
 /**
@@ -198,6 +308,9 @@ export function resolveCascades(board, colorCount, options = {}) {
   const cleared = [];
   const spawned = [];
   const damaged = [];
+  // v1.19（3.6）：本局被收走的收集物（水果/金豆荚落到出口行即计数）
+  const collected = [];
+  const exitRow = exitRowOf(rows);
 
   for (let level = 1; level <= maxLevels; level += 1) {
     const groups = findAllMatchGroups(board);
@@ -224,16 +337,51 @@ export function resolveCascades(board, colorCount, options = {}) {
     // 才分得清哪些格是动物（冰块由其上的动物被消除而受损，雪块由旁边的动物被消除而受损）。
     const levelDamaged = damageObstacles(board, keys);
     const removed = clearCells(board, keys);
-    const moves = applyGravity(board);
+    const moves = applyGravity(board, { collectibleFall: options.collectibleFall });
+    // v1.19（3.6）：出口判定在**下落之后、填充之前** —— 出口格因此能在同一层被补上动物（D035 第 4 条）
+    const levelCollected = collectAtExit(board, exitRow);
     const created = refillBoard(board, colorCount, rng);
 
     cleared.push(...removed);
     spawned.push(...created);
     damaged.push(...levelDamaged);
-    levels.push({ level, groups, cleared: removed, damaged: levelDamaged, moves, spawned: created, board: cloneBoard(board) });
+    collected.push(...levelCollected);
+    levels.push({
+      level,
+      groups,
+      cleared: removed,
+      damaged: levelDamaged,
+      collected: levelCollected,
+      moves,
+      spawned: created,
+      board: cloneBoard(board)
+    });
   }
 
-  return { cascades: levels.length, levels, cleared, spawned, damaged, capped: levels.length >= maxLevels };
+  return { cascades: levels.length, levels, cleared, spawned, damaged, collected, capped: levels.length >= maxLevels };
+}
+
+/** 3.6（v1.19）：底部出口所在行 —— 取配置值并夹到棋盘内，非 8 行的棋盘也能用。 */
+function exitRowOf(rows) {
+  const configured = Math.trunc(Number(CONFIG.COLLECTIBLE_CONFIG.exitRow));
+  if (!Number.isFinite(configured)) return rows - 1;
+  return Math.min(Math.max(configured, 0), rows - 1);
+}
+
+/**
+ * 3.6（v1.19）：把位于出口行的收集物收走，返回收集事件 `CollectibleHit[]`。
+ * 该格被清成长空后由 `refillBoard` 补位；下一层若还有收集物落到出口行会再次触发。
+ */
+function collectAtExit(board, exitRow) {
+  const hits = [];
+  const cols = board[0]?.length ?? 0;
+  for (let c = 0; c < cols; c += 1) {
+    const cell = board[exitRow]?.[c];
+    if (!isCollectible(cell)) continue;
+    hits.push({ r: exitRow, c, type: cell.collectible });
+    board[exitRow][c] = makeCell(null);
+  }
+  return hits;
 }
 
 /** 把 Pos[] 转成 `"r,c"` 键集；忽略非法项（越界或非整数坐标）。 */
@@ -334,36 +482,6 @@ function clearCells(board, keys) {
   return removed;
 }
 
-/** 在一段（两根屏障之间）内把动物压到底部，并记录位移。 */
-function compactSegment(board, c, start, end, moves) {
-  let write = end;
-  for (let r = end; r >= start; r -= 1) {
-    const cell = board[r][c];
-    if (!carriesAnimal(cell)) continue; // 空洞：跳过，等上面的动物压下来
-    if (write !== r) {
-      // 3.4/3.8：障碍物属于格子 —— 先把两端位置的障碍物快照下来，搬完动物再各自还原，
-      // 冰块因此不会随动物下落（重排同理：3.8 要求重排不改变障碍物布局）。
-      const destSlot = board[write][c];
-      const destObstacle = { obstacle: destSlot.obstacle, obstacleLayers: destSlot.obstacleLayers };
-      const srcObstacle = { obstacle: cell.obstacle, obstacleLayers: cell.obstacleLayers };
-      board[write][c] = cell;
-      board[r][c] = makeCell(null);
-      restoreObstacle(board[write][c], destObstacle);
-      restoreObstacle(board[r][c], srcObstacle); // 动物离开的格子若原本带冰，留下「带冰的空洞」等待补位
-      moves.push({ id: cell.id, from: { r, c }, to: { r: write, c }, color: cell.color });
-    }
-    write -= 1;
-  }
-  for (let r = write; r >= start; r -= 1) {
-    const slot = board[r][c];
-    const keep = slot && slot.obstacle !== null && slot.obstacle !== undefined
-      ? { obstacle: slot.obstacle, obstacleLayers: slot.obstacleLayers }
-      : null;
-    board[r][c] = makeCell(null);
-    restoreObstacle(board[r][c], keep);
-  }
-}
-
 function randomColor(colorCount, rng) {
   const value = Number(rng());
   const index = Math.floor((Number.isFinite(value) ? value : 0) * colorCount);
@@ -374,7 +492,10 @@ const carriesAnimal = (cell) => Boolean(cell) && cell.color !== null && cell.col
 // 3.4（v1.12）：只有**占格障碍**才是屏障。冰块/藤蔓属覆层障碍，动物被消除后该格是「带障碍物的空洞」，
 // 必须照常补位（否则冰块格会永远空着且把所在列错误地截断 —— Step 11 修掉的潜伏缺陷）。
 const isBarrierCell = (cell) => Boolean(cell) && !carriesAnimal(cell) && BLOCKING_OBSTACLE_TYPES.has(cell.obstacle);
-const isHole = (cell) => Boolean(cell) && !carriesAnimal(cell) && !isBarrierCell(cell);
+// 3.6 / 4.1（v1.18）：收集物（水果/金豆荚）占格、不参与匹配、不可被消除；它**不是**空洞，
+// 因此既不能被补位覆盖，也不能被当成屏障（它在重力里自成一类，见 applyGravity）。
+const isCollectible = (cell) => Boolean(cell) && COLLECTIBLE_TYPES.has(cell.collectible);
+const isHole = (cell) => Boolean(cell) && !carriesAnimal(cell) && !isBarrierCell(cell) && !isCollectible(cell);
 
 // ---------------------------------------------------------------------------
 // 内部实现
@@ -446,6 +567,24 @@ function collectBlockingObstacleKeys(rows, cols, obstacles) {
   return keys;
 }
 
+/**
+ * 3.6 / 4.1（v1.18）：把 CollectibleSpec 落到格子上。
+ * 收集物占格且格内**没有动物**（color 置 null），因此它天然不参与匹配、不可交换、不会被重排搬动；
+ * 未登记的类型一律忽略（与 applyObstacles 的容错口径一致，不静默写入非法状态）。
+ */
+function applyCollectibles(board, collectibles) {
+  for (const spec of collectibles) {
+    if (!spec || !isInside(board, spec.r, spec.c)) continue;
+    if (!COLLECTIBLE_TYPES.has(spec.type)) continue;
+    const cell = board[spec.r][spec.c];
+    if (isBarrierCell(cell)) continue; // 占格障碍（雪块/巧克力）与收集物不同类，不叠加
+    cell.collectible = spec.type;
+    cell.color = null;
+    cell.type = CELL_TYPE.NORMAL;
+    cell.direction = null;
+  }
+}
+
 function makeCell(color) {
   return {
     color,
@@ -453,6 +592,7 @@ function makeCell(color) {
     direction: null,
     obstacle: null,
     obstacleLayers: 0,
+    collectible: null, // 4.1（v1.18）：可掉落的收集物；普通格子为 null
     id: nextCellId++
   };
 }
