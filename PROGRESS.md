@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-09-22（Step 14.1-14.3：水果关 / 时间关 / 金豆荚关 —— 机制、契约与验证）
+
+用户口径（本轮）：「剩余工作和待补账全部做完然后开始第 15 步；有需要我决定的问题如果我长时间没有选择就按照默认推荐来」—— 故本步的落地口径按 `DECISIONS.md` **D035 的八条推荐默认**执行（时间关模型、收集物重力、出口收集、金豆荚节奏与三星倍率、演示关编号），未逐条等待确认；任何一条都可按用户后续指示调整。
+
+### 完成项
+
+- **宪法 v1.19（用户预授权默认）**：3.6 新增第 8 条（时间关的时长派生、消除不扣时间、归零先引爆再结算、金豆荚三星阈值更高）；4.2 补 `game.tickTime`、`level.consumeTime`/`computeTimeBudget`、`board.createBoard` 的第 5 参数、`applyGravity` 的 `collectibleFall`、`ResolveResult.collected` 的 `CollectibleHit` 形状、`GameSnapshot.timeLimit`/`remainingTime`；4.4 补 `LevelConfig.timeLimit`/`collectibles`（`CollectibleSpec`）与 `Level.remainingTime`；附录 B 新增 `TIME_CONFIG` 5 键与 `STAR_CONFIG` 3 键；附录 B-2 新增 `COLLECTIBLE_TYPE` 并扩写 `GOAL_TYPE`；第 11 节与 `ROADMAP.md` 头部同步到 v1.19。
+- **`config.js`**：新增 `COLLECTIBLE_TYPE`；`GOAL_TYPE` 补 `fruit`/`pod`；新增 `TIME_CONFIG`（`initialSeconds` 60 / `secondsPerWorkload` 12 / `secondsPerFriction` 3 / `minSeconds` 45 / `maxSeconds` 120）与 `STAR_CONFIG`（1.7 / 2.5 / `podFactor` 1.2 —— 顺带把原先散在 `level.js` 里的 1.7/2.5 收进配置）。
+- **`board.js`（14.1/14.3 机制）**：`makeCell` 增 `collectible`；`createBoard` 增第 5 个可选参数 `collectibles`（占格、`color = null`，因此天然不参与匹配、不可交换、不被重排搬动、不被 `clearCells` 清除）；`isHole` **排除收集物**（否则会被补位覆盖）；`applyGravity(board, options?)` 分岔为「先按收集物为界压实动物子段 → 收集物按 `COLLECTIBLE_CONFIG.*FallPerStep` 下移（只吃正下方的连续空洞）→ 再压实它上方的子段」，于是「水果整列直落」与「金豆荚每次消除只下落 1 格」都由重力本身表达；`resolveCascades` 在**下落之后、填充之前**把出口行（`exitRow`，夹到棋盘内）的收集物收走并返回 `collected: CollectibleHit[]`。
+- **`level.js`（14.1-14.3 判定与配置）**：`collectibleSpecsFor`（棋盘顶部按列均匀铺开，纯函数）、`computeTimeBudget` + `difficultyOf`（与步数派生共用同一套目标工作量/障碍摩擦定义）、`starThresholdsOf(star1, { pod })`、`createLevel` 补 `remainingTime`/`collectedFruit`/`collectedPod`/`collectibles` 与「`steps` 非负且非时间关 ≥ 1、`timeLimit` 必须是正整数秒」的校验、`isTimeLevel`、`consumeTime`、`checkGoal` 的 `fruit`/`pod`；新增演示关 **51 水果 / 52 时间 / 53 金豆荚**（`DEMO_LEVEL_IDS`，仍不进 50 关表）。
+- **`game.js`**：`createGame` 把收集物落到棋盘；`trySwap` 在时间关**不扣步数**、结束判定改用「步数用尽（非时间关）/ 通关 / 死局」；新增 `tickTime`（按真实秒数递减，归零时先引爆盘面再结算，引爆达成目标算通关）；`accumulateProgress` 计入 `collectedFruit`/`collectedPod`；`getState` 增 `timeLimit`/`remainingTime`/两个收集计数；`mergeResolveResults` 合并 `collected`（否则引爆轮的收集会丢）。
+- **外观与 HUD（14.1-14.3）**：`candy.js` 新增 `buildCollectibleAtlas`（水果 = 深红果身 + 深绿叶 + 果柄；金豆荚 = 琥珀荚身 + 三颗奶白豆粒，配色刻意避开 `BASE_COLORS` 与障碍物用色，便于像素取证）；`render.js` 新增收集物层（不透明贴图 + 与糖果同一条下落插值，因此「每次只落 1 格」的节奏可见）；`hud.js` 的第二格在时间关显示「时间 + 剩余秒数」、目标格支持「水果 x/N / 豆荚 x/N」、结束面板新增「时间到」文案；`app.js` 支持 `?demo=fruit|time|pod`，并实现**真实时间倒计时**（回放期间只记账、动画结束后一次性结算，保证逻辑串行）。
+- **测试**：`tests/board.test.js` +9 例、`tests/level.test.js` +11 例、`tests/game.test.js` +5 例、`tests/integration.test.js` +2 例。
+
+### 验证方式（可复现）
+
+- **L1**：`node tests/run-all.js` → 8 文件、**207 用例 / 1837 断言 / 0 失败 / exit 0**（较 Step 13 的 181/1573 新增 26 例 264 断言）。日志 `_build/s14-tests.log`。
+- **L0**：`python _build/consistency_check.py` 全部通过（新常量与新键全部登记、两文件版本 v1.19 相等）；`node _build/check-level-table.mjs` PASS（**50 关表逐项未受影响**）；`node _build/lint-levels.mjs` PASS。日志 `_build/s14-consistency.log`、`_build/s14-leveltable.log`、`_build/s14-lintlevels.log`。
+- **L2/L3**：新增 `_build/verify-step14.mjs`，**25 项全绿、连跑 3 次均 PASS**（日志 `_build/s14-verify-1..3.log`）：水果关（`?demo=fruit` 启动 → 配置 4 枚且互不重叠、都在 row 0 → **像素取证**「深红果身 + 深绿叶」4/4，普通糖果格作为对照 → 真实模块「下落 → 出口收集 → `collectedFruit` 计数 → 快照可见」）；金豆荚关（像素取证「琥珀荚身 + 奶白豆粒」→ 真实模块「每次消除最多下落 1 格」且始终留在本列）；时间关（启动日志为「倒计时 78 秒」且与 `computeTimeBudget` 一致 → **HUD 第二格在真实页面上随时间变化**（倒计时在跑）→ **真实触摸滑动产生有效交换且日志显示「剩余时间 78s」不变**（消除不扣时间、也不消耗步数）→ 真实模块 `tickTime` 递减、归零 `gameOver` 且不算通关）；全程 0 error/warning/异常。
+- **本轮抓到并修掉的两处真实实现缺陷**（都由探针/用例先复现，再改代码）：① 收集物下落上限的配置键映射写成 `fallPerStep[type]`，而登记键是 `fruitFallPerStep`/`podFallPerStep` → 金豆荚被当「整列直落」，清 4 格就掉 4 格（3.6 明文要求 1 格）；② `collectibleSpecsFor` 的列号夹取写成 `colsInBand - 1`，4 枚水果全部叠到同一列，实际只有 1 枚落到棋盘上。
+- **harness 修正（P3-5 第九次）**：`verify-step14` 的触摸断言最初写死候选对，随机棋盘下有约 60% 概率「该对本来就不成立」而假失败；改为**从画布按色相反推 64 格颜色，再用真实 `match.js` 找出一个必然成立的相邻对**后滑动，连跑 3 次稳定通过。
+
+### 边界与新登记
+
+- **三种类型仍不进 50 关表**（v1.18 第 4 条）：它们目前只在演示关（51/52/53）与测试里出现；排进关卡表需先改 `LEVELS.md` 与 3.6 的硬指标（元素预算与「收集物数量可达性」判据尚未定义），属另一步。
+- **演示关的可达性未做人工试玩**：水果演示关 4 枚、目标 4 枚；金豆荚 3 枚 —— 步数由公式派生（26 / 25），能否在真机上「刚好够用」需要试玩（与 50 关的同类边界一致）。
+- **倒计时的真实时间语义**：后台切回时会一次性补扣真实经过的秒数（未做「暂停」特例）；真机息屏/切后台的表现**未验证**。
+- **收集物与「占格障碍」的交互**：`applyCollectibles` 跳过占格障碍格（不叠加），但同一格同时配障碍与收集物的关卡配置**未定义规则**（当前静默降级为障碍）。
+- **真机未验证**：水果/金豆荚的观感与倒计时手感只在桌面 headless + 窄屏模拟下验证。
+
+### 下一步
+
+- 本 Step 的玩法实现与自测已完成；进入 **Gate 0.1 第八轮**（Step 14 → Step 15 扩展前 Bug Audit）：全量回归 + 一致性 + 16 个既有浏览器套件 + 本步新增的 `verify-step14`，通过后打 tag 并放行 Step 15（道具系统）。
+
+---
+
 ## 2026-09-22（Step 14 执行卡：关卡类型（水果关 / 时间关 / 金豆荚关）+ 待补账登记）
 
 > 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。本 Step 的**宪法前置**（v1.18 的规则口径）已获用户批准并落地。按 **14.1 / 14.2 / 14.3** 三个子步骤分别验收与提交。
