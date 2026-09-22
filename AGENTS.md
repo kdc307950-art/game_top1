@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.20
+> 版本：v1.21
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.20 → v1.21 关键变更）
+
+本次修订落地**用户批准的 Step 19.1**（「藤蔓地图 + 存档版本化 + 软件化预留」方案的第一步）：给本地存档加**格式版本 + 就地迁移 + 可注入后端**。**不改动任何玩法规则与数值**，也不改变 `storage.js` 的对外调用形状（`readLevelStars` 仍返回展平的关卡表，hud/app 无需改动）。
+
+1. **2.3 补 `storage.js` 的边界条目**（v1.16 的修订说明声称加了这条，实际只在 2.2 节目录里登记过 —— 本次补齐）：职责是「本地存档读写 + 容错」，是**唯一**允许碰存储的模块；内部通过**可注入的 backend** 访问存储介质（默认 `localStorageBackend`），业务代码只认 `createStorage()` 返回的接口，将来换 Tauri 文件存储 / IndexedDB 时不必改业务代码。
+2. **星级存档格式版本化**：写入 `{ version, levels, updatedAt }`；读到旧格式（v0：`{ "1": 3 }`）**就地迁移**并写回（老存档不丢）；读到**更高版本**只读不写、绝不降级覆盖；脏数据仍回落空表。`totalStars` 是**派生量**，不入存档（与 4.2「分数不另存字段、统一读 `level.currentScore`」同一口径）。
+3. **附录 B 新增 `STORAGE_CONFIG.schemaVersion`**（默认 1）：存档格式的版本号，是迁移逻辑的唯一判据。
+4. **`ROADMAP.md` 新增 Step 19（藤蔓地图 + 存档演进）**：19.1 存档版本化（本版本）→ 19.2 藤蔓地图（只读视觉层）→ 19.3 解锁 / 天边关卡（**需先批准规则**）；软件化（Tauri 还是保留 Capacitor）与地图滚动口径仍是待拍板项。
 
 ---
 
@@ -396,6 +407,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `obstacles.js`：障碍物创建、消除、层数管理。
 - `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
+- `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
 - `hud.js`：信息层绘制（HUD 三个信息格、结束面板、重排提示）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
@@ -1037,6 +1049,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.21 | 2026-09-22 | Agent（用户批准 19.1） | Step 19.1 存档演进：`storage.js` 加**可注入 backend**（默认 `localStorageBackend`）、星级存档带 `version`/`updatedAt` 并能**就地迁移** v0 旧格式（老存档不丢、迁移幂等、更高版本只读不写）、`totalStars` 改为派生函数；2.3 补 `storage.js` 的边界条目；附录 B 新增 `STORAGE_CONFIG.schemaVersion`；`ROADMAP.md` 新增 Step 19（19.1 存档 / 19.2 藤蔓地图 / 19.3 解锁，后者需先批规则） | 2.3、附录 B、11、`ROADMAP.md`、`storage.js`、`config.js` |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | Step 15 道具系统：新增 3.9（三种道具都不消耗步数/时间、刷新复用 3.8 的重排、加五步在时间关改为加秒、小木锤只接受含动物的格子且不扣数量、数量为跨关卡状态、道具条是画布外元素）；4.2 补 `game.useBooster` 与 `BoosterResult`、`level.grantSteps`/`grantTime`；2.3 补 UI 归属（`index.html`/`styles.css`/`storage.js`）；附录 B 新增 `BOOSTER_CONFIG` 4 键；附录 B-2 新增 `BOOSTER_KIND` | 2.3、3.9、4.2、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | Step 14 三种关卡类型的**落地契约**：4.4 补 `LevelConfig.timeLimit` / `collectibles`（`CollectibleSpec`）与 `Level.remainingTime`（时间关 `steps = 0`）；4.2 补四条纯追加（`board.createBoard` 的收集物参数、`applyGravity` 的 `collectibleFall`、`ResolveResult.collected` 的 `CollectibleHit` 形状、`level.consumeTime` 与 `game.tickTime`）与 `computeTimeBudget`、`GameSnapshot` 的 `timeLimit`/`remainingTime`；3.6 补第 8 条时间关的时长派生与归零结算口径、金豆荚三星阈值更高（`STAR_CONFIG.podFactor`）；附录 B 新增 `TIME_CONFIG` 5 键与 `STAR_CONFIG` 3 键；附录 B-2 补 `COLLECTIBLE_TYPE` 并扩写 `GOAL_TYPE`；50 关表不变 | 3.6、4.1、4.2、4.4、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.13 | 2026-09-20 | Agent（用户批准） | Step 12 开工前引入关卡模式：新增配套文件 `LEVELS.md`（50 关设计表）并登记进 2.2 节目录与第 17 节配套文件表；3.6 新增五条关卡设计硬指标（障碍类型 ≤2、障碍格 ≤12、每关只引入 1 种新机制、mixed ≤3 大项且 collect ≤2 种、目标可达性）；4.4 补充「50 关实例以 LEVELS.md 为准」 | 2.2、3.6、4.4、11、17、`LEVELS.md`、`ROADMAP.md` |
@@ -1306,6 +1319,7 @@ const LEVEL_3 = {
 | `BOOSTER_CONFIG.extraSteps`        | 加五步在步数关增加的步数 | 5        | 3.9 v1.20 |
 | `BOOSTER_CONFIG.extraSeconds`      | 加五步在时间关增加的秒数 | 10       | 3.9 v1.20 |
 | `BOOSTER_CONFIG.hammerCells`       | 小木锤一次消除的格数 | 1           | 3.9 v1.20 |
+| `STORAGE_CONFIG.schemaVersion`     | 存档格式版本（迁移判据） | 1             | 2.3 v1.21 |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |
 | `COLOR_NAMES`                      | 颜色索引 0-5 到动物名映射 | `['frog','hippo','ladybug','octopus','chick','fox']` | 3.6 / 13 |

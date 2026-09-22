@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-09-22（Step 19.1：存档版本化 + 就地迁移 + 可注入后端 —— 完成并验证）
+
+用户口径：提出「藤蔓地图 + 存档版本化 + 软件化预留」方案并提交修订版，预授权「按推荐默认先开工 19.1」。评审结论与口径记入 **DECISIONS D037**（含 5 处驳回/修正：SVG 选型同意、`Math.random()` 必须换确定性、坐标要三件套且第一版不引入 `.json`、不新增 `storage-adapter.js`、「解锁门槛」与「Tauri」挂起待拍板）。
+
+### 完成项
+
+- **宪法 v1.21**：2.3 补 `storage.js` 的边界条目（v1.16 的修订说明声称加了、实际漏了 —— 本次补齐）；附录 B 新增 `STORAGE_CONFIG.schemaVersion`；第 11 节记录；`ROADMAP.md` 新增 **§4.1 Step 19**（19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起）、§5 清单与第 6 节同步；`prompts.md` 新增 Step 19；一致性脚本的覆盖范围从 Step 0-18 放宽到 **Step 0-19**。
+- **`config.js`**：新增 `STORAGE_CONFIG.schemaVersion`（默认 1）—— 迁移逻辑的唯一判据，不写魔法数字。
+- **`storage.js`**：
+  - **可注入 backend**：`createStorage(logger, backend = localStorageBackend)`；默认后端只暴露 `get/set/remove`，异常仍由模块统一兜底（无痕/配额/后端缺失走同一条回落路径）。将来接 Tauri 文件存储只需换 backend。
+  - **星级存档版本化**：写入 `{ version, levels, updatedAt }`；`parseStarsRecord(raw)` 负责解析与判定（v0 = 顶层就是关卡表、v1 = 在 `levels` 里、**版本更高 → 只读不写**）。
+  - **就地迁移**：`readLevelStars()` 读到 v0 时把数据包成 v1 写回并打 info 日志；**对调用方仍返回展平的关卡表**，因此 `hud.js`/`app.js` 一行未改。
+  - **`getTotalStars(stars)`**：总星数改为**派生函数**（含 `readTotalStars()` 便捷方法），存档里**不再**出现 `totalStars` —— 与 4.2「分数不另存字段、统一读 `level.currentScore`」同一口径。
+  - **脏数据规范化**：只保留 `"<数字>"` 键、值夹成非负整数（`{"bad":"x","-1":5,"9":2.7}` → `{9:2}`）。
+- **测试**：`tests/integration.test.js` 新增 4 例（v0 迁移与幂等、未来版本不覆盖、脏数据与脏字段回落、后端注入、`totalStars` 派生）。
+- **顺带修掉一处 harness 缺陷（P3-13）**：`tests/assert.js` 的 `test(name, fn)` 不 await `fn` —— **异步用例的断言会在 `summarize()` 之后才跑**，于是既不计入统计、又只能靠 unhandled rejection 暴露失败（`tests/integration.test.js` 的 4 个 storage 用例此前就处于这个状态）。本步把 storage 的用例改成**同步**（`storage.js` 是纯工厂，导入时不碰 `localStorage`，可以静态导入），断言数从 65 变为 **107**（此前的异步断言根本没被计数）。根治方案（让 `test()` 支持 await）登记为 P3-13。
+
+### 验证方式（可复现）
+
+- **L1**：`node tests/run-all.js` → 8 文件、**218 用例 / 1922 断言 / 0 失败 / exit 0**（较 Step 15 的 215/1901 +3 例 +21 断言；integration 单文件从 65 断言升到 107，见 P3-13）。
+- **L0**：`python _build/consistency_check.py` 全部通过（`STORAGE_CONFIG.schemaVersion` 已登记、两文件版本 v1.21 相等、ROADMAP/prompts 覆盖 Step 0-19）；`node _build/check-level-table.mjs` PASS；`node _build/lint-levels.mjs` PASS。
+- **L2/L3**：新增 `_build/verify-step19-1.mjs` **20 项全绿**（日志 `_build/s19-verify-1.log`）：真实 `localStorage` 写入的是带版本记录且**不含** `totalStars`；注入 v0（`{"1":3,"12":2}`）后刷新页面 → **就地迁移**成 v1 且星级一分不丢、总星派生为 5；再次刷新**不重写**（幂等）；注入 v99 后被**降级覆盖的检查**通过（version 与未知字段都还在）；`{oops` → 空表且留下**可诊断的 warn**（回落不是静默的）；真实页面仍能读到 3 关星级并正常启动（canvas + 3 个道具按钮）；注入内存后端时真实存档不受污染。
+- **回归**：改写 `_build/verify-step12b.mjs` 的「星级以裸 JSON 写入」断言为「带版本的记录」后 **PASS**（它的其余 17 项不变）—— 这条改写是**契约变更的必然结果**，不是放宽。
+- 证据等级：L0 + L1 + L2 + L3；真机、iOS/Android、软件化**未验证**。
+
+### 边界与挂起项（等用户拍板）
+
+- **19.2 藤蔓地图**：待定**滚动口径**（一屏翻页 (a) / 内部拖拽 (b) / 横滚 (c)，推荐 (a)）。要做的事与验收已写进 `ROADMAP.md` §4.1（含「改写 `verify-step12b` 为 DOM 版 + 新增 `verify-step19-2`」）。**替换 canvas 选关界面会让现有 `verify-step12b` 的像素取证失效**，这是必须同步处理的回归成本。
+- **19.3 解锁门槛与天边关卡**：属规则变更（3.6 无「解锁」概念），**未批不动**。需定义：隐藏关算不算 50 关、解锁条件、是否改 `LEVELS.md`。
+- **软件化**：`cargo`/`rustc` **未安装**；且 2.1/0.3 的受控例外是 Capacitor，换 Tauri 需先改宪法与 Step 18。
+- **P3-13（新增）**：`tests/assert.js` 的异步用例计数缺陷（本轮以「改成同步」规避，未根治）。
+- **P3-10 仍开放**：环像素取证未补（Step 16 或 19.2 的审计轮处理）。
+- **P3-12 沿用**：刷新/死局重排约 10% 失败率（失败不扣数量）。
+
+### 下一步
+
+- 19.1 是「存档演进」这一层，**不构成玩法 Step 的完成**，故本轮**不触发 Gate 0.1**（Step 19 的门禁在 19.2/19.3 收口后一起做）。
+- 下一步二选一：**19.2 藤蔓地图**（需你先定滚动口径）或回到 ROADMAP 既定的 **Step 16（音效与震动）**。默认：**等你定滚动口径后再开工 19.2**，期间不擅自动 19.3 与软件化。
+
+---
+
 ## 2026-09-22（Gate 0.1 第九轮：Step 15 → Step 16 扩展前 Bug Audit —— 通过，放行 Step 16）
 
 - **审计对象**：Step 15（道具系统：刷新 / 加五步 / 小木锤 + 数量持久化 + 画布外道具条）。起点 = tag `step15-start`（`7c131a2`）+ 本步提交（`762f18c`），工作区干净。

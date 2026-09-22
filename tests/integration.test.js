@@ -20,6 +20,9 @@ import { CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_
 } from '../board.js';
 import { createGame, getState, tickTime, trySwap } from '../game.js';
 import { findMatches } from '../match.js';
+// v1.21：storage.js 是纯工厂（导入时不碰 localStorage），因此可以直接静态导入，测试也就能保持同步 ——
+// 异步用例的断言会在 summarize() 之后才跑（本轮修掉的计数缺陷，见 PROGRESS 的 19.1 记录）。
+import { createStorage, getTotalStars, parseStarsRecord } from '../storage.js';
 
 const SIZE = 8;
 const COLORS = CONFIG.COLOR_COUNT;
@@ -278,8 +281,7 @@ test('纯障碍格不会被消除或替换（雪块保留）', () => {
 
 // ---------------------------------------------------------------- Step 12.2：存档层容错（v1.16 的 storage.js）
 
-test('storage：最高分与每关星级的读写、脏数据与不可用都会回落（不抛错）', async () => {
-  const { createStorage } = await import('../storage.js');
+test('storage：最高分与每关星级的读写、脏数据与不可用都会回落（不抛错）', () => {
   const logs = [];
   const memory = new Map();
   globalThis.window = {
@@ -348,8 +350,7 @@ test('集成（v1.19）：时间关归零时先引爆盘面上的特殊方块再
 
 // ---------------------------------------------------------------- Step 15：道具数量的存档与消耗（v1.20 / 3.9）
 
-test('storage（v1.20）：道具数量的读写、脏数据回落与「0 不再扣」', async () => {
-  const { createStorage } = await import('../storage.js');
+test('storage（v1.20）：道具数量的读写、脏数据回落与「0 不再扣」', () => {
   const memory = new Map();
   globalThis.window = {
     localStorage: {
@@ -381,6 +382,84 @@ test('storage（v1.20）：道具数量的读写、脏数据回落与「0 不再
   counts.hammer = 0;
   assertDeepEqual(storage.spendBooster(counts, 'hammer'), { used: false, left: 0 }, '数量为 0 时不消耗');
   assertDeepEqual(storage.spendBooster(counts, 'nope'), { used: false, left: 0 }, '未知道具不消耗也不抛错');
+  delete globalThis.window;
+});
+
+// ---------------------------------------------------------------- Step 19.1：存档版本化、迁移与后端注入（v1.21）
+
+test('storage（v1.21）：星级存档带版本写入，读到旧格式（v0）就地迁移且老数据不丢', () => {
+  const memory = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (memory.has(k) ? memory.get(k) : null),
+      setItem: (k, v) => memory.set(k, v)
+    }
+  };
+  const logs = [];
+  const storage = createStorage((level, message) => logs.push([level, message]));
+
+  // v0（历史格式）：顶层就是关卡表
+  memory.set(STORAGE_KEYS.LEVEL_STARS, '{"1":3,"12":2}');
+  assertDeepEqual(storage.readLevelStars(), { 1: 3, 12: 2 }, '旧格式读回同形（调用方无感）');
+  const migrated = JSON.parse(memory.get(STORAGE_KEYS.LEVEL_STARS));
+  assertEqual(migrated.version, CONFIG.STORAGE_CONFIG.schemaVersion, '迁移后带 version');
+  assertDeepEqual(migrated.levels, { 1: 3, 12: 2 }, '迁移后关卡表原样保留');
+  assertTrue(typeof migrated.updatedAt === 'string' && migrated.updatedAt.length > 0, '迁移后带 updatedAt');
+  assertTrue(logs.some(([, m]) => m.includes('迁移')), '迁移会打日志（可诊断）');
+
+  // v1：再读不应重写（幂等）
+  const rawV1 = memory.get(STORAGE_KEYS.LEVEL_STARS);
+  storage.readLevelStars();
+  assertEqual(memory.get(STORAGE_KEYS.LEVEL_STARS), rawV1, '当前版本再读不重写');
+
+  // 未来版本：只尽力读取，绝不降级覆盖
+  memory.set(STORAGE_KEYS.LEVEL_STARS, JSON.stringify({ version: 99, levels: { 5: 3 }, extra: 'x' }));
+  assertDeepEqual(storage.readLevelStars(), { 5: 3 }, '未来版本尽力读取');
+  assertTrue(memory.get(STORAGE_KEYS.LEVEL_STARS).includes('99'), '未来版本未被覆盖');
+
+  // 脏数据与脏字段
+  memory.set(STORAGE_KEYS.LEVEL_STARS, '{oops');
+  assertDeepEqual(storage.readLevelStars(), {}, 'JSON 脏数据 → 空表');
+  memory.set(STORAGE_KEYS.LEVEL_STARS, '{"1":3,"bad":"x","-1":5,"9":2.7,"10":-4}');
+  assertDeepEqual(storage.readLevelStars(), { 1: 3, 9: 2, 10: 0 }, '只留数字键，值夹成非负整数');
+  delete globalThis.window;
+});
+
+test('storage（v1.21）：存储后端可注入，业务代码不直接碰 localStorage', () => {
+  // 不设置 globalThis.window：若实现里硬写 localStorage，这里就会全部回落/抛错
+  const store = new Map();
+  const backend = {
+    get: (k) => (store.has(k) ? store.get(k) : null),
+    set: (k, v) => store.set(k, v),
+    remove: (k) => store.delete(k)
+  };
+  const storage = createStorage(() => {}, backend);
+
+  storage.writeBestScore(1234);
+  assertEqual(storage.readBestScore(), 1234, '最高分走后端');
+  const stars = {};
+  storage.recordLevelStars(stars, 7, 2);
+  assertEqual(storage.readLevelStars()[7], 2, '星级走后端');
+  assertEqual(JSON.parse(store.get(STORAGE_KEYS.LEVEL_STARS)).version, CONFIG.STORAGE_CONFIG.schemaVersion, '后端里也是版本化格式');
+  assertEqual(storage.readTotalStars(), 2, '总星数由存档派生');
+
+  // 后端抛错 → 仍然回落，不抛给调用方
+  const broken = createStorage(() => {}, { get: () => { throw new Error('boom'); }, set: () => { throw new Error('boom'); } });
+  assertEqual(broken.readBestScore(), 0, '后端不可用 → 0');
+  assertDeepEqual(broken.readLevelStars(), {}, '后端不可用 → 空表');
+});
+
+test('getTotalStars（v1.21）：总星数是派生量，不入存档', () => {
+  assertEqual(getTotalStars({ 1: 3, 2: 2 }), 5, '求和');
+  assertEqual(getTotalStars({}), 0, '空表');
+  assertEqual(getTotalStars(null), 0, 'null 安全');
+  assertEqual(getTotalStars({ 1: 'x', 2: 1 }), 1, '非数字按 0 处理');
+  const memory = new Map();
+  globalThis.window = { localStorage: { getItem: (k) => (memory.has(k) ? memory.get(k) : null), setItem: (k, v) => memory.set(k, v) } };
+  const storage = createStorage();
+  storage.recordLevelStars({}, 1, 3);
+  const raw = JSON.parse(memory.get(STORAGE_KEYS.LEVEL_STARS));
+  assertFalse('totalStars' in raw, '存档里不写 totalStars（避免两处真相源）');
   delete globalThis.window;
 });
 

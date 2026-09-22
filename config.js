@@ -172,6 +172,13 @@ export const CONFIG = {
     hammerCells: 1     // 小木锤一次消除的格数（3.9）
   },
 
+  // 本地存档的格式版本（AGENTS.md 2.3 / v1.21，`storage.js` 的读写都带它）。
+  // 加这个键的理由（用户方案 §1.3）：用户清缓存 / 换后端 / 未来改星级规则时，靠版本号做迁移，
+  // 而不是靠猜字段形状。读到**更高**版本时只读不写，绝不把新版数据降级覆盖。
+  STORAGE_CONFIG: {
+    schemaVersion: 1
+  },
+
   LEVEL_DEFAULTS: {
     steps: 30,
     starThresholds: [7000, 12000, 18000]

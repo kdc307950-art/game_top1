@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.20
+> 版本：v1.21
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -933,6 +933,43 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 
 ---
 
+## 4.1 新增 Step 19：藤蔓地图 + 存档演进（用户提案，19.1 已落地）
+
+### Step 19：藤蔓地图与存档演进
+
+**目标**：把静态的 10×5 选关网格升级为**藤蔓攀爬地图**，同时让本地存档可迁移 —— 为将来换存储介质（Tauri 文件 / IndexedDB）与软件化预留。用户提案见 `DECISIONS.md` D037（含逐条评审结论）。
+
+**拆分与状态**：
+
+| 子步骤 | 内容 | 状态 |
+|---|---|---|
+| **19.1** | 存档版本化 + 就地迁移 + 可注入 backend + `totalStars` 改派生函数 | **已完成**（宪法 v1.21） |
+| **19.2** | 藤蔓地图（只读视觉层：SVG 藤蔓 + 关卡节点 + 星级，只画不加门槛）；坐标三件套 + 确定性路径；改写 `verify-step12b` | 待开工（**需先定滚动口径**） |
+| **19.3** | 解锁门槛（`unlockStars`）与「天边关卡」云层 | **挂起 —— 需先批准规则**（宪法 3.6 目前没有「解锁」概念） |
+| **20** | 软件化（Tauri 还是保留 Capacitor；工具链、前端零改动加载、存档双写） | 挂起 —— 需改 2.1/0.3 与 Step 18，属用户拍板项 |
+
+**19.2 的范围**：`vine-map.js`（新模块）+ 坐标数据（落 `level.js` 的表或独立数据文件，二者只能有一个真相源）+ 样式 + `index.html` 的 SVG 容器；`hud.js` 的 `drawLevelSelect`/`render.js`/`app.js` 的 canvas 命中链路换成 DOM 事件；`_build/check-vine-map.mjs` 巡检文档与代码表一致。**路径必须确定性**（固定种子 PRNG 或直接写控制点），符合「设计期派生：同一配置永远同一结果」。
+
+**19.2 的验收**：`index.html?screen=select`（或等效入口）下 50 个节点可见、每节点带 `data-level`/`data-stars`/`aria-label`；点按进关；星级来自 `storage.js`；改写后的 `verify-step19-2` 全绿；`verify-step12b` 改为 DOM 版后仍绿；页面仍不可滚动（5.1，按选定的滚动口径处理）。
+
+**19.2 的禁止**：引入解锁门槛（属 19.3）；引入任何外部依赖或构建工具（2.1）；让地图层读游戏状态或写存档（2.3）；把坐标写进两个真相源。
+
+**19.2 的前置依赖**：Step 19.1（已完成）；用户对**滚动口径**的拍板。
+
+**19.2 的参考**：用户提案 §1.1/§1.4（SVG + 确定性路径 + 一屏翻页）。
+
+**提示词**：
+```text
+任务：实现 Step 19.2 藤蔓地图（只读视觉层）
+开始前：读 AGENTS.md（2.3/5.1/6）、ROADMAP Step 19、DECISIONS D037、PROGRESS 的 19.1 记录，确认滚动口径
+范围：新增 vine-map.js 与样式、index.html 加 SVG 容器、改写 hud/render/app 的选关链路为 DOM 事件、坐标三件套与巡检脚本
+验收：50 节点可见可点、星级正确、页面不可滚动、改写后的 verify-step12b 与新增 verify-step19-2 全绿
+禁止：解锁门槛（属 19.3）、新依赖/构建工具、地图层读写游戏状态或存档、坐标出现两个真相源
+前置依赖：Step 19.1
+```
+
+---
+
 ## 5. 完成记录
 
 ### 第一阶段
@@ -965,6 +1002,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [ ] Step 16：音效与震动反馈
 - [ ] Step 17：粒子动画与视觉打磨
 - [ ] Step 18：Capacitor 打包
+- [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；19.2 藤蔓地图待开工；19.3 解锁与软件化挂起 —— 见 DECISIONS D037）
 
 ---
 
@@ -984,3 +1022,4 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.10 | 2026-09-20 | Agent | 补充成熟 App 研发阶段总表、统一 Step 执行卡、DoR/DoD、需求到发布追溯、分支版本回滚与包装发布准备清单；明确当前仍停在 Gate 0.1 | §0.4-§0.8、Step 8 前置门禁 |
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
+| v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |

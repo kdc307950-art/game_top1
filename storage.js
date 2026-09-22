@@ -1,9 +1,13 @@
-// storage.js — 本地存档读写（最高分、每关星级、道具数量）。见 AGENTS.md 2.2 / 2.3 / v1.16 / 3.9。
+// storage.js — 本地存档读写（最高分、每关星级、道具数量）。见 AGENTS.md 2.2 / 2.3 / v1.16 / 3.9 / v1.21。
 //
 // 边界（2.3，v1.16 起）：**本模块是唯一允许读写 `localStorage` 的模块**（此前该职责在 app.js）。
 // 拆出来的理由有两条：① Step 12 的选关与星级存档让 app.js 超过第 6 节的 300 行上限；
 // ② 「IO + JSON 容错」本就是一个独立职责 —— 它需要处理无痕模式、配额、脏数据三种失败，
 // 与其把 try/catch 散在编排代码里，不如收在一处并让调用方拿到稳定的回落值。
+//
+// v1.21（用户批准的 19.1）：存储**后端可注入**（`backend` 参数，默认 `localStorageBackend`），
+// 业务代码只认 `createStorage()` 返回的接口；将来接 Tauri 的文件存储时换一个 backend 即可，不改业务代码。
+// 同时星级存档带**格式版本**（`STORAGE_CONFIG.schemaVersion`）并能就地迁移旧格式，详见 `parseStarsRecord`。
 //
 // 本模块不认识棋盘、不碰 DOM/Canvas、不实现任何游戏规则；日志通过注入的 logger 输出，
 // 因此它在 Node 里也能被测试（注入一个记录数组即可）。
@@ -11,6 +15,84 @@
 import { BOOSTER_KIND, CONFIG, STORAGE_KEYS } from './config.js';
 
 const BOOSTER_KINDS = Object.values(BOOSTER_KIND);
+/** 当前存档格式版本（附录 B `STORAGE_CONFIG.schemaVersion`）；读到更低版本就地迁移，读到更高版本只读不写。 */
+const SCHEMA_VERSION = CONFIG.STORAGE_CONFIG.schemaVersion;
+
+/**
+ * 默认存储后端：浏览器 `localStorage`。
+ * 只暴露 get/set/remove 三个方法（最小接口）；任何异常都原样抛出，由 `createStorage` 统一兜底 ——
+ * 于是「无痕模式 / 配额满 / 后端不存在」三种失败走同一条回落路径。
+ */
+export const localStorageBackend = {
+  get(key) {
+    return globalThis.window.localStorage.getItem(key);
+  },
+  set(key, value) {
+    globalThis.window.localStorage.setItem(key, value);
+  },
+  remove(key) {
+    globalThis.window.localStorage.removeItem(key);
+  }
+};
+
+/**
+ * 星级表解析 + 版本迁移（v1.21）。
+ *   v0（历史格式，无 version 字段）：`{ "1": 3, "2": 2 }` —— 顶层就是关卡表
+ *   v1（当前格式）：`{ version: 1, levels: { "1": 3 }, updatedAt: "..." }`
+ * 返回 `{ levels, migrated, writable }`：
+ *   levels    —— 展平的关卡表（对调用方与旧格式完全同形，hud/app 不需要改）
+ *   migrated  —— 读到的是旧格式，调用方应写回（老存档因此不会在下次改动时丢）
+ *   writable  —— false 表示读到的是**未来版本**，只尽力读取、**绝不写回**（避免降级覆盖）
+ */
+export function parseStarsRecord(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { levels: {}, migrated: false, writable: true };
+  }
+  const version = Number.isFinite(raw.version) ? Math.trunc(raw.version) : 0;
+  if (version > SCHEMA_VERSION) {
+    return { levels: normalizeLevels(raw.levels), migrated: false, writable: false };
+  }
+  // v0 的顶层键就是关卡 id；v1 起关卡表在 levels 字段里。两者都经过同一套规范化（只收数字键、非负整数）。
+  const levels = normalizeLevels(version >= 1 ? raw.levels : raw);
+  return { levels, migrated: version < SCHEMA_VERSION, writable: true };
+}
+
+/** 关卡表的规范化：只保留 `"<数字>"` 键，值夹成非负整数（脏数据不会变成 NaN 或负数）。 */
+function normalizeLevels(source) {
+  const levels = {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return levels;
+  for (const [key, value] of Object.entries(source)) {
+    if (!/^\d+$/.test(key)) continue;
+    levels[key] = normalizeStars(value);
+  }
+  return levels;
+}
+
+function normalizeStars(value) {
+  const stars = Number.isFinite(value) ? Math.trunc(value) : 0;
+  return Math.max(0, stars);
+}
+
+/** 把展平的关卡表包成当前版本的存档记录（写入路径的唯一出口，保证 version 与 updatedAt 一定存在）。 */
+function serializeStars(stars) {
+  return {
+    version: SCHEMA_VERSION,
+    levels: normalizeLevels(stars),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * 总星数（v1.21，用户方案 §1.3）：**派生量**，不进存档 —— 存了就会有两处真相源，
+ * 与 4.2 对分数的口径一致（「分数不另存字段，统一读 level.currentScore」）。
+ */
+export function getTotalStars(stars) {
+  let total = 0;
+  for (const value of Object.values(stars ?? {})) {
+    if (Number.isFinite(value)) total += Math.trunc(value);
+  }
+  return Math.max(0, total);
+}
 
 /** 3.9（v1.20）：每种道具的初始数量（`BOOSTER_CONFIG.initialCount`，缺省由 config.js 兜底）。 */
 function defaultBoosters() {
@@ -28,22 +110,23 @@ function normalizeCount(value) {
 /**
  * 建一个存档读写器。`logger(level, message)` 由调用方注入（app.js 传自己的 log），
  * 缺省时静默 —— 这样测试可以完全不开控制台。
+ * `backend` 缺省为 `localStorageBackend`；传别的实现（文件、IndexedDB、内存）即可迁移存储介质（v1.21）。
  */
-export function createStorage(logger = () => {}) {
+export function createStorage(logger = () => {}, backend = localStorageBackend) {
   const read = (key, fallback, parse) => {
     try {
-      const raw = window.localStorage.getItem(key);
-      if (raw === null) return fallback;
+      const raw = backend.get(key);
+      if (raw === null || raw === undefined) return fallback;
       return parse(raw);
     } catch (error) {
-      logger('warn', `读取存档失败（localStorage 不可用）：${error.message}`);
+      logger('warn', `读取存档失败（存储后端不可用或内容非法）：${error.message}`);
       return fallback;
     }
   };
 
   const write = (key, value, label) => {
     try {
-      window.localStorage.setItem(key, value);
+      backend.set(key, value);
       return true;
     } catch (error) {
       logger('warn', `写入${label}失败：${error.message}`);
@@ -65,16 +148,29 @@ export function createStorage(logger = () => {}) {
       return write(STORAGE_KEYS.BEST_SCORE, String(score), '最高分');
     },
 
-    /** 每关星级表 `{ 关卡id: 星数 }`；脏数据一律回落空表。 */
+    /**
+     * 每关星级表 `{ 关卡id: 星数 }`（对调用方**与旧格式同形**，hud/app 无需改动）。
+     * 脏数据一律回落空表；读到旧格式（v0）时**就地迁移**并写回 —— 老存档不会在下次改动时丢（v1.21）。
+     * 读到比当前更高的版本时只尽力读取、不写回（避免把新版数据降级覆盖）。
+     */
     readLevelStars() {
-      return read(STORAGE_KEYS.LEVEL_STARS, {}, (raw) => {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-      });
+      const raw = read(STORAGE_KEYS.LEVEL_STARS, null, (text) => JSON.parse(text));
+      const parsed = parseStarsRecord(raw);
+      if (parsed.migrated && parsed.writable) {
+        write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(parsed.levels)), '关卡星级');
+        logger('info', `星级存档已从旧格式迁移到 v${SCHEMA_VERSION}（${Object.keys(parsed.levels).length} 关）`);
+      }
+      return parsed.levels;
     },
 
+    /** 写入带版本与时间戳的存档记录（v1.21）；入参仍是展平的关卡表。 */
     writeLevelStars(stars) {
-      return write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(stars), '关卡星级');
+      return write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(stars)), '关卡星级');
+    },
+
+    /** 总星数（派生量，不入存档）—— 选关界面与未来的解锁门槛都从这里取，见 `getTotalStars`。 */
+    readTotalStars() {
+      return getTotalStars(this.readLevelStars());
     },
 
     /**
