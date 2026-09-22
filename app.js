@@ -22,6 +22,7 @@ import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js'
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
 import { DEMO_LEVEL_IDS, LEVEL_COUNT, getLevelConfig, isTimeLevel } from './level.js';
+import { pageOf, renderMap } from './vine-map.js'; // Step 19.2：藤蔓关卡地图（画布外的 SVG 层）
 import { createStorage } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
@@ -55,9 +56,9 @@ const view = {
   newRecord: false,
   stars: 0, // 3.7：本局通关星级（结束面板用；失败时为 0）
   levelId: demoLevelRequested(), // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=` 进演示关）
-  screen: 'playing', // 'playing' | 'select'：选关界面与对局界面
+  screen: 'playing', // 'playing' | 'select'：对局界面与藤蔓地图（19.2 起地图是画布外的 DOM 层）
   levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
-  levelRects: [], // 选关界面的每格命中矩形（由 render.js 返回）
+  mapPage: 1, // 地图当前页（19.2：5 页 × 每页 10 关，页序 = 50 关表的顺序）
   nextRect: null, // 结束面板的「下一关」
   selectRect: null, // 结束面板的「选关」
   sizePx: 0,
@@ -114,6 +115,8 @@ function init() {
   applyLayout();
   bindBoosters(); // Step 15：道具条（画布外的 DOM 元素）
   bindPrefs(); // Step 16：音效/震动开关
+  bindMap(); // Step 19.2：藤蔓地图的事件委托（点节点进关 / 点分页翻页）
+  if (mapRequested()) showMap(); // `?map=1` 直达地图（与 `?demo=` 同一模式，供真机与取证使用）
 
   bindInput({
     target: canvas,
@@ -154,9 +157,16 @@ function demoLevelRequested() {
   return 1;
 }
 
+/** Step 19.2：URL 带 `?map=1` 时开局即进入藤蔓地图（选关）。 */
+function mapRequested() {
+  if (typeof window === 'undefined') return false;
+  return /(^|[?&])map=1(&|$)/.test(window.location.search) || window.location.hash === '#map';
+}
+
 /** 开新一局：重建 GameState 并复位视图侧状态。 */
 function startNewGame() {
   timeline.stop(); // 防御性：正常路径下不会在回放中重开
+  hideMap(); // 19.2：从地图进关时先收起地图
   view.game = createGame(getLevelConfig(view.levelId));
   view.screen = 'playing';
   view.newRecord = false;
@@ -285,26 +295,19 @@ function onSwipe({ x0, y0, step }) {
 
 function onTap({ x1, y1 }) {
   view.audio?.unlock();
+  // 19.2：地图打开时画布是隐藏的，事件走 DOM；这里若仍处于 select 就直接返回（不误判隐藏画布上的点按）
+  if (view.screen === 'select') return;
   if (view.game.gameOver) {
-    if (view.screen === 'select') {
-    const tile = view.levelRects.find((rect) => hitTest(view.canvas, x1, y1, rect));
-    if (tile) {
-      view.levelId = Math.min(Math.max(Math.round(tile.id), 1), LEVEL_COUNT);
+    if (hitTest(view.canvas, x1, y1, view.nextRect)) {
+      view.levelId = Math.min(view.levelId + 1, LEVEL_COUNT); // 通关后的「下一关」
       startNewGame();
+      return;
     }
-    return;
-  }
-  if (hitTest(view.canvas, x1, y1, view.nextRect)) {
-    view.levelId = Math.min(view.levelId + 1, LEVEL_COUNT); // 通关后的「下一关」
-    startNewGame();
-    return;
-  }
-  if (hitTest(view.canvas, x1, y1, view.selectRect)) {
-    view.screen = 'select'; // Step 12.2：只切视图状态，不重置当前对局
-    drawFrame();
-    return;
-  }
-  if (hitTest(view.canvas, x1, y1, view.restartRect)) startNewGame();
+    if (hitTest(view.canvas, x1, y1, view.selectRect)) {
+      showMap(); // 19.2：结束面板的「选关」打开藤蔓地图（不再切 canvas 界面）
+      return;
+    }
+    if (hitTest(view.canvas, x1, y1, view.restartRect)) startNewGame();
     else log('info', '本局已结束：点按「再来一局」开始新一局');
     return;
   }
@@ -546,6 +549,76 @@ function boosterLabel(kind) {
 }
 
 // ---------------------------------------------------------------------------
+// 藤蔓关卡地图（Step 19.2，v1.23；AGENTS.md 2.3 / 5.1）
+//
+// 地图是**画布外的绝对定位 SVG 层**（结构在 index.html、样式在 vine-map.css、绘制在 vine-map.js）：
+//   · 不参与 `computeBoardSize`，因此既有像素取证不受影响；
+//   · 分页是按钮而不是滚动容器，5.1 的「禁滚动/缩放」依旧成立；
+//   · **只画不拦**：不加任何解锁判断，点哪关进哪关（19.3 的硬门槛未批准）。
+// 事件用委托绑一次（节点每次渲染都会重建），因此不需要在 vine-map.js 里认识 app。
+// ---------------------------------------------------------------------------
+
+function bindMap() {
+  const host = document.getElementById('map');
+  if (!host) {
+    log('warn', '未找到 #map 容器，选关入口不可用（不影响对局）');
+    return;
+  }
+  host.addEventListener('click', (event) => {
+    const pager = event.target.closest?.('[data-pager]');
+    if (pager) {
+      view.mapPage = Number(pager.dataset.pager) || 1;
+      drawMap();
+      return;
+    }
+    const node = event.target.closest?.('[data-level]');
+    if (node) pickLevel(Number(node.dataset.level));
+  });
+  // 键盘可达：Enter/Space 落在节点上等同于点击
+  host.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const node = event.target.closest?.('[data-level]');
+    if (!node) return;
+    event.preventDefault();
+    pickLevel(Number(node.dataset.level));
+  });
+}
+
+/** 打开地图（`view.screen = 'select'`）：隐藏画布、按当前页渲染节点与星级。 */
+function showMap() {
+  const host = document.getElementById('map');
+  if (!host) return;
+  view.screen = 'select';
+  view.selected = null;
+  view.mapPage = Math.min(Math.max(view.mapPage, 1), pageOf(LEVEL_COUNT));
+  host.hidden = false;
+  if (view.canvas) view.canvas.hidden = true;
+  drawMap();
+  log('info', `进入选关地图：第 ${view.mapPage} 页（共 ${pageOf(LEVEL_COUNT)} 页，每页 10 关）`);
+}
+
+function hideMap() {
+  const host = document.getElementById('map');
+  if (host) host.hidden = true;
+  if (view.canvas) view.canvas.hidden = false;
+}
+
+/** 重画地图（翻页或从对局回来时调用）；星级从存档读，地图层自己不碰存储。 */
+function drawMap() {
+  const host = document.getElementById('map');
+  if (!host) return;
+  renderMap(host, { page: view.mapPage, stars: view.levelStars });
+}
+
+/** 点某一关：只做「切关卡 + 开新局」，不写任何存档（19.2 不碰存储）。 */
+function pickLevel(levelId) {
+  if (!Number.isFinite(levelId)) return;
+  view.levelId = Math.min(Math.max(Math.round(levelId), 1), LEVEL_COUNT);
+  startNewGame(); // 内部会 hideMap() 并把 screen 切回 playing
+  log('info', `已从地图选择第 ${view.levelId} 关`);
+}
+
+// ---------------------------------------------------------------------------
 // 音效与震动（Step 16，v1.22；AGENTS.md 5.6）
 //
 // 规则侧只定义「什么事件该有反馈」，声音怎么合成在 `audio.js`（唯一创建 AudioContext 的模块），
@@ -598,8 +671,7 @@ function drawFrame(entry = null, progress = 1) {
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
     banner: entry && entry.phase === 'shuffle' ? entry.banner : null, // 5.5：重排前给出明确提示
-    // Step 12.2：选关界面（只画 HUD + 关卡网格，棋盘层跳过）
-    select: view.screen === 'select' ? { count: LEVEL_COUNT, stars: view.levelStars } : null,
+    // Step 19.2：选关界面已改为画布外的藤蔓地图层（`#map`），canvas 场景里不再有选关网格
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,
       steps: view.game.level.remainingSteps,
@@ -628,7 +700,7 @@ function drawFrame(entry = null, progress = 1) {
         : null
   };
   const hit = renderer.draw(view.ctx, scene);
-  ({ restartRect: view.restartRect, nextRect: view.nextRect, selectRect: view.selectRect, levelRects: view.levelRects } = hit);
+  ({ restartRect: view.restartRect, nextRect: view.nextRect, selectRect: view.selectRect } = hit);
 }
 
 // ---------------------------------------------------------------------------

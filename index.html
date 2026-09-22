@@ -13,6 +13,7 @@
     <link rel="icon" href="data:," />
     <title>消消乐</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="vine-map.css" />
   </head>
   <body>
     <!-- 只放结构：AGENTS.md 2.3。棋盘绘制全部在 app.js -->
@@ -31,6 +32,10 @@
         <button class="pref" type="button" data-pref="haptic" aria-pressed="true">震动</button>
       </div>
     </div>
+
+    <!-- Step 19.2（v1.23）藤蔓关卡地图：结构容器在此，SVG 由 vine-map.js 画进这里、事件由 app.js 委托。
+         它是**画布外的绝对定位层**，替换了原来画在 canvas 上的 10×5 选关网格。 -->
+    <div id="map" hidden></div>
 
     <!-- 本项目源码为 ES Module，必须经 http(s) 打开，见 ROADMAP.md 第 0.9 条 -->
     <script type="module" src="app.js"></script>

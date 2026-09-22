@@ -6,6 +6,28 @@
 
 ---
 
+---
+
+## D039：Step 19.2 藤蔓关卡地图的口径（滚动 (a)、坐标三件套、确定性路径、只画不拦）
+
+- 日期：2026-09-22
+- 背景：用户在「19.1 之后」的方案里**确认滚动口径 (a)**（一屏分区 + 翻页，分页是按钮不是滚动容器），并给出 19.2 的详细方案（新增 4 文件、改 6 文件、路径用固定种子、`verify-step19-2` 八项必查、`verify-step12b` 只改 4 项并新增一条「几何不变」断言）。本记录固定落地口径。
+- 决策：
+  1. **滚动口径 (a)**：每页 `VINE_MAP_CONFIG.pageSize` = 10 关、共 5 页；**页序与 50 关表一致**（第 1 页 = 1–10 关），即每页正好对应原 10×5 网格的一行 —— 改写语义漂移最小。分页是**按钮**，因此 5.1 的「禁滚动/缩放」不需要开例外。
+  2. **地图是画布外的绝对定位层**（`#map`，`position: absolute; inset: 0`），**不参与 `computeBoardSize`**：既有 19 个套件的像素取证全部继续有效（`verify-step12b` 新增「地图开/关 `computeBoardSize`/`boardRect` 逐字段相等」作为回归护栏）。
+  3. **坐标三件套**：`LEVELS.md` §9 坐标表（**真相源**，标记块内由生成器写入、不手改）↔ `level.js` 的 `LEVEL_MAP_POS`（运行时表）↔ `_build/check-vine-map.mjs`（反向巡检，含独立重算「页号 = ⌈关号/每页⌉、每页 10 关、x 在两列、y 符合 5 行蛇形」）。生成器 `_build/gen-vine-map.mjs` 只写标记块之间，**重复执行幂等**；它从 `LEVELS.md` 数关数、不 import `level.js`（这样坐标块语法坏掉时也能把它修好）。
+  4. **路径确定性**：抖动只由 `VINE_MAP_CONFIG.seed` 决定（`mulberry32(seed + page)`），**不使用运行时随机**；**节点坐标是显式的**，抖动只改控制点、不移节点 —— 因此节点永远落在藤蔓上，且「同配置同一条 `d`」可断言（`tests/vine-map.test.js` + `verify-step19-2` 各验一遍）。
+  5. **只画不拦**：不加 `unlockStars` 硬门槛、不加 `aria-disabled`/`data-locked`，点哪关进哪关（与现状行为一致）；云层/隐藏关属 19.3，未批不动。
+  6. **canvas 选关链路退役**：删 `hud.js` 的 `drawLevelSelect` 与 `render.js` 的 `levelRects`/选关分支；`app.js` 用**事件委托**（节点 `<g>` 没有 `HTMLElement.click()`，取证时必须派发 `MouseEvent`）；新增 `?map=1` 直达地图（与 `?demo=` 同一模式，供真机与取证使用）。
+  7. **不做**：不引入依赖/构建工具；地图层不读游戏状态、不写存档；不改 `input.js`；不动 `--booster-bar-h` 之外的布局变量。
+  8. **门禁清单扩到 20 套件**（新增 `verify-step19-2`），D034 第 3 条的固定清单同步更新。
+- 依据与证据：L1 = `node tests/run-all.js` **234 用例 / 2066 断言 / 0 失败**（新增 `tests/vine-map.test.js` 7 例 70 断言，含「同页永远同一条 d」与「每个节点都在路径上」）；L0 = 一致性脚本（`vine-map.js`/`vine-map.css`/`tests/vine-map.test.js` 已进 2.2 目录、`VINE_MAP_CONFIG` 8 键已登记、两文件版本 v1.23 相等）+ `check-vine-map.mjs` PASS（9/9）+ 50 关表巡检 + `LEVELS.md` 巡检 PASS；L2/L3 = 新增 `_build/verify-step19-2.mjs` **22 项全绿**（50 节点连续无缺、属性齐全、**零锁**、5 页各 10 个可见、两次渲染 `d` 完全一致、点节点进对应关、脏 `data-stars` 规范化到 0–3、页面不可滚动、控制台干净），且改写的 `verify-step12b` 18 项全绿（含几何不变）。
+- 影响：`AGENTS.md` v1.23（2.2/2.3、附录 B、第 11 节）、`ROADMAP.md`（§4.1 Step 19.2、§5、第 6 节）、`config.js`、`level.js`、`LEVELS.md`（§9）、`vine-map.js`、`vine-map.css`、`index.html`、`app.js`、`hud.js`、`render.js`、`tests/vine-map.test.js`、`_build/gen-vine-map.mjs`、`_build/check-vine-map.mjs`、`_build/verify-step19-2.mjs`、`_build/verify-step12b.mjs`、`PROGRESS.md`、本文件。
+- 替代方案：① 一屏塞 50 关（否决：节点直径会小到不可点，且违背「一屏 10 关 = 一行」的低漂移改写）；② 内部拖拽/横滚（否决：要与 `input.js` 抢手势，或在 5.1 上开例外）；③ 把坐标写进 `vine-map.js` 而不落文档（否决：会绕开「关卡真相源在 LEVELS.md」的既有口径，巡检也无从比）；④ 用 `Math.random()` 做路径抖动（否决：违反「同输入同结果」，也断言不了确定性）。
+- 未验证：**真机观感与手感**（藤蔓生长动画、节点触控热区、5 页翻页的连续性）只在桌面 headless + 窄屏模拟下验证；真实设备未验证。
+
+---
+
 ## D038：Step 16 音效与震动的口径（零素材合成、派生音高、开关与降级）+ 四项待拍板的默认答复
 
 - 日期：2026-09-22
@@ -90,6 +112,7 @@
   1. **退役而不是移植**：两个脚本覆盖的 Step 2/3 事实（首屏渲染与色类识别、无效交换回退、级联回放帧、方向锁与越界、步数与结束面板）已由 `verify-step4`–`verify-step13` 在现代解码器上覆盖；为它们单独维护一份平行解码器只会再次漂移（P3-5 的教训）。脚本移入 `_build/retired/`（`_build/` 本就不入库），从门禁套件清单移除。
   2. **登记 P3-10**：环的像素级取证随之失去（绘制仍在 `render.js`）。计划在 Step 14 需要动渲染或输入时，把两个探针按当前渲染器重新标定后加回 `verify-step5`（只扫棋盘区域、用环的精确描边色、在环半径处取样）。
   3. **固定门禁套件清单**：以后每轮 Gate 0.1 的浏览器冒烟 = `verify-step4`–`verify-step13` + `audit-gate-step7`–`audit-gate-step11`（共 16 个）；退役脚本不计入，新增脚本须同步更新本清单。
+     - **后续更新（按本条自行维护）**：Step 15 起 +1（`verify-step15`）→ 17 套件；Step 16 起 +1（`verify-step16`）→ 18 套件（Gate 0.1 第九/第十轮已各按 18/19 套件执行）；**Step 19.2 起 +1（`verify-step19-2`）→ 20 套件**（见 D039 第 8 条）。
   4. **放行与标记**：Step 13 门禁通过，打 tag `gate-0.1-step13-pass`；Step 14 开工前必须先补宪法（三种关卡类型的规则未定义）。
 - 依据与证据：L1 = 181 用例 / 1573 断言 / 0 失败；L0 = 一致性脚本、代码表巡检、`LEVELS.md` 巡检三项 PASS；L2/L3 = 16 个套件 593 项断言 PASS / 0 FAIL。日志 `_build/g7-*.log`。
 - 影响：`_build/verify-step2.mjs`、`_build/verify-step3.mjs`（移入 `_build/retired/`，本机证据不入库）；`PROGRESS.md`、`README.md`、`ROADMAP.md`、本文件。

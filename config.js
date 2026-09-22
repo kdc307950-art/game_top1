@@ -206,6 +206,20 @@ export const CONFIG = {
     }
   },
 
+  // 藤蔓地图的几何与确定性参数（Step 19.2，AGENTS.md 2.3 / 5.1）。
+  // 地图是**画布外**的 SVG 层：它不参与 `computeBoardSize`，也不改变既有像素取证。
+  // 路径抖动用固定种子（同配置同结果，符合「设计期派生」）；**节点坐标是显式的**（见 LEVEL_MAP_POS / LEVELS.md §9）。
+  VINE_MAP_CONFIG: {
+    seed: 20260922, // 固定种子：路径控制点的抖动只由它决定，不用运行时随机
+    pageSize: 10,   // 每页关卡数（5 页 × 10 关 = 50 关）
+    width: 360,     // SVG viewBox 宽
+    height: 640,    // SVG viewBox 高
+    marginX: 100,   // 节点两列的左右内缩（列 x = marginX 与 width − marginX）
+    marginY: 80,    // 首行 y；末行 y = height − marginY
+    pathJitter: 26, // 控制点抖动量（px，只影响曲线形状，不移动节点）
+    nodeRadius: 16  // 节点半径（px）
+  },
+
   LEVEL_DEFAULTS: {
     steps: 30,
     starThresholds: [7000, 12000, 18000]

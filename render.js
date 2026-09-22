@@ -13,7 +13,7 @@
 
 import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
 import { buildCollectibleAtlas, buildObstacleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
-import { HUD_RATIO, drawBanner, drawGameOver, drawHud, drawLevelSelect, hudCellBackground, hudCells } from './hud.js';
+import { HUD_RATIO, drawBanner, drawGameOver, drawHud, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
 const MAX_DPR = 3; // 后备缓冲上限：高 DPR 机型不做无意义的 4× 过度绘制
@@ -97,17 +97,11 @@ export function createRenderer() {
   }
 
   function draw(ctx, scene) {
-    const empty = { restartRect: null, nextRect: null, selectRect: null, levelRects: [] };
+    const empty = { restartRect: null, nextRect: null, selectRect: null };
     if (!cache || cache.sizePx !== scene.sizePx) return empty;
     const { field } = cache.layout;
     ctx.clearRect(0, 0, scene.sizePx, scene.sizePx);
     ctx.drawImage(cache.chrome, 0, 0, scene.sizePx, scene.sizePx); // 静态图层：1 次 drawImage
-
-    // Step 12.2：选关界面只画 HUD 底 + 关卡网格（不画棋盘层）
-    if (scene.select) {
-      drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud });
-      return { ...empty, levelRects: drawLevelSelect(ctx, field, scene.select) };
-    }
 
     drawCandies(ctx, cache, scene, field);
     drawCollectibles(ctx, cache, scene, field); // 3.6（v1.19）：水果/金豆荚占格、独立于糖果绘制

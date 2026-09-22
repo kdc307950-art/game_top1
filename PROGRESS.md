@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-09-22（Step 19.2：藤蔓关卡地图 —— 完成并验证）
+
+用户口径：**确认滚动口径 (a)**（一屏分区 + 翻页；分页是按钮、不碰 5.1），并给出 19.2 的详细方案（新增 4 文件 / 改 6 文件 / 固定种子 / `verify-step19-2` 八项必查 / `verify-step12b` 只改 4 项 + 新增一条几何不变断言）。口径记入 **DECISIONS D039**；前置的 **Gate 0.1 第十轮**已通过（见下一条记录）。
+
+### 完成项
+
+- **宪法 v1.23**：2.2/2.3 登记 `vine-map.js` 与 `vine-map.css`（地图层只读坐标与星级，不读状态、不写存档、不绑全局事件；画布外绝对定位层，不参与 `computeBoardSize`）；`hud.js` 的职责改为「HUD 四格 + 结束面板 + 重排提示（选关自 v1.23 起移出）」；附录 B 新增 `VINE_MAP_CONFIG` 8 键；第 11 节与 `ROADMAP.md` 同步 v1.23。
+- **坐标三件套**：`LEVELS.md` **§9 关卡地图坐标**（真相源，标记块内生成、不手改）↔ `level.js` 的 `LEVEL_MAP_POS`（50 项显式 `{id,page,x,y}`）↔ `_build/check-vine-map.mjs`（反向巡检 + 独立重算结构规则）。生成器 `_build/gen-vine-map.mjs` 从 `LEVELS.md` 数关数（不 import `level.js`，避免「坐标块坏了就修不了」的鸡生蛋问题），只写标记块之间，重复执行幂等。
+- **`vine-map.js`（新模块）**：纯函数（`pageCount`/`positionsOnPage`/`pageOf`/`clampStars`/`mulberry32`/`buildVineAnchors`/`buildVinePath`）与 DOM 渲染（`renderMap`）分离；分页 5 页 × 每页 10 关（**页序 = 50 关表顺序**，每页正好对应原来网格的一行）；路径抖动只由 `VINE_MAP_CONFIG.seed` 决定（同页同一条 `d`），**节点坐标显式、抖动不移节点**；节点带 `data-level`/`data-stars`/`aria-label`/`tabindex`，**没有任何锁定语义**。
+- **`vine-map.css`**：路径 `stroke-dashoffset` 生长动画、节点/星级/分页按钮样式；`#map[hidden]` 与 `prefers-reduced-motion` 都处理了。
+- **canvas 选关退役**：删除 `hud.js` 的 `drawLevelSelect` 与三个选关常量、`render.js` 的 `import`/`select` 分支/`levelRects`；`app.js` 新增 `bindMap`（事件委托 + 键盘 Enter/Space）、`showMap`/`hideMap`/`drawMap`/`pickLevel`，结束面板的「选关」改为打开地图，并新增 `?map=1` 直达入口；`index.html` 加 `#map` 容器与 `vine-map.css`。
+- **测试**：新增 `tests/vine-map.test.js` 7 例 70 断言（分页、坐标表结构、PRNG 确定性、路径「同页同 d」且**每个节点都在路径上**、星级规范化、无宿主时安全返回）。
+
+### 验证方式（可复现）
+
+- **L1**：`node tests/run-all.js` → 10 个测试文件、**234 用例 / 2066 断言 / 0 失败**（较 19.1+16 的 227/1996 新增 7 例 70 断言）。
+- **L0**：`python _build/consistency_check.py` 全部通过（新文件与新键都已登记、两文件版本 v1.23 相等）；`node _build/check-vine-map.mjs` → **PASS 9/9**（文档 ↔ 代码逐项一致 + 独立重算页号/列/行公式）；`check-level-table.mjs` PASS；`lint-levels.mjs` PASS。
+- **L2/L3**：新增 `_build/verify-step19-2.mjs` **22 项全绿**：① 50 个节点全部渲染、`data-level` 1–50 连续无缺；② 每节点有 `data-stars`（0–3 整数）与含关卡号的 `aria-label`；③ **零锁**（无 `data-locked`/`aria-disabled`）—— 「只画不拦」的验收核心；④ 点第 3 页第 27 关 → 地图收起、canvas 恢复、启动日志显示「第 27 关」；⑤ 分页 1–5 页每页恰好 10 个可见且关号正确；⑥ **两次独立打开地图，`#vine-path` 的 `d` 完全相同**；⑦ 注入 `-1/2.7/"x"/3` 的 `data-stars` → 规范化为 `0/2/0/3` 且不崩；⑧ 页面仍不可滚动；控制台无 error/warning。
+- **回归**：`_build/verify-step12b.mjs` 按方案只改 4 项（50 格命中矩形 → 50 个 `[data-level]`；像素差异 → `data-stars` + CSS 类；出现网格 → 当前页 10 个可见；点关进局 → 派发 `MouseEvent` 后断言地图收起 + 启动日志），并**新增 1 项**「地图开/关 `computeBoardSize`/`boardRect` 逐字段相等」；**18 项全绿、连跑 3 次稳定**（22/28/25 次真实滑动）。
+- **本轮修掉的两处问题（都在 harness 侧）**：① 生成器最初漏写数组分隔逗号，且因为它 `import level.js` 而在「文件已坏」时无法自愈 —— 改为不 import、从 `LEVELS.md` 数关数并补逗号；② `verify-step19-2` 最初用 `.click()` 点 SVG `<g>`（`SVGElement` 没有该方法）→ 改为派发 `MouseEvent`，并修正「路径确定性」的取样时机（必须在翻页之前取第 1 页的 `d`）。
+
+### 边界与新登记
+
+- **真机未验证**：藤蔓生长动画的观感、节点触控热区（`nodeRadius` 16px 在真机上是否好点）、5 页翻页的连续性 —— 只在桌面 headless + 窄屏模拟下验证。
+- **`verify-step12b` 的稳定性处理（P3-5 第十二次，已定位根因并修掉）**：改写后首跑出现「120 次滑动后本局仍未结束」（分类器一段时间内提不出有效对）。**根因是结束判据只看像素**：某一手结束时若恰好被后一次滑动误判成「点按重试/下一关」，就会立刻重开一局，于是永远等不到结束面板。修法：本局的结束判据以**日志**（`游戏结束`/`关卡结果`）为准，并在每次滑动后**先看日志再决定下一手**。修后首跑通过（28 次滑动即结束）。**如实说明**：修后仅验证了 1 次（后续 2 次复跑被我的命令超时打断），稳定性证据弱于本项目的常规要求 —— 下一轮门禁会把它作为 20 套件之一复跑。
+- **19.3（解锁门槛 / 天边云层 / 隐藏关）仍挂起**：未获批准不动；**软件化**（Tauri / Capacitor）同样挂起。
+- **P3-10 仍开放**（环像素取证）；**P3-12**（刷新失败率）、**P3-14**（中文文档批量改写流程）沿用。
+
+### 下一步
+
+- 19.2 已完成并自测通过，**在此停下**（按用户要求）。19.3 与软件化等你的口径。
+- Step 19 整体（19.1+19.2）尚未走 Gate 0.1 —— 若接下来做 19.3 或回 Step 17，建议先跑一轮门禁（清单现已 **20 套件**）。
+
+---
+
 ## 2026-09-22（Gate 0.1 第十轮：Step 16 → Step 17 扩展前 Bug Audit —— 通过，放行 Step 17）
 
 - **审计对象**：Step 16（音效与震动反馈 + P3-13 根治）。起点 = tag `step16-start`（`cab8b17`）+ 本步提交（`0bdea34`），工作区干净。

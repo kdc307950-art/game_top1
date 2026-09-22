@@ -1,0 +1,107 @@
+/* vine-map.css — 藤蔓关卡地图的样式（Step 19.2 / AGENTS.md 2.3 / 5.1）。
+   地图是**画布外的绝对定位层**：它覆盖整个视口，不参与 canvas 的 `computeBoardSize`，
+   也不改 styles.css 里除 `--booster-bar-h` 之外的任何变量。禁止页面滚动（5.1）依旧成立 —— 分页是按钮，
+   不是滚动容器。 */
+
+#map {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  box-sizing: border-box;
+  background: var(--bg);
+  touch-action: manipulation;
+}
+
+#map[hidden] {
+  display: none;
+}
+
+.vine-svg {
+  width: min(100%, 360px);
+  height: auto;
+  max-height: calc(100% - 56px);
+  display: block;
+  overflow: visible;
+}
+
+/* 藤蔓本体：`stroke-dasharray/offset` 做「生长」动画（不依赖 JS 逐帧） */
+.vine-path {
+  fill: none;
+  stroke: #2d6a4f;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-dasharray: 4000;
+  stroke-dashoffset: 4000;
+  transition: stroke-dashoffset 900ms ease-out;
+}
+
+.vine-path.grown {
+  stroke-dashoffset: 0;
+}
+
+.vine-node {
+  cursor: pointer;
+}
+
+.vine-node-body {
+  fill: #3a3357;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 2;
+}
+
+.vine-node--cleared .vine-node-body {
+  fill: #ff4fd8;
+  stroke: #ffd93b;
+}
+
+.vine-node-label {
+  fill: #ffffff;
+  font: 700 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  pointer-events: none;
+}
+
+.vine-node-stars {
+  fill: #ffd93b;
+  font: 500 11px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  pointer-events: none;
+}
+
+.vine-node:focus-visible .vine-node-body {
+  stroke: #ffd93b;
+  stroke-width: 3;
+}
+
+.vine-pager {
+  display: flex;
+  gap: 8px;
+}
+
+.vine-pager-button {
+  min-width: 58px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font: 500 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.vine-pager-button[aria-current='true'] {
+  background: #ff4fd8;
+  color: #2a0b23;
+  border-color: #ffd93b;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vine-path {
+    transition-duration: 0.001ms;
+    stroke-dashoffset: 0;
+  }
+}
