@@ -12,7 +12,8 @@ const state = (globalThis.__XXL_TEST_STATE__ ??= {
   file: null,
   tests: [],
   assertions: 0,
-  loadErrors: []
+  loadErrors: [],
+  pending: [] // P3-13：异步用例的 Promise 收在这里，由 summarize() 统一 await
 });
 
 /** run-all.js 在每个测试文件导入前调用，用于归属统计。 */
@@ -67,14 +68,29 @@ export function assertThrows(fn, msg = 'assertThrows') {
   if (!threw) fail(msg, 'throw', 'no throw');
 }
 
-/** 注册并立即执行一个用例；断言失败时记录错误但继续跑后续用例。 */
+/**
+ * 注册并立即执行一个用例；断言失败时记录错误但继续跑后续用例。
+ *
+ * P3-13 根治（Step 16）：用例函数可以是 async —— 它的 Promise 会被收进 `state.pending`，
+ * 由 `summarize()` 逐个 await 之后再统计。修之前 `test()` 不 await，异步用例的断言会在
+ * summarize 之后才跑：既不计入统计，又只能靠 unhandled rejection 暴露失败（等于一段假绿）。
+ */
 export function test(name, fn) {
-  const entry = { file: state.file ?? '(direct)', name, ok: true, error: null };
-  try {
-    fn();
-  } catch (err) {
+  const entry = { file: state.file ?? '(direct)', name, ok: true, error: null, async: false };
+  const record = (err) => {
     entry.ok = false;
     entry.error = err;
+  };
+  let result;
+  try {
+    result = fn();
+  } catch (err) {
+    record(err);
+  }
+  if (result && typeof result.then === 'function') {
+    entry.async = true;
+    state.pending ??= [];
+    state.pending.push(result.then(() => {}, (err) => record(err)));
   }
   state.tests.push(entry);
   return entry.ok;
@@ -85,10 +101,16 @@ export function recordLoadError(file, err) {
   state.loadErrors.push({ file, error: err });
 }
 
-/** 打印汇总；有失败或加载错误时把 process.exitCode 置 1（不中断输出）。 */
-export function summarize() {
+/** 打印汇总；有失败或加载错误时把 process.exitCode 置 1（不中断输出）。
+ *  P3-13：先 await 所有异步用例，再统计 —— 否则它们的断言会被算漏。 */
+export async function summarize() {
+  if (state.pending && state.pending.length > 0) {
+    const pending = state.pending.splice(0, state.pending.length);
+    await Promise.all(pending);
+  }
   const passed = state.tests.filter((t) => t.ok).length;
   const failed = state.tests.length - passed;
+  const asyncCount = state.tests.filter((t) => t.async).length;
   const direct = state.file === null && state.tests.length > 0;
 
   if (direct) console.log(`\n[assert] 直接运行模式：${process.argv[1]}`);
@@ -107,7 +129,8 @@ export function summarize() {
 
   console.log(
     `\n[assert] 用例 ${state.tests.length} 个（通过 ${passed} / 失败 ${failed}）` +
-      `，断言 ${state.assertions} 次，加载错误 ${state.loadErrors.length} 个`
+      `，断言 ${state.assertions} 次，加载错误 ${state.loadErrors.length} 个` +
+      (asyncCount > 0 ? `，异步用例 ${asyncCount} 个（已 await）` : '')
   );
 
   if (failed > 0 || state.loadErrors.length > 0) {

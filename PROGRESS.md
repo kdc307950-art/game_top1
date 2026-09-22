@@ -5,6 +5,58 @@
 
 ---
 
+## 2026-09-22（Step 16：音效与震动反馈 + P3-13 根治 —— 完成并验证）
+
+用户口径：给出「19.1 之后」的执行方案，四项待拍板事项按推荐执行（滚动口径 (a)、19.2 只画不拦、保留 Capacitor、先做 Step 16），并要求 Step 16 顺带**根治 P3-13**。口径与默认答复记入 **DECISIONS D038**。
+
+### 完成项
+
+- **宪法 v1.22**：新增 **5.6 音效与震动**（零素材合成、音高按连击/星级派生、震动与桌面静默降级、两个开关 + 偏好持久化、解锁点在用户手势）；2.2/2.3 登记 **`audio.js`**（唯一允许创建 `AudioContext` 的模块）；附录 B 新增 `AUDIO_CONFIG.masterGain`/`AUDIO_CONFIG.events`/`HAPTIC_CONFIG.events`/`STORAGE_KEYS.PREFS`；一致性脚本把 `*.events.*` 与 `*.specialMultipliers.*` 一样按「整表一行」登记；第 11 节与 `ROADMAP.md` 同步 v1.22（Step 16 勾选）。
+- **`config.js`**：新增 `AUDIO_CONFIG`（`masterGain` 0.16 + 6 个事件 `swapOk`/`swapBad`/`clear`/`won`/`lose`/`star`，每个含波形、起止频率、时长、增益、升调倍率）与 `HAPTIC_CONFIG`（4 个事件的毫秒模式）；`STORAGE_KEYS` 新增 `PREFS`。
+- **`audio.js`（新模块）**：`resolveTone`/`resolveHaptic` **纯函数**（同输入同输出、返回配置副本）；`createAudio`（惰性创建、手势里 `unlock()`、按解析出的音设置振荡器与增益包络、偏好关闭时**连上下文都不创建**、无 `AudioContext` 只提示一次并静默降级）；`createHaptics`（无 `vibrate` 时静默返回 false）。
+- **`storage.js`**：新增 `readPrefs`/`writePrefs`/`togglePref`（默认都开、非布尔脏值回落、未知键返回 null 且不写盘）。
+- **UI**：`index.html` 把道具条与**音效/震动开关**合并为画布外控件区 `#controls`（两行）；`styles.css` 的 `--booster-bar-h` 56px → 100px 覆盖两行（`render.js` 的扣除逻辑不变）；`app.js` 新增 `bindPrefs`/`updatePrefBar`/`feedback`，在**有效交换 / 无效交换 / 每层消除（连击升调）/ 通关（含逐颗星升调）/ 失败**五个事件点触发反馈，输入入口调 `audio.unlock()`。
+- **P3-13 根治**：`tests/assert.js` 的 `test()` 把异步用例的 Promise 收进 `state.pending`，`summarize()` 先 await 再统计（汇总行打印「异步用例 N 个（已 await）」）；8 个测试文件末尾改 `await summarize()`；保留一条**故意 async** 的回归夹具证明异步断言计入统计。
+- **测试**：新增 `tests/audio.test.js`（8 例 63 断言）；`tests/integration.test.js` 新增偏好读写用例。
+
+### 验证方式（可复现）
+
+- **L1**：`node tests/run-all.js` → **227 用例 / 1996 断言 / 0 失败 / 异步用例 1 个（已 await）/ exit 0**（较 19.1 的 218/1922 新增 9 例 74 断言）。
+- **L0**：一致性脚本全部通过（新键与整表登记、`audio.js` 与 `tests/audio.test.js` 已进 2.2 目录、两文件版本 v1.22 相等）；50 关表巡检 PASS；`LEVELS.md` 巡检 PASS。
+- **L2/L3**：新增 `_build/verify-step16.mjs` **19 项全绿**（一次通过）：开关存在且默认开、未改过偏好不写存档、控件区在画布下方；**真实触摸**有效交换 → 假 `AudioContext` 被创建并 resume、振荡器起始频率等于 `resolveTone('swapOk')`（现读 config，不写死）、有 start/stop、`navigator.vibrate` 收到配置模式 → **关掉音效后不再创建振荡器**（震动仍工作）→ 打回开启恢复发声 → 关掉震动后不再震（音频不受影响）→ **重新加载后偏好与存档一致** → 全程无 error/warning/异常。
+- **覆盖边界（如实）**：失败音 / 通关音 / 星级音 / 桌面无 `vibrate` 的降级由 Node 单测覆盖（浏览器里触发要打完整局）；**音色、音量、震动强度只能在真机评判** —— L2/L3 断言的是「调用与参数正确」，不是「听感/手感好」。
+- **本轮的一处事故（如实登记，P3-14）**：我用 PowerShell 的 `Get-Content -Raw` + `Set-Content -Encoding utf8` 批量替换 `PROGRESS.md` / `DECISIONS.md` 里的测试数字，把两个 UTF-8 文档**双重编码**成了乱码；发现后立即 `git checkout` 回滚并**用编辑工具重做**（未提交的内容是我本轮刚写的，重写成本为零，没有丢历史）。教训：中文文档的批量改写必须走编辑工具（或显式指定编码），不能用 PowerShell 文本管道。登记为 **P3-14**（流程类，回归计划：本轮起所有 .md 只经编辑工具改动）。
+
+### 边界与新登记
+
+- **真机未验证**：音色/音量体感、震动强度、iOS Safari 的 `AudioContext` 解锁细节（`webkitAudioContext` 已兜底但未真机验证）。
+- **`STORAGE_KEYS.MUTED` 保留但不再使用**（由 `PREFS` 取代，保留键名以免破坏旧存档，见 D038）。
+- **P3-13 关闭**；新增 **P3-14**；P3-10（环像素取证）、P3-12（刷新失败率）沿用未关闭。
+- **19.2 / 19.3 仍挂起**；Capacitor 保留、软件化整块挂起。
+
+### 下一步
+
+- Step 16 已完成并自测通过；按 §0.1，进入 **Step 17（粒子动画）前需要一轮 Gate 0.1**（第十轮，尚未运行 —— 用户要求「Step 16 做完停下来」）。
+- 用户在方案里要求的 **19.2 开工前检查清单**见下一条记录。
+
+---
+
+## 2026-09-22（19.2 开工前检查清单（滚动口径 = (a) 一屏分区 + 翻页）—— 待用户确认后开工）
+
+用户已给推荐口径 **(a)**，并明确「19.2 保持挂起」+「Step 16 做完交清单」。以下为开工前自查结论（**尚未动代码**）：
+
+1. **DOM 结构（拟）**：`index.html` 新增 `<div id="map" hidden><svg viewBox="0 0 390 760" role="list">…</svg><div id="map-pager">上一屏 / 屏号 / 下一屏</div></div>`；每屏 10 关（**正好对应现在 10×5 网格的一行**，改写语义成本最低）；节点 `<g role="listitem" tabindex="0" data-level="12" data-stars="2" aria-label="第 12 关，2 星">`，星形符号用 `<use>` 复用。选关时隐藏 canvas、回到对局时反向 —— 与现有 `view.screen` 开关语义一致。
+2. **`input.js` 不需要改**：地图是 DOM 事件（浏览器合成 click/touch），`input.js` 只绑 canvas；分页是**按钮**而非滚动容器，5.1 的「禁滚动/缩放」不受影响。唯一风险是切屏时的手势残留 —— 现有 `isLocked: () => timeline.running` 已覆盖动画期，切到地图时另需清 `view.selected`（`view.screen` 分支已有）。
+3. **几何**：地图是**替代 canvas 的全屏层**（`position: absolute; inset: 0`），不参与 `computeBoardSize` ⇒ **既有 19 个套件的像素几何继续有效**；`--booster-bar-h`（100px）仍只覆盖画布外控件区。
+4. **`verify-step12b` 改写范围**：现 18 项里 4 项依赖 canvas 选关网格（50 格命中矩形、已通关/未通关像素差异、点「选关」后出现网格、点第 1 关回到对局）→ 改为 DOM 版（`#map [data-level]` 数量 = 50、`data-stars` 与存档一致、点按派发事件后回到对局、地图层出现时画布不参与命中）；其余 14 项（星级存档往返、结束面板、真实模块）不动。
+5. **新增套件**：`_build/verify-step19-2.mjs`（节点数/星级/翻页/点按进关/页面不可滚动/控制台干净）；门禁清单 **19 → 20 套件**，需同步更新 `DECISIONS.md` D034 第 3 条的固定清单。
+6. **坐标三件套**：`LEVELS.md` 加 `mapPos` 列 + `level.js` 的 `LEVEL_MAP_POS` 表 + `_build/check-vine-map.mjs` 反向巡检；路径用固定种子 PRNG（`VINE_SEED` 进 `config.js` 与附录 B）**或**直接写控制点，二者不混用。
+7. **不做**：不加 `unlockStars` 硬门槛（19.3 待批）；不引入依赖/构建工具；不让地图层读游戏状态或写存档。
+
+**待用户拍板**：确认按 (a) 开工 19.2（或改口径）。未确认前不推进 19.2 与 19.3。
+
+---
+
 ## 2026-09-22（Step 19.1：存档版本化 + 就地迁移 + 可注入后端 —— 完成并验证）
 
 用户口径：提出「藤蔓地图 + 存档版本化 + 软件化预留」方案并提交修订版，预授权「按推荐默认先开工 19.1」。评审结论与口径记入 **DECISIONS D037**（含 5 处驳回/修正：SVG 选型同意、`Math.random()` 必须换确定性、坐标要三件套且第一版不引入 `.json`、不新增 `storage-adapter.js`、「解锁门槛」与「Tauri」挂起待拍板）。

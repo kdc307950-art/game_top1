@@ -10,6 +10,7 @@
 
 import { BOOSTER_KIND, CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
 import { cloneBoard } from './board.js'; // v1.20：道具的回放首帧快照（与 trySwap 的 afterSwap 同语义）
+import { createAudio, createHaptics } from './audio.js'; // Step 16（5.6）：音效与震动
 import {
   createGame,
   getState as getGameState,
@@ -35,6 +36,11 @@ const renderer = createRenderer();
 const timeline = createTimeline({
   onFrame: (phase, progress) => {
     view.hudScore = view.playback ? hudScoreAt(view.playback, phase.levelIndex) : view.game.level.currentScore; // 连消收益逐层显示
+    // Step 16（5.6）：每层消除配一声「连击升调」的音（+ 一次轻震）；同一层不重复响
+    if (phase.phase === 'clear' && phase.levelIndex !== view.lastClearLevel) {
+      view.lastClearLevel = phase.levelIndex;
+      feedback('clear', phase.levelIndex);
+    }
     drawFrame(phase, progress);
   },
   onDone: finishTimeline
@@ -72,7 +78,12 @@ const view = {
   timeDebt: 0,
   // Step 15（v1.20 / 3.9）：道具数量（storage.js 持久化）与「小木锤已就绪」的待选格状态
   boosters: null,
-  hammerArmed: false
+  hammerArmed: false,
+  // Step 16（v1.22 / 5.6）：音效与震动偏好（storage.js 持久化）+ 两个反馈器 + 连击配音去重
+  prefs: null,
+  audio: null,
+  haptics: null,
+  lastClearLevel: -1
 };
 
 init();
@@ -95,10 +106,14 @@ function init() {
   view.best = storage.readBestScore();
   view.levelStars = storage.readLevelStars(); // Step 12.2：载入每关星级（选关界面用）
   view.boosters = storage.readBoosters(); // Step 15（3.9）：载入道具数量
+  view.prefs = storage.readPrefs(); // Step 16（5.6）：载入音效/震动偏好
+  view.audio = createAudio({ logger: log, isEnabled: () => view.prefs.sound });
+  view.haptics = createHaptics({ isEnabled: () => view.prefs.haptic });
   view.systemReducedMotion = prefersReducedMotion();
   startNewGame();
   applyLayout();
   bindBoosters(); // Step 15：道具条（画布外的 DOM 元素）
+  bindPrefs(); // Step 16：音效/震动开关
 
   bindInput({
     target: canvas,
@@ -152,6 +167,7 @@ function startNewGame() {
   view.hudScore = null;
   view.restartRect = null;
   view.hammerArmed = false; // 3.9：重开一局时退出「小木锤待选格」
+  view.lastClearLevel = -1;
 
   const snapshot = getGameState(view.game);
   const timing = snapshot.timeLimit ? `倒计时 ${snapshot.timeLimit} 秒` : `步数 ${snapshot.remainingSteps}`;
@@ -261,12 +277,14 @@ function nowMs() {
 // ---------------------------------------------------------------------------
 
 function onSwipe({ x0, y0, step }) {
+  view.audio?.unlock(); // 5.6：浏览器要求音频上下文在用户手势里创建/恢复
   const from = cellAt(view.canvas, x0, y0, view.sizePx);
   if (!from) return;
   attemptSwap(from, { r: from.r + step.r, c: from.c + step.c });
 }
 
 function onTap({ x1, y1 }) {
+  view.audio?.unlock();
   if (view.game.gameOver) {
     if (view.screen === 'select') {
     const tile = view.levelRects.find((rect) => hitTest(view.canvas, x1, y1, rect));
@@ -357,10 +375,12 @@ function attemptSwap(a, b) {
 
   if (!result.valid) {
     view.firstGroups = [];
+    feedback('swapBad');
     log('info', `交换无效，已回退：(${a.r},${a.c}) ↔ (${b.r},${b.c})（不消耗${progressLabel()}，剩余 ${progressValue(result)})`);
     drawFrame();
     return;
   }
+  feedback('swapOk'); // 5.6：有效交换的即时反馈
 
   const firstLevelGroups = result.resolve.levels[0]?.groups ?? [];
   view.firstGroups = firstLevelGroups.flatMap((group) => group.cells);
@@ -414,6 +434,7 @@ function attemptSwap(a, b) {
  */
 function startTimeline(result, scoreBefore) {
   const levelTotal = result.resolve.levelScores.reduce((sum, item) => sum + item.gained, 0);
+  view.lastClearLevel = -1; // 5.6：新一轮回放重新给每层配音
   // tailBonus = 3.5 的剩余步数转化（关卡级一次性结算，不在逐层明细里）；不记下来 HUD 会先少一段再跳回去
   view.playback = {
     scoreBefore,
@@ -525,6 +546,44 @@ function boosterLabel(kind) {
 }
 
 // ---------------------------------------------------------------------------
+// 音效与震动（Step 16，v1.22；AGENTS.md 5.6）
+//
+// 规则侧只定义「什么事件该有反馈」，声音怎么合成在 `audio.js`（唯一创建 AudioContext 的模块），
+// 开关与偏好落在 `storage.js`。这里只做三件事：绑开关、在事件点调 `feedback()`、首次手势解锁音频。
+// ---------------------------------------------------------------------------
+
+function bindPrefs() {
+  const bar = document.getElementById('settings');
+  if (!bar) return; // 没有开关也能玩（默认都开），不是致命错误
+  for (const button of bar.querySelectorAll('.pref')) {
+    button.addEventListener('click', () => {
+      const key = button.dataset.pref;
+      const next = storage.togglePref(view.prefs, key); // 落盘在 storage.js
+      if (next === null) return;
+      updatePrefBar();
+      if (next) feedback(key === 'sound' ? 'swapOk' : 'swapOk', 0); // 打开时给一次即时反馈（关掉时不必响）
+      log('info', `${key === 'sound' ? '音效' : '震动'}已${next ? '开启' : '关闭'}（偏好写入 ${STORAGE_KEYS.PREFS}）`);
+    });
+  }
+  updatePrefBar();
+}
+
+function updatePrefBar() {
+  const bar = document.getElementById('settings');
+  if (!bar) return;
+  for (const button of bar.querySelectorAll('.pref')) {
+    const on = view.prefs?.[button.dataset.pref] !== false;
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+
+/** 5.6：一个事件点同时触发音效与震动；两者各自看偏好、各自可静默降级。 */
+function feedback(event, index = 0) {
+  view.audio?.play(event, index);
+  view.haptics?.vibrate(event);
+}
+
+// ---------------------------------------------------------------------------
 // 绘制：把状态整理成 render.js 需要的「场景描述」
 // ---------------------------------------------------------------------------
 
@@ -595,6 +654,13 @@ function finishGame() {
   }
   view.newRecord = isRecord;
   view.stars = snapshot.stars; // 3.7：结束面板据此画星星（未通关时为 0）
+  // 5.6：本局结束的反馈 —— 通关 = 上行三音 + 逐颗星升调；失败 = 低沉单音。星级音错开一点，避免叠成一坨
+  feedback(view.endReason === 'won' ? 'won' : 'lose');
+  if (view.endReason === 'won') {
+    for (let i = 0; i < view.stars; i += 1) {
+      window.setTimeout(() => feedback('star', i), 260 + i * 160);
+    }
+  }
   if (snapshot.won) {
     // Step 12.2：每关只记录最佳星级（重玩更好才覆盖），并立刻落盘（v1.16：落盘在 storage.js）
     const starRecord = storage.recordLevelStars(view.levelStars, view.levelId, snapshot.stars);

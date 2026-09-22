@@ -425,7 +425,10 @@ test('storage（v1.21）：星级存档带版本写入，读到旧格式（v0）
   delete globalThis.window;
 });
 
-test('storage（v1.21）：存储后端可注入，业务代码不直接碰 localStorage', () => {
+test('storage（v1.21）：存储后端可注入，业务代码不直接碰 localStorage', async () => {
+  // P3-13 回归夹具：这条**故意写成 async**（用动态 import）—— 若 `test()` 不再 await 用例，
+  // 它的断言就会掉出统计（修之前这里正是「假绿」的窗口）。
+  const { createStorage } = await import('../storage.js');
   // 不设置 globalThis.window：若实现里硬写 localStorage，这里就会全部回落/抛错
   const store = new Map();
   const backend = {
@@ -463,4 +466,37 @@ test('getTotalStars（v1.21）：总星数是派生量，不入存档', () => {
   delete globalThis.window;
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+// ---------------------------------------------------------------- Step 16：音效/震动偏好（v1.22 / 5.6）
+
+test('storage（v1.22）：音效/震动偏好的默认值、读写、翻转与脏数据回落', () => {
+  const memory = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (k) => (memory.has(k) ? memory.get(k) : null),
+      setItem: (k, v) => memory.set(k, v)
+    }
+  };
+  const storage = createStorage();
+
+  assertDeepEqual(storage.readPrefs(), { sound: true, haptic: true }, '空存档 → 都开');
+  storage.writePrefs({ sound: false, haptic: true });
+  assertDeepEqual(storage.readPrefs(), { sound: false, haptic: true }, '写入后可读回');
+
+  const prefs = storage.readPrefs();
+  assertEqual(storage.togglePref(prefs, 'sound'), true, '翻转 sound → true');
+  assertEqual(prefs.sound, true, '传入对象被同步更新（UI 直接可用）');
+  assertEqual(storage.readPrefs().sound, true, '翻转立刻落盘');
+  assertEqual(storage.togglePref(prefs, 'nope'), null, '未知偏好键 → null');
+  assertEqual(storage.togglePref(prefs, 'haptic'), false, '翻转 haptic → false');
+  assertEqual(storage.readPrefs().haptic, false, 'haptic 也落盘');
+
+  memory.set(STORAGE_KEYS.PREFS, '{oops');
+  assertDeepEqual(storage.readPrefs(), { sound: true, haptic: true }, 'JSON 脏数据 → 默认值');
+  memory.set(STORAGE_KEYS.PREFS, JSON.stringify({ sound: 'false', haptic: 0, extra: 1 }));
+  assertDeepEqual(storage.readPrefs(), { sound: true, haptic: true }, '非布尔值一律回落默认（字符串 "false" 不是真值陷阱）');
+  memory.set(STORAGE_KEYS.PREFS, JSON.stringify({ haptic: false }));
+  assertDeepEqual(storage.readPrefs(), { sound: true, haptic: false }, '缺的键补默认、有的键保留');
+  delete globalThis.window;
+});
+
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

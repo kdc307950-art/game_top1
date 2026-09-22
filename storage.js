@@ -101,6 +101,21 @@ function defaultBoosters() {
   return counts;
 }
 
+/** 5.6（v1.22）：音效与震动的默认偏好（用户没改过时为「都开」）。 */
+function defaultPrefs() {
+  return { sound: true, haptic: true };
+}
+
+/** 偏好只接受布尔值：脏数据（字符串/数字/null）一律回落默认值，避免出现 `'false'` 这种真值。 */
+function normalizePrefs(stored) {
+  const prefs = defaultPrefs();
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return prefs;
+  for (const key of Object.keys(prefs)) {
+    if (typeof stored[key] === 'boolean') prefs[key] = stored[key];
+  }
+  return prefs;
+}
+
 /** 数量只接受非负整数：脏数据（负数、小数、字符串）一律夹到合法范围，避免出现「-1 个道具」。 */
 function normalizeCount(value) {
   const count = Number.isFinite(value) ? Math.trunc(value) : 0;
@@ -218,6 +233,35 @@ export function createStorage(logger = () => {}, backend = localStorageBackend) 
       counts[kind] = left - 1;
       this.writeBoosters(counts);
       return { used: true, left: counts[kind] };
+    },
+
+    /**
+     * 音效 / 震动偏好 `{ sound, haptic }`（5.6 v1.22）。
+     * 缺失的键补默认值（都开）、非布尔的脏值回落默认值 —— 返回的对象一定可直接用于开关判断。
+     */
+    readPrefs() {
+      const stored = read(STORAGE_KEYS.PREFS, null, (raw) => {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      });
+      return normalizePrefs(stored);
+    },
+
+    writePrefs(prefs) {
+      return write(STORAGE_KEYS.PREFS, JSON.stringify(normalizePrefs(prefs)), '音效/震动偏好');
+    },
+
+    /**
+     * 翻转一个偏好并立刻落盘（供 UI 的开关按钮用）。返回翻转后的布尔值。
+     * 未知的偏好键一律返回 null 且不写盘（避免脏键被写进存档）。
+     */
+    togglePref(prefs, key) {
+      const current = normalizePrefs(prefs);
+      if (!(key in current)) return null;
+      current[key] = !current[key];
+      this.writePrefs(current);
+      if (prefs && typeof prefs === 'object') prefs[key] = current[key];
+      return current[key];
     }
   };
 }

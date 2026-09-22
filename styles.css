@@ -7,9 +7,9 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
-  /* Step 15（v1.20 / 3.9）：道具条高度。render.js 从可用高度里扣除它，
-     道具条自身的高度也取同一个变量 —— 两边只有一个真相源。 */
-  --booster-bar-h: 56px;
+  /* Step 15/16（v1.20 / v1.22）：画布外控件区的高度（道具条 + 音效/震动开关两行）。
+     render.js 从可用高度里扣除它，控件区自身也取同一个变量 —— 两边只有一个真相源。 */
+  --booster-bar-h: 100px;
 }
 
 html,
@@ -53,16 +53,26 @@ body {
   -webkit-user-drag: none;
 }
 
-/* Step 15（v1.20 / 3.9）道具条：画布外的页面元素，固定高度由 --booster-bar-h 决定。
+/* Step 15/16（v1.20 / v1.22）画布外控件区：两行（道具条 + 音效/震动开关）。
    按钮用 DOM 而不是画布绘制 —— 命中测试、可访问性与「不改变 boardRect」三者都因此更简单。 */
-#boosters {
+#controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--booster-bar-h);
+  width: 100%;
+  touch-action: manipulation;
+}
+
+#boosters,
+#settings {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: var(--booster-bar-h);
   width: 100%;
-  touch-action: manipulation;
 }
 
 .booster {
@@ -98,6 +108,24 @@ body {
   color: #ffffff;
   font-size: 12px;
   line-height: 18px;
+}
+
+/* Step 16（5.6）音效/震动开关：`aria-pressed` 就是开关状态（true = 开）。 */
+.pref {
+  min-width: 68px;
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font: 500 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.pref[aria-pressed='false'] {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.45);
+  text-decoration: line-through;
 }
 
 /* AGENTS.md 5.4 / Step 5：跟随系统「减少动效」。

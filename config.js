@@ -64,7 +64,8 @@ export const STORAGE_KEYS = Object.freeze({
   BEST_SCORE: 'xxl_best_score',
   LEVEL_STARS: 'xxl_level_stars', // 每关星级存档（Step 12.2 的选关界面用）
   MUTED: 'xxl_muted',
-  BOOSTERS: 'xxl_boosters'
+  BOOSTERS: 'xxl_boosters',
+  PREFS: 'xxl_prefs' // Step 16（v1.22）：音效/震动偏好 `{ sound, haptic }`
 });
 
 export const CONFIG = {
@@ -177,6 +178,32 @@ export const CONFIG = {
   // 而不是靠猜字段形状。读到**更高**版本时只读不写，绝不把新版数据降级覆盖。
   STORAGE_CONFIG: {
     schemaVersion: 1
+  },
+
+  // 音效（Step 16，AGENTS.md 5.6）：**Web Audio 合成**，不引入任何音频素材（延续 D009 的零素材策略）。
+  // 每个事件是一段「可派生」的音：波形、起止频率、时长、增益、升调倍率全部登记在这里；
+  // 连击层数 / 第几颗星只通过 `stepRatio^index` 改音高（同输入同输出，无运行时随机）。
+  AUDIO_CONFIG: {
+    masterGain: 0.16, // 总音量（0-1）；单个音效的增益再乘它
+    events: {
+      swapOk: { wave: 'triangle', from: 520, to: 780, duration: 0.09, gain: 1, stepRatio: 1 },
+      swapBad: { wave: 'sine', from: 190, to: 120, duration: 0.14, gain: 0.9, stepRatio: 1 },
+      clear: { wave: 'square', from: 420, to: 420, duration: 0.07, gain: 0.75, stepRatio: 1.122 }, // 连击升调（约一个半音）
+      won: { wave: 'triangle', from: 523, to: 784, duration: 0.18, gain: 1, stepRatio: 1 },
+      lose: { wave: 'sine', from: 330, to: 165, duration: 0.22, gain: 0.9, stepRatio: 1 },
+      star: { wave: 'triangle', from: 660, to: 990, duration: 0.12, gain: 1, stepRatio: 1.26 } // 逐颗星升调
+    }
+  },
+
+  // 震动反馈（Step 16，AGENTS.md 5.6）：`navigator.vibrate` 的毫秒模式。
+  // 桌面浏览器没有该 API → 静默降级（不报错、不影响对局）；未登记的事件不震。
+  HAPTIC_CONFIG: {
+    events: {
+      swapOk: [12],
+      clear: [8],
+      won: [30, 40, 30],
+      lose: [60]
+    }
   },
 
   LEVEL_DEFAULTS: {

@@ -424,4 +424,4 @@ test('重排不搬动收集物（3.8 约束 3 的同类口径：3.6 v1.18）', (
 });
 
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

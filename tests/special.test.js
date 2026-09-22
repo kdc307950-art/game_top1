@@ -567,4 +567,4 @@ test('resolveCascades：initialClear 里的特效会继续链式展开（3.3 的
   assertTrue(first.cleared.filter((cell) => cell.type === CELL_TYPE.WRAPPED).length === 1, '包装糖确实被引爆');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

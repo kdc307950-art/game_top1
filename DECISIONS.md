@@ -6,7 +6,22 @@
 
 ---
 
----
+## D038：Step 16 音效与震动的口径（零素材合成、派生音高、开关与降级）+ 四项待拍板的默认答复
+
+- 日期：2026-09-22
+- 背景：用户给出「19.1 之后」的执行方案，对四项待拍板事项给了推荐口径（滚动口径 (a) 一屏翻页、19.2 只画不拦、保留 Capacitor、先做 Step 16），并要求 Step 16 落地时顺带**根治 P3-13**。本记录固定 Step 16 的实现口径与这四项默认答复。
+- 决策（推荐默认 + Step 16 口径）：
+  1. **音效零素材、全部合成**：`OscillatorNode` + `GainNode` 现场合成，**不引入任何音频文件** —— `assets/` 仍为空、无需为资源登记新文件类型、没有加载失败路径（延续 D009）。
+  2. **音高必须可派生**：波形/起止频率/时长/增益/升调倍率登记在 `AUDIO_CONFIG.events`，**连击层数与第几颗星只改音高**（`stepRatio^index`）；`resolveTone(event, index)` 是纯函数，同输入同声音，**不使用运行时随机**（与 3.6「设计期派生」同口径）。
+  3. **震动降级**：模式登记在 `HAPTIC_CONFIG.events`；没有 `navigator.vibrate` 的环境（桌面）**静默返回 false**，不报错、不影响对局；未登记震动的事件（如 `star`）不震。
+  4. **开关与持久化**：音效、震动**各自可开关**，偏好 `{ sound, haptic }` 存 `STORAGE_KEYS.PREFS`（`xxl_prefs`），读写仍只在 `storage.js`；开关属画布外控件区（与 3.9 的道具条同一块，`--booster-bar-h` 覆盖两行）。**`STORAGE_KEYS.MUTED`（Step 16 预留的静音键）由 `PREFS` 取代**，保留键名以免破坏旧存档但不再使用。
+  5. **`audio.js` 是唯一允许创建 `AudioContext` 的模块**；解锁点在用户手势里（浏览器策略），由 `app.js` 在输入入口调用 `unlock()`；关掉音效偏好时**连上下文都不创建**。
+  6. **P3-13 根治**：`tests/assert.js` 的 `test()` 现在 await 异步用例（Promise 收进 `state.pending`，`summarize()` 逐个 await 后再统计），测试文件末尾改为 `await summarize()`；并保留一条**故意 async** 的回归夹具（`storage（v1.21）：存储后端可注入`）证明异步断言确实计入统计。
+  7. **四项待拍板的默认答复**：① 地图滚动口径取 **(a) 一屏分区 + 翻页**；② **19.2 只画不拦**（不加 `unlockStars` 硬门槛；「天边」云层只作视觉进度指示）；③ **软件化保留 Capacitor**（Tauri 要改宪法 2.1/0.3 与 Step 18，且本机未装 Rust 工具链；整块继续挂起）；④ **先做 Step 16**（无需规则批准，是 ROADMAP 既定下一步）。
+- 依据与证据：L1 = `node tests/run-all.js` **227 用例 / 1996 断言 / 0 失败**（新增 `tests/audio.test.js` 8 例 63 断言 + 偏好用例 1 例）；L0 = 一致性脚本（`*.events.*` 按整表登记、`STORAGE_KEYS.PREFS` 已登记、两文件版本 v1.22 相等）+ 50 关表巡检 + `LEVELS.md` 巡检 PASS；L2/L3 = 新增 `_build/verify-step16.mjs` **19 项全绿**（真实触摸有效交换 → 假 `AudioContext` 被创建并 resume、振荡器起始频率等于 `resolveTone('swapOk')`（现读 config）、`navigator.vibrate` 收到配置模式 → 关掉音效后不再创建振荡器而震动仍工作 → 打回开启恢复发声 → 关掉震动后不再震而音频不受影响 → 重新加载后偏好仍在）。
+- 影响：`AGENTS.md` v1.22（2.2/2.3 登记 `audio.js`、新增 5.6、附录 B 四行、第 11 节）、`ROADMAP.md`（头部与 Step 16 清单）、`config.js`、`storage.js`、`audio.js`、`app.js`、`index.html`、`styles.css`、`tests/assert.js`、8 个测试文件末尾改 `await summarize()`、新增 `tests/audio.test.js`、`PROGRESS.md`、本文件。
+- 替代方案：① 用真实音频文件（否决：违反零依赖/零素材，且引入资源管理与加载失败路径）；② 音效用 `Math.random()` 加变化（否决：违反「同输入同结果」，取证也无法断言）；③ 音效与震动共用一个开关（否决：桌面没有震动、移动端可能想静音但保留震动，语义不同）；④ 把 P3-13 的异步用例改同步了事（否决：那只是绕过；根治后以后写异步用例不会再假绿）。
+- 未验证：**真机上的音色/音量体感与震动强度**（L2/L3 只能在假 `AudioContext` + 假 `navigator` 下断言「调用与参数正确」）；iOS Safari 的 `AudioContext` 解锁细节。
 
 ---
 

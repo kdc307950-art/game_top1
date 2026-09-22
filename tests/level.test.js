@@ -418,4 +418,4 @@ test('BOOSTER_CONFIG（v1.20）：四个键都取自 config.js（逻辑层不写
   assertDeepEqual(Object.values(BOOSTER_KIND).sort(), ['addSteps', 'hammer', 'refresh'], '道具类型常量');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

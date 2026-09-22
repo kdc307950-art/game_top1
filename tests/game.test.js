@@ -990,4 +990,4 @@ test('useBooster（v1.20）：未知道具与已结束的本局都不生效（us
   assertEqual(game.level.remainingSteps, 9, '已结束时加五步也不会改状态');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

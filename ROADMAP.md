@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.21
+> 版本：v1.22
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -999,7 +999,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [ ] Step 13：更多障碍物
 - [ ] Step 14：关卡类型（**进行中**：宪法 v1.18 规则 + v1.19 落地契约已落地；14.1 水果关 / 14.2 时间关 / 14.3 金豆荚关按子步骤分别验收，见 DECISIONS D035）
 - [ ] Step 15：道具系统（**进行中**：宪法 v1.20 + D036 的落地口径已定；刷新 / 加五步 / 小木锤 + 数量持久化 + 画布外道具条）
-- [ ] Step 16：音效与震动反馈
+- [x] Step 16：音效与震动反馈（**零素材**：Web Audio 合成 + `navigator.vibrate`；音高按连击层数/星级派生（同输入同声音）；音效与震动各自可开关且偏好持久化；桌面无 `vibrate` 静默降级；顺带根治 P3-13（`test()` 现在 await 异步用例）；见 DECISIONS D038）
 - [ ] Step 17：粒子动画与视觉打磨
 - [ ] Step 18：Capacitor 打包
 - [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；19.2 藤蔓地图待开工；19.3 解锁与软件化挂起 —— 见 DECISIONS D037）
@@ -1023,3 +1023,4 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |
+| v1.22 | 2026-09-22 | Agent（用户批准） | 与宪法 v1.22 同步：Step 16 音效与震动完成（5.6、`audio.js` 登记、`AUDIO_CONFIG`/`HAPTIC_CONFIG`/`STORAGE_KEYS.PREFS` 进附录 B、P3-13 根治） | §5、Step 16、第 6 节 |

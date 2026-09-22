@@ -1,9 +1,20 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.21
+> 版本：v1.22
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.21 → v1.22 关键变更）
+
+本次修订落地 **Step 16（音效与震动反馈）**：零素材的 Web Audio 合成 + `navigator.vibrate`，两个开关可关闭并把偏好存进本地存档。**不改变任何玩法规则与数值**。
+
+1. **新增 5.6 音效与震动**：音效全部**合成**（不引入音频文件，延续 D009 的零素材策略）；每个事件的波形/起止频率/时长/增益/升调倍率登记在 `AUDIO_CONFIG.events`，**连击层数与星级只改音高**（`stepRatio^index`，同输入同声音，不使用运行时随机）；震动模式登记在 `HAPTIC_CONFIG.events`，**没有 `navigator.vibrate` 的环境静默降级**；音效与震动**各自可开关**，偏好 `{ sound, haptic }` 持久化在 `STORAGE_KEYS.PREFS`。
+2. **2.2 / 2.3 登记 `audio.js`**：音效合成与震动反馈模块，是**唯一允许创建 `AudioContext` 的模块**；解锁点必须在**用户手势**里（浏览器策略），因此由 `app.js` 在输入入口调用 `unlock()`。它不读游戏状态、不碰存档，开关经 `isEnabled()` 注入。
+3. **附录 B 新增** `AUDIO_CONFIG.masterGain`、`AUDIO_CONFIG.events`、`HAPTIC_CONFIG.events`、`STORAGE_KEYS.PREFS`；一致性脚本把 `*.events.*` 与 `*.specialMultipliers.*` 一样按「整表一行」处理。
+4. **`tests/assert.js` 根治 P3-13**：`test()` 现在会 await 异步用例（收进 `state.pending`，由 `summarize()` 逐个 await 后再统计），测试文件末尾改为 `await summarize()`。此前异步用例的断言会在汇总之后才跑 —— 既不计入统计、又只能靠 unhandled rejection 暴露失败。
 
 ---
 
@@ -365,7 +376,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
   app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播（localStorage 读写已移交 storage.js，v1.16）
-  storage.js       # 本地存档读写与容错：最高分、每关星级（唯一允许读写 localStorage 的模块，v1.16）
+  storage.js       # 本地存档读写与容错：最高分、每关星级、道具数量、音效/震动偏好（唯一允许读写 localStorage 的模块，v1.16）
+  audio.js         # 音效合成与震动反馈：Web Audio 合成、震动模式（唯一允许创建 AudioContext 的模块，v1.22）
   render.js        # 棋盘层绘制与几何：画布尺寸/DPR、棋盘布局、静态图层烘焙、每帧贴图
   candy.js         # 糖果外观与精灵烘焙：形状路径、配色、内嵌图案、条纹 / 包装 / 魔力鸟特效（D020 / D023）
   hud.js           # 信息层绘制：HUD（分数/步数/最高分）、结束面板、重排提示
@@ -382,6 +394,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
     level.test.js
     game.test.js
     integration.test.js
+    audio.test.js
   AGENTS.md
   ROADMAP.md
   PROGRESS.md
@@ -408,6 +421,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。
+- `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
 - `hud.js`：信息层绘制（HUD 三个信息格、结束面板、重排提示）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
@@ -844,6 +858,15 @@ Level = LevelConfig & {
 - 连消时必须有分数飘字动画和连击提示。
 - 色盲友好：颜色之外，普通动物必须有可区分的形状或图案。
 
+### 5.6 音效与震动
+
+- **零素材**：音效全部用 **Web Audio 合成**（`OscillatorNode` + `GainNode`），**不引入任何音频文件**（延续 D009）；`assets/` 仍为空。
+- **可派生**：每个事件的波形、起止频率、时长、增益与升调倍率登记在 `AUDIO_CONFIG.events`；**连击层数 / 第几颗星只改音高**（`stepRatio^index`），同一输入永远同一声音（与 3.6 的「设计期派生」同口径），**不使用运行时随机**。
+- **事件表**：有效交换（上行双音）、无效交换（低沉单音）、每层消除（连击升调）、通关（上行三音）、失败（下行单音）、星级揭示（逐颗星升调）。
+- **震动**：`navigator.vibrate` 的毫秒模式登记在 `HAPTIC_CONFIG.events`；**没有该 API 的环境（桌面浏览器）静默降级** —— 不报错、不影响对局。
+- **开关与持久化**：音效与震动**各自可开关**，偏好 `{ sound, haptic }` 持久化在 `STORAGE_KEYS.PREFS`（唯一读写点是 `storage.js`）；开关与道具条同属**画布外**的控件区（3.9）。
+- **解锁时机**：浏览器要求音频上下文在**用户手势**里创建/恢复，故 `app.js` 在输入入口调用 `audio.unlock()`；`audio.js` 是唯一碰 `AudioContext` 的模块（2.3）。
+
 ### 5.5 UI 与提示
 
 - 游戏结束用页面内 UI，禁止使用 `alert` 作为正式界面。
@@ -1049,6 +1072,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.22 | 2026-09-22 | Agent（用户批准） | Step 16 音效与震动：新增 **5.6**（零素材的 Web Audio 合成、音高按连击/星级派生、`navigator.vibrate` 与桌面静默降级、音效与震动各自可开关、偏好存 `STORAGE_KEYS.PREFS`、解锁点在用户手势）；2.2/2.3 登记 `audio.js`（唯一允许创建 `AudioContext` 的模块）；附录 B 新增 `AUDIO_CONFIG.masterGain`/`AUDIO_CONFIG.events`/`HAPTIC_CONFIG.events`/`STORAGE_KEYS.PREFS`；`tests/assert.js` 根治 **P3-13**（`test()` 现在 await 异步用例） | 2.2、2.3、5.6、附录 B、11、`audio.js`、`tests/assert.js` |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | Step 19.1 存档演进：`storage.js` 加**可注入 backend**（默认 `localStorageBackend`）、星级存档带 `version`/`updatedAt` 并能**就地迁移** v0 旧格式（老存档不丢、迁移幂等、更高版本只读不写）、`totalStars` 改为派生函数；2.3 补 `storage.js` 的边界条目；附录 B 新增 `STORAGE_CONFIG.schemaVersion`；`ROADMAP.md` 新增 Step 19（19.1 存档 / 19.2 藤蔓地图 / 19.3 解锁，后者需先批规则） | 2.3、附录 B、11、`ROADMAP.md`、`storage.js`、`config.js` |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | Step 15 道具系统：新增 3.9（三种道具都不消耗步数/时间、刷新复用 3.8 的重排、加五步在时间关改为加秒、小木锤只接受含动物的格子且不扣数量、数量为跨关卡状态、道具条是画布外元素）；4.2 补 `game.useBooster` 与 `BoosterResult`、`level.grantSteps`/`grantTime`；2.3 补 UI 归属（`index.html`/`styles.css`/`storage.js`）；附录 B 新增 `BOOSTER_CONFIG` 4 键；附录 B-2 新增 `BOOSTER_KIND` | 2.3、3.9、4.2、附录 B、附录 B-2、11、`ROADMAP.md` |
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | Step 14 三种关卡类型的**落地契约**：4.4 补 `LevelConfig.timeLimit` / `collectibles`（`CollectibleSpec`）与 `Level.remainingTime`（时间关 `steps = 0`）；4.2 补四条纯追加（`board.createBoard` 的收集物参数、`applyGravity` 的 `collectibleFall`、`ResolveResult.collected` 的 `CollectibleHit` 形状、`level.consumeTime` 与 `game.tickTime`）与 `computeTimeBudget`、`GameSnapshot` 的 `timeLimit`/`remainingTime`；3.6 补第 8 条时间关的时长派生与归零结算口径、金豆荚三星阈值更高（`STAR_CONFIG.podFactor`）；附录 B 新增 `TIME_CONFIG` 5 键与 `STAR_CONFIG` 3 键；附录 B-2 补 `COLLECTIBLE_TYPE` 并扩写 `GOAL_TYPE`；50 关表不变 | 3.6、4.1、4.2、4.4、附录 B、附录 B-2、11、`ROADMAP.md` |
@@ -1319,6 +1343,10 @@ const LEVEL_3 = {
 | `BOOSTER_CONFIG.extraSteps`        | 加五步在步数关增加的步数 | 5        | 3.9 v1.20 |
 | `BOOSTER_CONFIG.extraSeconds`      | 加五步在时间关增加的秒数 | 10       | 3.9 v1.20 |
 | `BOOSTER_CONFIG.hammerCells`       | 小木锤一次消除的格数 | 1           | 3.9 v1.20 |
+| `AUDIO_CONFIG.masterGain`          | 音效总音量（0-1）  | 0.16                 | 5.6 v1.22 |
+| `AUDIO_CONFIG.events`              | 音效事件表（波形 / 起止频率 / 时长 / 增益 / 升调倍率） | 见 5.6 | 5.6 v1.22 |
+| `HAPTIC_CONFIG.events`             | 震动事件表（毫秒模式） | 见 5.6            | 5.6 v1.22 |
+| `STORAGE_KEYS.PREFS`               | 音效/震动偏好存储键 | `xxl_prefs`          | 5.6 / ROADMAP Step 16 |
 | `STORAGE_CONFIG.schemaVersion`     | 存档格式版本（迁移判据） | 1             | 2.3 v1.21 |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |

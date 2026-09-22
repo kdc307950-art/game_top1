@@ -197,4 +197,4 @@ test('魔力鸟自己的颜色不会让它在别处凑出匹配', () => {
   assertEqual(findMatches(board).length, 0, '含魔力鸟的任何组合都不构成匹配');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

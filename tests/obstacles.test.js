@@ -450,4 +450,4 @@ test('3.8 v1.17：重排不搬动藤蔓与巧克力（位置与层数都不变�
   assertEqual(board[7][7].obstacleLayers, 1, '巧克力层数不变');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

@@ -95,4 +95,4 @@ test('calcFinalScore：非法输入不产生 NaN', () => {
   assertEqual(calcFinalScore(30, 1, NaN), 30, '加分为 NaN 时按 0 处理');
 });
 
-if (!globalThis.__XXL_TEST_BUNDLE__) summarize();
+if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();
