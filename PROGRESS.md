@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-09-22（Gate 0.1 第十轮：Step 16 → Step 17 扩展前 Bug Audit —— 通过，放行 Step 17）
+
+- **审计对象**：Step 16（音效与震动反馈 + P3-13 根治）。起点 = tag `step16-start`（`cab8b17`）+ 本步提交（`0bdea34`），工作区干净。
+- **环境**：Windows + Node v24.19.0；Chrome 153.0.8010.48 headless（CDP `127.0.0.1:9342`）；HTTP 服务 `python -m http.server 8000 --bind 0.0.0.0`。
+- **1) 自动回归（L1）**：`node tests/run-all.js` → 9 个测试文件、**227 用例 / 1996 断言 / 0 失败 / 异步用例 1 个（已 await）**，退出码 0（`_build/g10-tests.log`）。
+- **2) 静态一致性（L0）**：`python _build/consistency_check.py` 全部通过（`audio.js` 与 `tests/audio.test.js` 已进 2.2 目录、`AUDIO_CONFIG.events`/`HAPTIC_CONFIG.events` 按整表登记、`STORAGE_KEYS.PREFS` 已登记、两文件版本 v1.22 相等）；`node _build/check-level-table.mjs` PASS；`node _build/lint-levels.mjs` PASS。日志 `_build/g10-*.log`。
+- **3) 浏览器冒烟 + 移动模拟（L2/L3）**：**19 个套件全绿、共 665 项断言 PASS / 0 FAIL** —— `verify-step4` 37、`verify-step5` 32、`verify-step6` 30、`verify-step7` 44、`verify-step8` 34、`verify-step9` 30、`verify-step10` 37、`verify-step11` 38、`verify-step12` 37、`verify-step12b` 18、`verify-step13` 11、`verify-step14` 25、`verify-step15` 28、**`verify-step16` 19**、`audit-gate-step7`–`step11` 各 49。**门禁清单由 18 套件扩到 19 套件**（新增 `verify-step16`），D034 第 3 条的固定清单同步更新。
+- **4) 缺陷分级**：P0 = 0、P1 = 0；P2 无新增；P3 沿用 P3-3、P3-5、P3-6、P3-7、P3-8、P3-10、P3-12，**P3-13 关闭**（本轮根治），**新增 P3-14**（流程类：中文 .md 的批量改写不得走 PowerShell 文本管道 —— 本轮确实把两个文档写成了乱码，已回滚重做）。
+- **5) 功能边界（如实）**：已验证 = Step 16 的音效与震动（真实触摸交换触发、开关生效、偏好持久化、降级不报错）+ 既有全部玩法（50 关、三种关卡类型、道具、藤蔓巧克力）；**未验证** = 真机音色/音量/震动强度、iOS Safari 的 `AudioContext` 解锁、P3-10 的环像素取证、P3-12 的刷新失败率。
+- **6) 结论**：P0/P1 清零 + 自动回归通过 + 浏览器冒烟通过 + 剩余 P2/P3 已登记 → **允许进入 Step 17**（粒子动画与视觉打磨）。同时按用户指示：**Step 19.2（藤蔓地图）可在本门禁通过后开工**，因为它动的是 `hud.js`/`render.js`/`app.js` 的渲染链路，先隔离 Step 16 的问题再动它更容易归因。
+
+---
+
 ## 2026-09-22（Step 16：音效与震动反馈 + P3-13 根治 —— 完成并验证）
 
 用户口径：给出「19.1 之后」的执行方案，四项待拍板事项按推荐执行（滚动口径 (a)、19.2 只画不拦、保留 Capacitor、先做 Step 16），并要求 Step 16 顺带**根治 P3-13**。口径与默认答复记入 **DECISIONS D038**。
