@@ -1,9 +1,51 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.23
+> 版本：v1.25
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.24 → v1.25 关键变更）
+
+本次修订按**用户批准的方案**落地 **Step 20（结算阶段 + 星级统一动态调整）**：关卡达成目标（或步数用尽、时间归零）后，
+不再只是「引爆盘面已有的特殊方块」，而是先**把剩余步数变成递增奖励分与随机特殊糖果**，再**从棋盘底部到顶部依次连锁引爆**，
+最后才做星级结算；星级阈值同时改为**一条公式统一动态派生**（含结算期望分修正）。口径记入 `DECISIONS.md` **D041**。
+
+1. **新增结算阶段（3.6 第 7 条改写）**：① 剩余步数 → 递增制奖励分（第 1–6 步按 `SETTLEMENT_CONFIG.stepScoreRatios` 递增，
+   第 7 步起取末值）；② 剩余步数 → 随机特殊糖果（横/竖条纹、包装、魔力鸟按权重随机，**落在朴素动物格**上）；
+   ③ 把盘面上的特殊糖果按「**从棋盘底部到顶部**」的顺序**逐颗**引爆，级联中新生成的特殊糖果**追加到队列**继续引爆，
+   上限 `SETTLEMENT_CONFIG.maxChainDetonations`。引爆的消除与得分照常计入目标判定与分数。
+2. **剩余步数的转化口径改写（3.5）**：`SCORE_CONFIG.stepBonus`（每步 30 分）与 `level.getRemainingStepBonus` **删除** ——
+   同一批剩余步数不再被「平坦加分」与「结算阶段」计两次分；奖励分的量级改为**挂在关卡 1★ 基准分上的比例**。
+3. **星级改为统一动态派生（3.7）**：新增 `level.computeStarThresholds(star1, steps, { pod })` —— `1★` 保持不变，
+   `2★/3★ = round500(基准分 × 倍率) + round500(结算期望分 × settlementCoverage)`。**50 关与演示关全部走这一条公式**，
+   星阈值因此不再手写；`LEVELS.md` 的阈值列由 `_build/sync-levels-stars.mjs` 同步、`lint-levels.mjs` 独立复算。
+   `settlementCoverage`（0.6）与 `typicalRemainingRatio`（0.20，**实测标定**：通关余步中位数 ≈ 步数预算的 20%）是仅有的两个旋钮。
+4. **新增模块 `settlement.js`**（2.2 / 2.3 登记）：结算阶段的纯逻辑 —— 固定种子 PRNG、递增奖励分、结算期望分、
+   转化计划、引爆顺序、按 `cell.id` 追踪格子。不碰 DOM、不认识 `GameState`，可在 Node 里逐项测。
+5. **`game.resolveBoard` 追加 `options.final`（纯追加）**：结算阶段的每一次引爆都传它，跳过 3.8 的死局检测与重排。
+6. **附录 B**：新增 `SETTLEMENT_CONFIG`（5 键）、`STAR_CONFIG.settlementCoverage`、`ANIMATION_CONFIG.settleBanner`；
+   删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`（`ENDGAME_CONFIG` 整块被 `SETTLEMENT_CONFIG` 取代）。
+7. **`ROADMAP.md` 新增 Step 20**（用户方案里的「19.3.x」落在这里，**19.3 的解锁/天边关卡名额保留**）；`prompts.md` 同步。
+
+---
+
+## 修订说明（v1.23 → v1.24 关键变更）
+
+本次修订按**用户批准的修订方案**重做已交付的 Step 19.2 藤蔓地图（第三次迭代；前两次见 D039 与 git log）：视觉与交互全面重做，**玩法零改动**（仍「只画不拦」）。口径记入 `DECISIONS.md` **D040**。
+
+1. **归一化坐标体系（0–1）**：`LEVELS.md` §9 的坐标表与 `level.js` 的 `LEVEL_MAP_POS` 都改成 **0–1 归一化值**，渲染时乘 viewBox 宽高（再由 SVG 缩放到容器）。**坐标三件套仍然成立**：`LEVELS.md` §9（真相源）↔ `LEVEL_MAP_POS`（运行时表）↔ `_build/check-vine-map.mjs`（反向巡检，**只比归一化值、不依赖设备像素**）；坐标仍由 `_build/gen-vine-map.mjs` 从 `VINE_MAP_CONFIG` 生成（改配置后重跑生成器，只写标记块之间、幂等）。
+2. **路径改为有机曲线**：不再是「横平竖直拼接」，改为**单条平滑贝塞尔曲线**；锚点用归一化值登记在 `VINE_MAP_CONFIG.anchors`（新增键），跨屏连续性靠 **Y 轴衔接**（出口 y 故意略超 1，`1.05 ↔ 下一页 0.05`，形成「延伸出屏」的接口）。抖动只用**固定种子** PRNG（`mulberry32(seed + page)`，`seed` 即用户方案里的 `VINE_SEED`），**不使用运行时随机**；控制点只有「锚点 + 种子」两类来源，**不写死任何控制点**。
+3. **节点排布打破两列对齐**：每屏 10 个节点分布在 `VINE_MAP_CONFIG.nodeColumns` 的 **3 个不同 X 水平位置**（`≥3` 是硬指标），Y 间隔均匀但按 `nodeStaggerY` 略作错落。节点坐标仍是**显式**的（`LEVEL_MAP_POS`），且**不参与路径计算**。
+4. **星星**：从节点正下方**移出**到右侧并**放大 40%**（`starSize` × `starScale` = 11 × 1.4），间距 `starGap`；未点亮 `#555` 描边、点亮 `#fbc531` 实心；节点圆环边框按星级进度变化（0 星暗灰 / 1 星浅绿 / 2 星中绿 / 3 星亮金）。
+5. **节点状态机**：节点带 `data-state`，只有 **`visited`**（已通关，亮金边框 + 星星填充）与 **`attainable`**（可玩未通关，绿色描边 + 轻微脉冲）两态，样式全部由 CSS 类/属性驱动（**不用内联样式**）。**19.2 阶段所有 50 关都只能是这两态，绝不能出现 `locked`** —— 这是「只画不拦」的验收核心。
+6. **当前关卡高亮**：改为**呼吸光效脉冲**（`@keyframes pulse`，周期 `VINE_MAP_CONFIG.pulseMs` = 2s，品牌亮金），**删掉第一版的粉色底 + 黄色大边框**。
+7. **分页 UI 重做**：屏幕底部是 `[◀] 第 N / 5 页 [▶]`（左右箭头 + 页号文本），切页时地图用 `transform: translateX` + `transition`（`pageSlideMs`）平滑位移；分页上方是**总星数进度条**（`⭐ n/150`，总星数由 `storage.getTotalStars()` 派生后传入，地图层仍不碰存储）。分页是 DOM 按钮、`click` 挂在 `app.js`，**不碰 `input.js` 的触摸手势**，因此 5.1 的「禁滚动/缩放」不需要开例外。
+8. **叶子与卷须点缀**：用 `path.getPointAtLength()` 每隔 `leafSpacing`（70px）取点，放内联 `<ellipse>` 叶子，按**前后两点的切线方向**旋转并做轻微摇曳动画。**不引入任何外部 SVG 素材、不加新依赖**，尊重 `prefers-reduced-motion`。
+9. **附录 B 的 `VINE_MAP_CONFIG` 由 8 键改为 19 键**：去掉 `marginX` / `marginY`（被归一化节点布局取代），新增 `anchors` / `nodeColumns` / `nodeRows` / `nodeMarginY` / `nodeStaggerY` / `starSize` / `starScale` / `starGap` / `leafSpacing` / `leafSize` / `pulseMs` / `leafSwayMs` / `pageSlideMs`。
+10. **不做**（19.3 与软件化仍挂起）：不加 `unlockStars` 解锁门槛、不加「天边」云层、不加隐藏关、不改 `input.js`、不动 `--booster-bar-h` 之外的布局变量。
 
 ---
 
@@ -387,8 +429,9 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   score.js         # 计分系统、连消倍数
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
-  vine-map.js      # 藤蔓关卡地图：SVG 渲染 + 分页 + 确定性路径（不读状态、不写存档，v1.23）
-  vine-map.css     # 藤蔓地图样式：路径生长、节点与分页（画布外的绝对定位层，v1.23）
+  settlement.js    # 结算阶段：余步 → 递增奖励分 + 随机特殊糖果 → 连锁引爆（纯逻辑，固定种子 PRNG，v1.25）
+  vine-map.js      # 藤蔓关卡地图：SVG 渲染 + 分页 + 归一化坐标 + 确定性路径（不读状态、不写存档，v1.24）
+  vine-map.css     # 藤蔓地图样式：节点状态 / 星星 / 叶子 / 翻页位移（画布外的绝对定位层，v1.24）
   app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播（localStorage 读写已移交 storage.js，v1.16）
   storage.js       # 本地存档读写与容错：最高分、每关星级、道具数量、音效/震动偏好（唯一允许读写 localStorage 的模块，v1.16）
   audio.js         # 音效合成与震动反馈：Web Audio 合成、震动模式（唯一允许创建 AudioContext 的模块，v1.22）
@@ -410,6 +453,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
     integration.test.js
     audio.test.js
     vine-map.test.js
+    settlement.test.js
   AGENTS.md
   ROADMAP.md
   PROGRESS.md
@@ -433,9 +477,10 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `special.js`：根据匹配形状生成特殊元素，处理激活和组合。
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
-- `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定、地图坐标表（`LEVEL_MAP_POS`，v1.23）。
-- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径）。只接收「坐标表 + 星级表」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化都可在 Node 里测）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`（v1.23）。
-- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
+- `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**归一化 0–1**，v1.24）。
+- `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
+- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀）。只接收「坐标表 + 星级表 + 当前关 + 总星数」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**，节点状态只有 `visited`/`attainable` 两态（**没有 `locked`**）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24，见 D040）。
+- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
@@ -524,7 +569,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 
 连续消除（连消）加分：**第 1 次消除（交换本身造成的消除）不计连消**；自第 2 层起每次递增一档，第 n 层（n ≥ 2）加 `(n − 1) × 30` 分，依次为 30、60、90、120。冰块连消每次 +1000 分，同样自第 2 层起依次叠加。
 
-剩余步数转化：关卡结束时，每剩余一步约转化为 30 分连续消除加分。
+剩余步数转化（**v1.25 改写，Step 20**）：关卡结束时，剩余步数**不再换成一笔平坦的分数**，而是走**结算阶段** —— 先按**递增制**给奖励分（第 1–6 步逐级升高、第 7 步起封顶；量级 = 该关 **1★ 基准分 × `SETTLEMENT_CONFIG.stepScoreRatios`**，因此 50 关的「省步收益 / 星级基准」比值一致），再把每一步变出一颗**随机特殊糖果**并连锁引爆（见 3.6 第 7 条）。旧的「每剩余一步 30 分」（`SCORE_CONFIG.stepBonus`）与 `level.getRemainingStepBonus` **已删除** —— 否则同一批剩余步数会被「平坦加分」与「结算阶段」计两次分。
 
 障碍物计分（v1.12 明确）：层数分**另算、不参与特效倍数** —— 单层结算分 = 动物数 × 10 × 特效倍数 + 连消加分 + 障碍物层数分。冰块连消（同一局中第 n ≥ 2 层清掉冰块）额外加 `(n − 1) × 1000`，与普通连消的 +30/档并存（即 3.5 原文「冰块连消每次 +1000 分，同样自第 2 层起依次叠加」的落地口径）。
 
@@ -556,9 +601,17 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
    目标工作量 = 分数目标 `target / scoreUnit` + 收集目标 `合计 / collectUnit` + 消冰目标 `target / iceUnit`（`mixed` 相加）；
    障碍摩擦 = `障碍格数 × perCell + 障碍总层数 × perLayer + max(0, 色数 − 5) × perColor`。
    系数全部来自 `CONFIG.STEP_BUDGET`（附录 B），是**设计期派生**：同配置同结果、无运行时随机。
-7. **本局结束前引爆特殊方块（v1.15）**：走完最后一步（步数用尽）或已达成目标时，先引爆盘面上所有特殊方块，
-   引爆过程中新生成的继续链式引爆（上限 `ENDGAME_CONFIG.maxDetonationRounds`），直到盘面无特殊方块。
+7. **结算阶段：余步 → 奖励分 + 特殊糖果 → 连锁引爆（v1.15 引入，v1.25 改写）**：走完最后一步（步数用尽）、
+   已达成目标或时间归零时，本局进入**结算阶段**；该阶段**不再消耗步数**（1.5 的状态机要求），依次做三件事：
+   ① **剩余步数 → 递增制奖励分**：第 1–6 步按 `SETTLEMENT_CONFIG.stepScoreRatios` 逐级升高、第 7 步起取末值，
+      量级挂在**该关 1★ 基准分**上（满余步的合计 ≤ 1.0 × 基准分，见 D041 的量纲护栏）；
+   ② **剩余步数 → 随机特殊糖果**：横/竖条纹、包装、魔力鸟按 `SETTLEMENT_CONFIG.specialWeights` 加权随机；落点用
+      **受控伪随机**（`mulberry32(seed + 关卡id)`，同一步数同关卡永远同结果，**无运行时随机**）从**朴素动物格**中抽取 ——
+      空格、占格障碍、收集物、以及**任何带障碍物的格子**（含冰块与永久锁格的藤蔓）都不转化，保证奖励确定且可解释；
+   ③ **从棋盘底部到顶部依次引爆**：每颗特殊糖果走一次完整结算（激活 → 下落 → 填充 → 级联），级联中**新生成**的特殊糖果
+      **追加到队列**继续引爆，直到队列清空或达到 `SETTLEMENT_CONFIG.maxChainDetonations`。
    引爆的消除与得分**计入目标判定与分数**，之后才做星级结算；因此最后一步的引爆可以完成关卡目标。
+   每次引爆都调 `game.resolveBoard(state, { final: true })`，**跳过 3.8 的死局检测与重排**（本局已结束，重排只会把棋盘搅乱）。
 8. **时间关的时长与结算（v1.19）**：`LevelConfig.timeLimit`（秒，> 0 即时间关）**替代步数** —— 时间关的 `steps` 为 `0`，
    **消除不扣时间**（时间只按真实时间流逝，由 `game.tickTime` 接收 UI 传入的真实经过秒数）。时长由 `level.computeTimeBudget` 按
    `clamp(round(initialSeconds + 目标工作量 × secondsPerWorkload − 障碍摩擦 × secondsPerFriction), minSeconds, maxSeconds)`
@@ -571,6 +624,16 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 每个关卡配置三个分数阈值：一星（通关最低分）、二星、三星。
 
 达成通关目标即获得一星。分数达到二星阈值获得二星，达到三星阈值获得三星。三星评分不依赖于步数剩余量，仅取决于最终得分。
+
+**阈值的统一动态派生（v1.25，Step 20）**：星阈值不再逐关手写，由 `level.computeStarThresholds(star1, steps, { pod })` 一条公式给出：
+
+- `1★ = star1`（设计基准分；分数关即目标分）。**1★ 不上移** —— 它的语义是「通关」，而 3.7 已规定达成目标即一星。
+- `2★ = round500(star1 × secondFactor × podFactor?) + round500(结算期望分 × settlementCoverage)`，`3★` 同式、倍率取 `thirdFactor`。
+- **结算期望分** = 「典型余步（`步数预算 × SETTLEMENT_CONFIG.typicalRemainingRatio`）× 该步的递增奖励分」之和，用来抵消
+  3.6 第 7 条的结算阶段带来的分数膨胀；它是**设计期派生**（纯函数、无随机），因此星阈值仍可复现、可巡检。
+- 「**统一**」= 一条公式作用于 50 关与全部演示关；「**动态**」= 输入是每关自己的 `star1` 与派生步数。
+- 标定依据是**实测数据**而非手感：`_build/measure-step20.mjs` 用真实模块跑 300 局，通关余步中位数为步数预算的 19–22%（故取 0.20）、
+  结算分占最终分的 30–36%（故 `settlementCoverage` 取 0.6）。改这两个系数必须重跑该脚本并同步 `LEVELS.md` 的阈值列与 `DECISIONS.md`。
 
 ### 3.8 死局检测与重排
 
@@ -636,6 +699,8 @@ board = cell[][]  // board[row][col]
 - 禁止在逻辑模块内直接写数值。
 
 **game.js**
+
+- v1.25 追加（Step 20）：`resolveBoard(state, options?: { initialClear?: Pos[], final?: boolean }): ResolveResult` —— `final` 为真时**跳过 3.8 的死局检测与重排**（结算阶段的每一次引爆都传它）；缺省行为与既有调用完全一致。`ResolveResult` 追加 `settlement: SettlementResult | null` —— 结算阶段的元信息 `{ steps, stepScore, detonationScore, detonations, converted, board, atIndex }`（`board` 是「转化后、第一颗引爆前」的棋盘快照，供 UI 先画出这批特殊糖果；`atIndex` 是该批次在 `levels` 里的起始下标），未进入结算阶段时为 `null`。`SwapResult.resolve` 因此可能携带它。
 
 - `createGame(levelConfig: LevelConfig, options?: { rng?: () => number }): GameState`
 - `trySwap(state: GameState, a: Pos, b: Pos): SwapResult`（有效交换扣 1 步；**时间关不扣步数**（v1.19：时间只按真实时间流逝））
@@ -774,7 +839,7 @@ GameSnapshot = {
 - `grantTime(level: Level, seconds: number): number`（v1.20 纯追加：增加时间关的剩余秒数并返回加后的值；调用点在 `game.useBooster` 的「加五步」在时间关的分支）
 - `checkGoal(level: Level, board: Board, score: number, collected: Record<string, number>): boolean`
 - `calcStars(score: number, thresholds: [number, number, number]): 0 | 1 | 2 | 3`
-- `getRemainingStepBonus(stepsLeft: number): number`
+- `computeStarThresholds(star1: number, steps: number, options?: { pod?: boolean }): [number, number, number]`（v1.25 纯追加：按 3.7 的**统一动态派生**公式，由「1★ 基准分 + 派生步数」算出星阈值三元组，50 关与演示关共用；纯函数、无随机。**`getRemainingStepBonus` 随之删除** —— 剩余步数的转化改由结算阶段承担，见 3.5 与 `settlement.js`）
 - `computeStepBudget(config: LevelConfig): number`（v1.15：按 3.6 的公式由难度派生步数；纯函数、无随机）
 - `computeTimeBudget(config: LevelConfig): number`（v1.19：按 3.6 第 8 条的公式由难度派生**时间关的时长（秒）**；纯函数、无随机；系数全部来自 `CONFIG.TIME_CONFIG`）
 
@@ -1088,6 +1153,8 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | **结算阶段 + 星级统一动态调整**：3.6 第 7 条改写为「余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部逐颗连锁引爆」（受控伪随机 `mulberry32(seed + 关卡id)`、只落朴素动物格、`resolveBoard({final:true})` 跳过重排）；3.5 删除「每剩余一步 30 分」（`SCORE_CONFIG.stepBonus` / `getRemainingStepBonus`），避免与结算阶段重复计分；3.7 新增统一动态派生 `level.computeStarThresholds`（`2★/3★ = 倍率 × 基准分 + 结算期望分 × settlementCoverage`，`typicalRemainingRatio` 由 300 局实测标定为 0.20）；新增模块 `settlement.js`（2.2/2.3 登记）；`ResolveResult` 追加 `settlement`、`resolveBoard` 追加 `options.final`；附录 B 新增 `SETTLEMENT_CONFIG` 5 键 + `STAR_CONFIG.settlementCoverage` + `ANIMATION_CONFIG.settleBanner`，删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 阈值列改为公式输出（新增 `sync-levels-stars.mjs` / `measure-step20.mjs`）；`ROADMAP.md` 新增 Step 20（用户方案的「19.3.x」落此，19.3 解锁名额保留） | 2.2、2.3、3.5、3.6、3.7、4.2、15、附录 B、11、`config.js`、`level.js`、`game.js`、`settlement.js`、`timeline.js`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
+| v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | Step 19.2 藤蔓地图重做（第三次迭代）：坐标改**归一化 0–1**（`LEVELS.md` §9 / `LEVEL_MAP_POS` / 巡检都只比归一化值）；路径改**单条平滑贝塞尔**（锚点进 `VINE_MAP_CONFIG.anchors`、跨屏靠 Y 轴衔接、抖动只用 `mulberry32(seed + page)`、不写死控制点）；节点显式坐标且**不参与路径计算**（取舍见 D040）；节点状态机 `data-state` 只有 `visited`/`attainable`（无 `locked`）；星星移出节点正下方并放大 40%；当前关卡改呼吸光效（删掉粉色底 + 黄边框）；分页改 `[◀] 第 N / 5 页 [▶]` + 总星数进度条 + 平移动画；叶子沿切线旋转；附录 B `VINE_MAP_CONFIG` 8 → 19 键 | 2.2、2.3、附录 B、11、`ROADMAP.md`、`config.js`、`level.js`、`LEVELS.md`、`vine-map.js`、`vine-map.css`、`app.js`、`tests/vine-map.test.js` |
 | v1.23 | 2026-09-22 | Agent（用户批准 19.2） | Step 19.2 藤蔓关卡地图：新增 `vine-map.js` / `vine-map.css`（画布外 SVG 层、分页按钮、确定性路径）与 `LEVEL_MAP_POS` 坐标表；`LEVELS.md` 新增 §9 坐标表（真相源）+ `_build/gen-vine-map.mjs` 生成器 + `_build/check-vine-map.mjs` 巡检；canvas 选关链路（`hud.js` 的 `drawLevelSelect`、`render.js` 的 `levelRects`）退役，`app.js` 改用 DOM 事件委托；附录 B 新增 `VINE_MAP_CONFIG` 8 键；**只画不拦**（不加解锁门槛） | 2.2、2.3、附录 B、11、`ROADMAP.md`、`vine-map.js`、`level.js`、`app.js`、`hud.js`、`render.js` |
 | v1.22 | 2026-09-22 | Agent（用户批准） | Step 16 音效与震动：新增 **5.6**（零素材的 Web Audio 合成、音高按连击/星级派生、`navigator.vibrate` 与桌面静默降级、音效与震动各自可开关、偏好存 `STORAGE_KEYS.PREFS`、解锁点在用户手势）；2.2/2.3 登记 `audio.js`（唯一允许创建 `AudioContext` 的模块）；附录 B 新增 `AUDIO_CONFIG.masterGain`/`AUDIO_CONFIG.events`/`HAPTIC_CONFIG.events`/`STORAGE_KEYS.PREFS`；`tests/assert.js` 根治 **P3-13**（`test()` 现在 await 异步用例） | 2.2、2.3、5.6、附录 B、11、`audio.js`、`tests/assert.js` |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | Step 19.1 存档演进：`storage.js` 加**可注入 backend**（默认 `localStorageBackend`）、星级存档带 `version`/`updatedAt` 并能**就地迁移** v0 旧格式（老存档不丢、迁移幂等、更高版本只读不写）、`totalStars` 改为派生函数；2.3 补 `storage.js` 的边界条目；附录 B 新增 `STORAGE_CONFIG.schemaVersion`；`ROADMAP.md` 新增 Step 19（19.1 存档 / 19.2 藤蔓地图 / 19.3 解锁，后者需先批规则） | 2.3、附录 B、11、`ROADMAP.md`、`storage.js`、`config.js` |
@@ -1331,7 +1398,7 @@ const LEVEL_3 = {
 | `SCORE_CONFIG.specialMultipliers`  | 特效倍数表         | 见 3.5               | 3.5      |
 | `SCORE_CONFIG.cascadeStep`         | 普通连消递增       | 30                   | 3.5      |
 | `SCORE_CONFIG.cascadeIceStep`      | 冰块连消递增       | 1000                 | 3.5      |
-| `SCORE_CONFIG.stepBonus`           | 剩余步数转化       | 30                   | 3.5      |
+| `ANIMATION_CONFIG.settleBanner`    | 结算「转化定格」时长（ms） | 900           | 15 / 3.6 |
 | `ANIMATION_CONFIG.swipeThreshold`  | 滑动阈值（px）     | 25                   | 5.3      |
 | `ANIMATION_CONFIG.clearDuration`   | 消除动画时长（ms） | 250                  | 15       |
 | `ANIMATION_CONFIG.fallDuration`    | 下落动画时长（ms） | 200                  | 15       |
@@ -1347,7 +1414,15 @@ const LEVEL_3 = {
 | `STEP_BUDGET.scoreUnit`            | 分数目标的工作量单位 | 2000               | 3.6      |
 | `STEP_BUDGET.collectUnit`          | 收集目标的工作量单位 | 4                  | 3.6      |
 | `STEP_BUDGET.iceUnit`              | 消冰目标的工作量单位 | 4                  | 3.6      |
-| `ENDGAME_CONFIG.maxDetonationRounds` | 结束前引爆的最大轮数 | 8                 | 3.6      |
+| `STAR_CONFIG.settlementCoverage`   | 结算期望分计入 2★/3★ 阈值的比例 | 0.6 | 3.7 |
+| `SETTLEMENT_CONFIG.seed`           | 结算阶段的固定随机种子 | 20260922          | 3.6      |
+| `SETTLEMENT_CONFIG.stepScoreRatios` | 余步奖励的递增比例表 | `[0.012, 0.016, 0.020, 0.024, 0.027, 0.030]` | 3.5 |
+| `SETTLEMENT_CONFIG.specialWeights.stripedH` | 转化出横向条纹的权重（%） | 50 | 3.6 |
+| `SETTLEMENT_CONFIG.specialWeights.stripedV` | 转化出纵向条纹的权重（%） | 30 | 3.6 |
+| `SETTLEMENT_CONFIG.specialWeights.wrapped` | 转化出包装糖果的权重（%） | 15 | 3.6 |
+| `SETTLEMENT_CONFIG.specialWeights.magic` | 转化出魔力鸟的权重（%） | 5 | 3.6 |
+| `SETTLEMENT_CONFIG.typicalRemainingRatio` | 星级修正用的「典型余步比例」 | 0.20 | 3.7 |
+| `SETTLEMENT_CONFIG.maxChainDetonations` | 连锁引爆的步数上限 | 64          | 3.6      |
 | `STAR_CONFIG.secondFactor`         | 二星阈值倍率（× 1★ 基准分） | 1.7         | 3.7 v1.19 |
 | `STAR_CONFIG.thirdFactor`          | 三星阈值倍率（× 1★ 基准分） | 2.5         | 3.7 v1.19 |
 | `STAR_CONFIG.podFactor`            | 金豆荚关 2★/3★ 的额外倍率 | 1.2          | 3.6 / 3.7 v1.19 |
@@ -1360,14 +1435,25 @@ const LEVEL_3 = {
 | `BOOSTER_CONFIG.extraSteps`        | 加五步在步数关增加的步数 | 5        | 3.9 v1.20 |
 | `BOOSTER_CONFIG.extraSeconds`      | 加五步在时间关增加的秒数 | 10       | 3.9 v1.20 |
 | `BOOSTER_CONFIG.hammerCells`       | 小木锤一次消除的格数 | 1           | 3.9 v1.20 |
-| `VINE_MAP_CONFIG.seed`             | 藤蔓路径的固定种子（抖动确定性） | 20260922 | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.pageSize`         | 地图每页关卡数     | 10                   | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.width`            | 地图 viewBox 宽    | 360                  | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.height`           | 地图 viewBox 高    | 640                  | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.marginX`          | 节点两列的左右内缩 | 100                  | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.marginY`          | 首行 y 与上下边距  | 80                   | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.pathJitter`       | 路径控制点抖动量（px） | 26               | 19.2 v1.23 |
-| `VINE_MAP_CONFIG.nodeRadius`       | 节点半径（px）     | 16                   | 19.2 v1.23 |
+| `VINE_MAP_CONFIG.seed`             | 藤蔓路径的固定种子（用户方案的 `VINE_SEED`，抖动确定性） | 20260922 | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.pageSize`         | 地图每页关卡数     | 10                   | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.width`            | 地图 viewBox 宽（归一化 x 的换算基准） | 360            | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.height`           | 地图 viewBox 高（归一化 y 的换算基准） | 640            | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.anchors`          | 路径锚点（归一化 0–1；出口略超 1 形成跨屏接口） | 6 个锚点，见 2.3 | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodeColumns`      | 节点 X 列（归一化，≥3 列打破两列对齐） | `[0.2, 0.48, 0.76]` | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodeRows`         | 每页节点行数（每行 2 个 → 每页 10 关） | 5               | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodeMarginY`      | 节点区上下边距（归一化） | 0.08           | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodeStaggerY`     | 节点 Y 的错落幅度（归一化） | 0.015        | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.pathJitter`       | 路径控制点抖动量（px，只影响曲线形状） | 26       | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodeRadius`       | 节点半径（px）     | 16                   | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.starSize`         | 星星基准尺寸（px，= 第一版 `★` 字形的 11px） | 11    | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.starScale`        | 星星放大倍率（比第一版大 40%） | 1.4          | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.starGap`          | 星星间距（px）     | 4                    | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.leafSpacing`      | 叶子沿路径的采样间距（px） | 70             | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.leafSize`         | 叶片长度（px）     | 7                    | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.pulseMs`          | 呼吸光效周期（ms，当前关卡高亮） | 2000        | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.leafSwayMs`       | 叶片摇曳周期（ms） | 3600                 | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.pageSlideMs`      | 翻页位移时长（ms） | 320                  | 19.2 v1.24 |
 | `AUDIO_CONFIG.masterGain`          | 音效总音量（0-1）  | 0.16                 | 5.6 v1.22 |
 | `AUDIO_CONFIG.events`              | 音效事件表（波形 / 起止频率 / 时长 / 增益 / 升调倍率） | 见 5.6 | 5.6 v1.22 |
 | `HAPTIC_CONFIG.events`             | 震动事件表（毫秒模式） | 见 5.6            | 5.6 v1.22 |

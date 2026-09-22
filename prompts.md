@@ -375,6 +375,29 @@
 
 ---
 
+## Step 20：结算阶段与星级统一动态调整
+
+```text
+任务：按 ROADMAP.md §4.2 的 Step 20 实现「结算阶段」（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）
+      与「星级统一动态调整」（一条公式派生 2★/3★ 阈值，含结算期望分修正）
+开始前：
+1. 阅读 AGENTS.md（3.5 / 3.6 第 7 条 / 3.7 / 4.2 / 附录 B）、ROADMAP.md §4.2 Step 20、DECISIONS.md D041、PROGRESS.md 的 Step 20 记录。
+2. 确认三处口径：① 余步奖励用递增制、量级挂在关卡 1★ 基准分上；② 转化用固定种子的受控伪随机（mulberry32(seed + 关卡id)）；
+   ③ 结算阶段**不再消耗步数**，且**取代**旧的「每剩余一步 30 分」（否则同一批步数被计两次分）。
+子步骤：
+- 20.1：settlement.js（PRNG / 转化计划 / 引爆顺序）+ game.settleEndgame（队列式连锁引爆）+ timeline 的「转化定格」一帧。
+- 20.2：递增奖励分 settlementStepsScore + 沿用 3.5 特效倍数表的连锁引爆分；删除 SCORE_CONFIG.stepBonus 与 getRemainingStepBonus。
+- 20.3：level.computeStarThresholds（统一动态派生）+ 用 _build/measure-step20.mjs 的**实测数据**标定 typicalRemainingRatio 与 settlementCoverage。
+- 20.4（待批准）：彩星 rainbow 字段预留与存档迁移。
+验收：node tests/run-all.js 全绿；python _build/consistency_check.py 全绿；lint-levels / check-level-table PASS；
+      浏览器里过关后**先转化定格、再连锁引爆**，结束面板星级与最终分一致；LEVELS.md 阈值列与代码逐项一致。
+禁止：结算阶段消耗步数；运行时随机；为连锁引爆另起一套倍数表；顺手实现彩星；把阈值改成逐关手写的表。
+前置依赖：无（Step 12.3 的「结束前引爆」是本步前身）。
+参考：用户提交的结算阶段方案；DECISIONS.md D041；_build/measure-step20.mjs 的产数据。
+```
+
+---
+
 ## 待补充的提示词模式（随实战积累）
 
 - 报错排查类：`先把完整的报错栈贴出来` + 复现步骤 + 预期行为 三段式。

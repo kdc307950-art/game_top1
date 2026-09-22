@@ -8,6 +8,54 @@
 
 ---
 
+## D041：Step 20 —— 结算阶段（余步 → 特殊糖果 → 连锁引爆）与星级统一动态调整
+
+- 日期：2026-09-23
+- 状态：**已落地 20.1 / 20.2 / 20.3**；**20.4（彩星字段）待批准**
+- 背景：用户提交了一套完整的结算阶段方案（三个机制：**过关后剩余步数转为特殊糖果并引爆**、**连锁引爆计分**、**星级评分的动态调整**），并明确要求「阈值的合理值必须基于 19.3.1/19.3.2 的实际产出数据来定，**提前调是盲调**」。方案里「需要拍板」的三处口径本轮没有作答，按项目惯例（D035/D036 的「长时间没有选择就按推荐默认执行」）取**推荐默认**：递增制、1 步 = 1 颗、转化取代平坦加分。本记录是逐条评审与落地口径。
+- 决定：
+  1. **编号**：用户方案里建议作为「19.3.1–19.3.4」，本路线图**落在 Step 20.x**。理由：`19.3` 在 `ROADMAP.md` 里已被「解锁门槛 / 天边关卡（需先批准规则）」占用且尚未批准替换；§4.1 表里原有的那行 `20`（软件化）是**阶段项**，已改名去掉编号，避免与本步冲突。
+  2. **结算阶段的三步**（3.6 第 7 条改写）：① 剩余步数 → **递增制奖励分**；② 剩余步数 → **随机特殊糖果**；③ **从棋盘底部到顶部**逐颗引爆，级联新生成的特效**追加队列**继续爆，上限 `SETTLEMENT_CONFIG.maxChainDetonations`（64）。结算阶段**不消耗步数**（用户方案 1.5 的硬约束）。
+  3. **递增制，但量级挂在关卡基准分上**：用户给的是绝对值（2500 / 递增 5000–10000）。**本项目不采用绝对值** —— 本项目的分数体量是「1★ = 5000–40000」、步数预算是 20–34；绝对值会让结算阶段单方面把每一关推成三星（第 1 关会白送 17 万分）。故保留**递增制的形状**、把数值登记为**该关 1★ 基准分的比例**（`SETTLEMENT_CONFIG.stepScoreRatios`），并加一条**量纲护栏**：满余步的奖励分合计 ≤ 1.0 × 1★ 基准分（`tests/level.test.js` 对 6 个关卡抽样断言）。这样 50 关的「省步收益 / 星级基准」比值完全一致 —— 这才是「统一」。要改回绝对值只需改这一张表。
+  4. **受控伪随机，不是运行时随机**：用户方案 1.3 要求「玩家不知道这次会出什么，但系统知道」。实现为 `mulberry32(SETTLEMENT_CONFIG.seed + 关卡id)`：同一步数、同一关卡每次结算完全一致，不违反 3.6 第 6 条的「设计期派生、无运行时随机」。
+  5. **转化只落在朴素动物格**：空格、占格障碍（雪块/巧克力）、收集物（水果/金豆荚）、**任何带障碍物的格子**（含冰块与永久锁格的藤蔓）、已经是特效的格子一律不转化。奖励必须确定、可解释 —— 不让「冰里住着一颗特效」这类歧义状态进入结算。
+  6. **替换掉平坦的「每剩余一步 30 分」**：`SCORE_CONFIG.stepBonus` 与 `level.getRemainingStepBonus` **删除**。否则同一批剩余步数会被「平坦加分」与「结算阶段」计两次分（用户方案没有提这条，是本步必须补的边界）。
+  7. **星级统一动态派生**：`level.computeStarThresholds(star1, steps, { pod })` —— `1★` 不变（它的语义是「通关」，3.7 已规定达成目标即一星），`2★/3★ = round500(基准分 × 倍率) + round500(结算期望分 × settlementCoverage)`。用户方案 2.2 的「基准阈值 × 难度系数」**未采用**：本项目的 1★ 基准分已经承担了「难度基准」的角色（`LEVELS.md` 逐关给过），再叠一层难度系数等于把同一件事做两遍，还要重写 50 关阈值表。改为**只加结算修正**，「动态」体现在输入是每关自己的基准分与派生步数。
+  8. **彩星（20.4）不做，只登记为待批准**：用户建议「先预留字段」（`levels` 的值由数字改为对象，并要求 `STORAGE_CONFIG.schemaVersion` 升到 2）。这是一次**存档格式变更**，会牵动 `storage.js` 的迁移、`vine-map.js` 的星级读取与 `verify-step19-1/19-2` 两个套件。按宪法「每次只做一件事」，20.4 单独走一次批准，不混在本步里。
+  9. **未采纳用户表格里的一处外部口径**：连锁引爆表的「爆炸特效 → 周围 12 格」与本项目 3.2/3.3 的既有口径（包装糖果 = **3×3 共 9 格**）冲突。结算阶段**沿用本项目 3.5 的倍数表与 3.3 的范围**，不引入第二套范围定义。
+  10. **`resolveBoard` 追加 `options.final`**：结算期间的每一次引爆都跳过 3.8 的死局检测与重排（本局已结束，重排只会把棋盘搅乱；在最多 64 次引爆里反复重排会让观感失控）。
+  11. **时间线只加一帧**：`buildPhases` 在结算批次的起点插入一帧 `bonus`（「转化定格」，`ANIMATION_CONFIG.settleBanner` = 900ms），并把随后的消除基线棋盘换成**转化后**的快照。**没有**新增 UI 状态机（用户方案 1.5 的 `playing → … → result_screen`）—— 本项目 5.4 已规定「逻辑先算完再播快照」，再叠一层状态机会与 `timeline.js` 重复，故状态机由**时间线的阶段序列**表达。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **11 个文件 / 249 用例 / 2161 断言 / 0 失败 / exit 0**（新增 `tests/settlement.test.js` 11 例；改写 `game.test.js` 的两例结算口径与 `level.test.js` 的旧接口例）。
+  - **L0**：`python _build/consistency_check.py` 全部通过（`settlement.js` 已登记 2.2/2.3、附录 B 新增 10 键且无幽灵键、AGENTS/ROADMAP 版本同为 v1.25、ROADMAP 与 prompts 覆盖 Step 0-20）；`node _build/lint-levels.mjs` PASS；`node _build/check-level-table.mjs` PASS（50 关阈值列与代码逐项一致）。
+  - **产数据（标定依据）**：新增 `_build/measure-step20.mjs`，用真实模块跑 **50 关 × 2 种玩家模型 × 3 个种子 = 300 局**：通关局余步中位数 **5–6 步**（约步数预算的 19–22%）→ `typicalRemainingRatio = 0.20`；结算阶段占最终分的中位比例 **30–36%** → `settlementCoverage = 0.6`；连锁引爆次数中位 **4**、max 13（演出时长与性能的代理指标）。星级对照：旧世界（基础分 + 旧阈值）1★ 99% / 2★ 1% / 3★ 0%；新世界（最终分 + 新阈值）1★ 82% / 2★ 13% / 3★ 4%；**若不修阈值**则是 1★ 82% / 2★ 12% / 3★ 6% —— 修正把 3★ 收回约三分之一。
+  - **未验证（如实）**：浏览器 L2/L3（结算演出观感、结束面板一致性与既有 `verify-step12*.mjs` 的旧口径断言）；真机上的演出时长与性能；20.4 彩星字段。
+- 影响：`config.js`（`SETTLEMENT_CONFIG` 5 键、`STAR_CONFIG.settlementCoverage`、`ANIMATION_CONFIG.settleBanner`；删 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG` 整块）、`settlement.js`（新模块）、`level.js`（`computeStarThresholds`；删 `getRemainingStepBonus`）、`game.js`（`settleEndgame` / `applyConversion` / `chainDetonations`、`resolveBoard({ final })`、`ResolveResult.settlement`）、`timeline.js`、`app.js`、`LEVELS.md`（阈值列 + §5/§6/§7）、`AGENTS.md` v1.25、`ROADMAP.md` §4.2、`prompts.md`、`_build/{gen-levels,lint-levels,consistency_check}` + 新增 `_build/{sync-levels-stars,measure-step20}.mjs`、`tests/{settlement,level,game}.test.js`。
+- 替代方案：① 照抄 5000–10000/步的绝对值（否决：量级差一个数量级，会把 50 关的星级经济冲垮，见第 3 条）；② 运行时随机转化（否决：违反 3.6 第 6 条，结算不可复现、无法巡检）；③ 保留平坦 30 分/步并叠加结算（否决：同一批步数计两次分）；④ 用用户方案 2.2 的「基准阈值 × 难度系数」重建星阈值表（否决：与既有 1★ 基准分重复表达同一件事，且要重写 50 关 — 改为只加结算修正）；⑤ 新增 `playing → settlement → result` 的 UI 状态机（否决：与 5.4「先算完再播快照」+ `timeline.js` 重复）；⑥ 现在就把彩星字段做进存档（否决：属存档格式变更，应单独批准，见第 8 条）。
+
+## D040：Step 19.2 藤蔓地图重做（第三次迭代）的口径 —— 归一化坐标、锚点进 config、节点不再落在路径上、状态机两态
+
+- 日期：2026-09-22
+- 背景：Step 19.2（D039 / 宪法 v1.23）交付后，用户给出**修订方案**要求重做视觉与交互：「横平竖直拼接」的路径改为有机曲线、节点两列对齐改为 ≥3 个 X 水平位置、星星太小、当前关卡高亮是「粉色底 + 黄色大边框」不可接受、分页按钮语义不清、路径缺少装饰。本记录固定第三次迭代的落地口径，并**如实登记用户方案带来的一处取舍**（节点不再落在路径上）。
+- 决策：
+  1. **坐标一律归一化（0–1）**：`LEVELS.md` §9 坐标表与 `level.js` 的 `LEVEL_MAP_POS` 都存 0–1 值，渲染时乘 viewBox 宽高（`VINE_MAP_CONFIG.width` / `height`），再由 SVG 缩放到容器。**坐标三件套不变**：`LEVELS.md` §9（真相源）↔ `LEVEL_MAP_POS`（运行时表）↔ `_build/check-vine-map.mjs`（反向巡检，**只比归一化值、不依赖设备像素**）；坐标仍由 `_build/gen-vine-map.mjs` 从 `VINE_MAP_CONFIG` 生成，只写标记块之间、重复执行幂等。
+  2. **路径 = 单条平滑贝塞尔曲线**：锚点用归一化值登记在**新增键** `VINE_MAP_CONFIG.anchors`（用户方案里的 `[{x:0.85,y:0.05}, …]`）；**跨屏连续性靠 Y 轴衔接** —— 出口 y 故意略超 1（1.05），与下一页入口 y（0.05）在「页叠加坐标系」里是同一个点，形成「延伸出屏」的接口。控制点只有两类来源：`anchors` + `mulberry32(seed + page)`（控制点 = 弦中点分解 + 种子抖动），**代码里不写死任何控制点坐标**，也**不使用运行时随机**。用户方案里的 `VINE_SEED` 即已有的 `VINE_MAP_CONFIG.seed`（未新增重复常量，避免两处真相源）。
+  3. **节点排布打破两列对齐**：每页 10 个节点 = `nodeRows`(5) × 2 个，X 取 `VINE_MAP_CONFIG.nodeColumns`（3 列，`(row × 2 + 行内序号) mod 列数`），Y = `nodeMarginY + 行号 × spanY ± nodeStaggerY`（间隔均匀、略有错落）。**X 轴 ≥3 个不同水平位置是硬指标**，由 `check-vine-map.mjs` 与 `verify-step19-2` 各验一遍。
+  4. **节点坐标显式、且不参与路径计算 —— 用户方案带来的取舍（如实登记）**：第一版是「节点正好落在藤蔓路径上」（锚点即节点），新方案改为一套独立的显式节点坐标，因此**节点可以不在曲线上**，视觉上不再是「精准定位攀爬位置」。代价与收益都在此登记：代价 = 节点与藤蔓的解耦（需要靠 CSS 状态环/星星来表达进度，而不是靠「挂在藤上」的隐喻）；收益 = 路径可以做成有机曲线（不再被 5 行 × 2 列的锚点约束成折线）、节点可用 ≥3 列的自由布局。**测试断言随之改写**：删掉「每个节点都在路径上」，改为「路径只由 `anchors` + 固定种子决定、与节点坐标无关」（`buildVineAnchors()` 深等于 config 锚点 × viewBox；路径 `d` 里不出现任何本页节点坐标；控制点偏离弦以证明是曲线）。
+  5. **节点状态机（`data-state`）两态**：`visited`（已通关：亮金状态环 + 星星填充）与 `attainable`（可玩未通关：绿色描边 + 轻微脉冲）。样式全部由 CSS 属性选择器（`[data-state]` / `[data-stars]`）驱动，**节点不使用内联样式**。**19.2 阶段 50 关只能是这两态，绝不出现 `locked`** —— 「只画不拦」的验收核心（nodeState 是纯函数，任何输入都只会得到这两态之一）。
+  6. **星星**：从节点正下方**移出到右侧**（避免压在藤蔓上）、尺寸 = `starSize`(11) × `starScale`(1.4) = 15.4px（比第一版的 11px `★` 字形大 40%）、间距 `starGap`(4px)；未点亮 `#555` 描边、点亮 `#fbc531` 实心。节点圆环边框按星级进度四色（0 暗灰 / 1 浅绿 / 2 中绿 / 3 亮金）。
+  7. **当前关卡改为呼吸光效**：新增 `.vine-node-halo` + `@keyframes pulse`（周期 `pulseMs` = 2000ms，品牌亮金 `#fbc531`），**删除第一版的粉色底（#ff4fd8）+ 黄色大边框**；由 `renderMap` 的 `current` 入参决定（`app.js` 传 `view.levelId`，地图层仍不读游戏状态）。
+  8. **分页 UI 与总星数进度条**：底部是 `[◀] 第 N / 5 页 [▶]`（DOM 按钮，`click` 委托在 `app.js`，**不碰 `input.js` 的手势**）；切页用 `transform: translateX` + `transition`（`pageSlideMs`）做 FLIP 式平滑位移。分页上方是总星数进度条（`⭐ n/150`），总星数由 `app.js` 用 `storage.getTotalStars(view.levelStars)` **只读派生**后传入 —— 地图层仍不碰存储，也不重复实现派生口径。
+  9. **叶子与卷须点缀**：路径入 DOM 后，用 `path.getPointAtLength()` 每 `leafSpacing`(70px) 取点，按**前后两点的切线方向**旋转内联 `<ellipse>` 叶子，并做轻微摇曳（`leafSwayMs`）。**零外部素材、零新依赖**；`prefers-reduced-motion` 下关闭位移与动画。叶子元素带 `data-along` / `data-angle`，供巡检脚本独立复算取证。
+  10. **时长/周期数值仍归 config**：`pulseMs` / `leafSwayMs` / `pageSlideMs` 登记在 `VINE_MAP_CONFIG`（附录 B），由 `renderMap` 以 CSS 自定义属性（`--vine-pulse-ms` 等）桥接给 CSS；唯一的动态内联样式是轨道位移 `transform` 与进度条宽度（都是数据驱动的位置/宽度，不是节点状态样式）。
+  11. **不做**：不加 `unlockStars` 解锁门槛、不加「天边」云层、不加隐藏关、不改 `input.js`、不动 `--booster-bar-h` 之外的布局变量；地图层仍是画布外的绝对定位层，**不参与 `computeBoardSize`**（`verify-step12b` 的几何不变断言继续把关）。
+- 依据与证据：L1 = `node tests/run-all.js` **237 用例 / 2079 断言 / 0 失败 / exit 0**（`tests/vine-map.test.js` 由 7 例 70 断言改为 10 例 83 断言：新增状态机、星形路径、锚点归一化与「路径与节点无关」的断言）；L0 = `python _build/consistency_check.py` 全部通过（`VINE_MAP_CONFIG` 8→19 键已登记、无幽灵键、两文件版本 v1.24 相等）+ `node _build/check-vine-map.mjs` **PASS 17/17**（归一化逐项一致 + 独立重算页号/列/错落 + X 水平位置 ≥3 + 锚点跨屏衔接）+ `check-level-table.mjs` / `lint-levels.mjs` PASS；L2/L3 = `_build/verify-step19-2.mjs` **全绿**（50 节点连续无缺、X 轴 3 个水平位置、节点无内联样式、零锁、`data-state` 两态、两次独立渲染 `d` 完全一致且抽样点偏离弦 164px、5 页各 10 个节点在视口内、叶子位置/切线角度独立复算误差 < 0.6px / < 1.5°、星星包围盒等于 15.4px 的理论值、点亮/未点亮可读、无粉色 `#ff4fd8`、当前关 `animation: pulse 2s`、点节点进对应关、脏星级规范化、页面不可滚动、控制台干净），`verify-step12b` 改可见性判据（DOM 显隐 → 视口矩形）后仍全绿。
+- 影响：`AGENTS.md` v1.24（顶部修订说明、2.2/2.3、附录 B、第 11 节）、`ROADMAP.md`（头部、Step 19.2 行、第 6 节）、`config.js`（`VINE_MAP_CONFIG` 重写）、`level.js`（`LEVEL_MAP_POS` 归一化）、`LEVELS.md` §9（归一化表）、`vine-map.js`、`vine-map.css`、`app.js`（`turnMapPage` + 总星数入参）、`tests/vine-map.test.js`、`_build/gen-vine-map.mjs`、`_build/check-vine-map.mjs`、`_build/verify-step19-2.mjs`、`_build/verify-step12b.mjs`、`PROGRESS.md`、本文件。
+- 替代方案：① 保留「节点落在路径上」（否决：用户方案明确要求节点显式坐标、路径不被节点约束；否则无法得到有机曲线与 ≥3 列布局）；② 把锚点写死在 `vine-map.js`（否决：数值必须集中登记在 `config.js` 附录 B，且巡检脚本要能读到同一份配置）；③ 混合「部分写死控制点 + 部分 PRNG」（用户明确禁止，且会让「同配置同结果」无法解释）；④ 用 `Math.random()` 做叶子/抖动（否决：违反设计期派生，且断言不了确定性）；⑤ 只改 CSS 大小来「放大 40%」（否决：第一版的星星是 `★` 字形，`font-size` 放大与矢量星形不是同一件事；本次改为真实五角星路径，尺寸可被 `getBBox()` 独立验算）；⑥ 直接实现 19.3 的解锁门槛（否决：属规则变更，未获批准）。
+- 未验证：**真机观感与触控热区**（叶子的摇曳幅度、呼吸光效的强弱、`nodeRadius` 16px 在真机上是否好点、翻页位移的流畅度）只在桌面 headless Chrome + 390×844 窄屏模拟下验证；`prefers-reduced-motion` 关闭动画只在 CSS 层声明，未在真实系统设置下取证。
+
+---
+
 ## D039：Step 19.2 藤蔓关卡地图的口径（滚动 (a)、坐标三件套、确定性路径、只画不拦）
 
 - 日期：2026-09-22

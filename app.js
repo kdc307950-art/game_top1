@@ -23,7 +23,7 @@ import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
 import { DEMO_LEVEL_IDS, LEVEL_COUNT, getLevelConfig, isTimeLevel } from './level.js';
 import { pageOf, renderMap } from './vine-map.js'; // Step 19.2：藤蔓关卡地图（画布外的 SVG 层）
-import { createStorage } from './storage.js';
+import { createStorage, getTotalStars } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
 const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -402,17 +402,19 @@ function attemptSwap(a, b) {
       (result.resolve.collected.length > 0 ? `，收集 ${result.resolve.collected.length} 个` : '')
   );
 
+  // Step 20（v1.25，3.6 第 7 条）：本局结束时的**结算阶段**。它排在这一手之后、星级结算之前，
+  // 因此日志顺序与时间线的阶段顺序一致（转化定格 → 连锁引爆 → 结束面板）。
+  if (result.resolve.settlement) {
+    log('info', `结算阶段（3.6 第 7 条 / Step 20）：${settlementText(result.resolve.settlement)}`);
+  }
+
   // 3.8：死局与重排的结果（成功：提示 + 重排动画；失败：结束流程，不消耗步数）
   const deadlock = result.resolve.deadlock;
   view.endReason = view.game.level.completed ? 'won' : 'steps';
   if (view.game.level.completed) {
-    // 3.6 / 3.7：通关优先于「步数用尽」——最后一步达成目标也算通关（此时剩余步数已被转化）
+    // 3.6 / 3.7：通关优先于「步数用尽」——最后一步达成目标也算通关（此时剩余步数已进入结算阶段）
     view.endReason = 'won';
-    log(
-      'info',
-      `关卡完成（3.6）：${describeGoal(view.game.level.goal)}，剩余 ${result.stepsLeft} 步按 3.5 转化为分数，` +
-        `本局 ${view.game.level.currentScore} 分`
-    );
+    log('info', `关卡完成（3.6）：${describeGoal(view.game.level.goal)}，本局 ${view.game.level.currentScore} 分`);
   } else if (deadlock) {
     if (deadlock.shuffled) {
       log('info', `检测到无可消除组合，已重排棋盘（第 ${deadlock.tries} 次尝试成功，不消耗步数）`);
@@ -446,7 +448,8 @@ function startTimeline(result, scoreBefore) {
     tailBonus: result.scoreDelta - levelTotal
   };
   const motion = motionDurations(view.systemReducedMotion);
-  timeline.play(buildPhases(result.resolve, result.afterSwap, motion));
+  // Step 20（v1.25）：把结算阶段元信息一起交给时间线 —— 它会在引爆之前插入一帧「转化定格」
+  timeline.play(buildPhases(result.resolve, result.afterSwap, motion, result.resolve.settlement));
 }
 
 function finishTimeline() {
@@ -567,8 +570,7 @@ function bindMap() {
   host.addEventListener('click', (event) => {
     const pager = event.target.closest?.('[data-pager]');
     if (pager) {
-      view.mapPage = Number(pager.dataset.pager) || 1;
-      drawMap();
+      turnMapPage(pager.dataset.pager === 'next' ? 1 : -1);
       return;
     }
     const node = event.target.closest?.('[data-level]');
@@ -603,11 +605,30 @@ function hideMap() {
   if (view.canvas) view.canvas.hidden = false;
 }
 
-/** 重画地图（翻页或从对局回来时调用）；星级从存档读，地图层自己不碰存储。 */
-function drawMap() {
+/**
+ * 翻页（19.2 v2 的分页箭头 `[◀] 第 N / 5 页 [▶]`）：夹到 [1, 页数]，从 `from` 滑到新页。
+ * 分页是**按钮**而不是滚动容器 —— 5.1 的「禁滚动/缩放」不受影响；触摸手势仍归 input.js。
+ */
+function turnMapPage(step) {
+  const from = view.mapPage;
+  const total = pageOf(LEVEL_COUNT);
+  view.mapPage = Math.min(Math.max(from + step, 1), total);
+  if (view.mapPage === from) return;
+  drawMap(from);
+  log('info', `地图翻页：第 ${from} 页 → 第 ${view.mapPage} 页（共 ${total} 页）`);
+}
+
+/** 重画地图（翻页或从对局回来时调用）；星级与总星数从存档读，地图层自己不碰存储。 */
+function drawMap(fromPage = view.mapPage) {
   const host = document.getElementById('map');
   if (!host) return;
-  renderMap(host, { page: view.mapPage, stars: view.levelStars });
+  renderMap(host, {
+    page: view.mapPage,
+    fromPage,
+    stars: view.levelStars,
+    current: view.levelId,
+    totalStars: getTotalStars(view.levelStars) // 总星数是派生量（v1.21 口径），只读不写
+  });
 }
 
 /** 点某一关：只做「切关卡 + 开新局」，不写任何存档（19.2 不碰存储）。 */
@@ -670,7 +691,7 @@ function drawFrame(entry = null, progress = 1) {
     clearing: entry && entry.phase === 'clear' ? { keys: entry.keys, progress } : null,
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
-    banner: entry && entry.phase === 'shuffle' ? entry.banner : null, // 5.5：重排前给出明确提示
+    banner: entry?.banner ?? null, // 5.5：重排提示 / Step 20：结算阶段的「转化定格」提示
     // Step 19.2：选关界面已改为画布外的藤蔓地图层（`#map`），canvas 场景里不再有选关网格
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,
@@ -760,6 +781,15 @@ function progressLabel() {
 
 function progressValue(result) {
   return isTimeLevel(view.game.level) ? `${Math.ceil(view.game.level.remainingTime)}s` : result.stepsLeft;
+}
+
+/** Step 20（v1.25）：结算阶段的日志文案（`resolve.settlement` 为空时不会被调用）。 */
+function settlementText(settlement) {
+  return (
+    `剩余 ${settlement.steps} 步 → 奖励 +${settlement.stepScore} 分，` +
+    `转化 ${settlement.converted.length} 颗特殊糖果，` +
+    `从棋盘底部到顶部连锁引爆 ${settlement.detonations} 次`
+  );
 }
 
 /** 正式日志入口（AGENTS.md 6 节：不使用调试用 console.log）。 */

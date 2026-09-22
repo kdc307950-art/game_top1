@@ -1,19 +1,28 @@
-/* vine-map.css — 藤蔓关卡地图的样式（Step 19.2 / AGENTS.md 2.3 / 5.1）。
+/* vine-map.css — 藤蔓关卡地图的样式（Step 19.2 v2 / AGENTS.md 2.3 / 5.1；口径见 DECISIONS D040）。
    地图是**画布外的绝对定位层**：它覆盖整个视口，不参与 canvas 的 `computeBoardSize`，
    也不改 styles.css 里除 `--booster-bar-h` 之外的任何变量。禁止页面滚动（5.1）依旧成立 —— 分页是按钮，
-   不是滚动容器。 */
+   不是滚动容器。节点状态一律由 `data-state` / `data-stars` 驱动（**不使用内联样式**）。 */
 
 #map {
+  /* 时长与周期来自 config.js 的 VINE_MAP_CONFIG（renderMap 以自定义属性注入），这里只给兜底值 */
+  --vine-pulse-ms: 2000ms;
+  --vine-leaf-ms: 3600ms;
+  --vine-slide-ms: 320ms;
+  --vine-path: #2d6a4f;   /* 藤蔓品牌深绿 */
+  --vine-gold: #fbc531;   /* 品牌亮金（当前关卡呼吸光效 / 三星环 / 点亮星星） */
+  --vine-attainable: #2d6a4f; /* attainable 状态的绿色描边 */
+  --vine-star-off: #555;  /* 未点亮星星的描边 */
   position: absolute;
   inset: 0;
   z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 8px;
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   box-sizing: border-box;
+  overflow: hidden;
   background: var(--bg);
   touch-action: manipulation;
 }
@@ -22,20 +31,39 @@
   display: none;
 }
 
-.vine-svg {
+/* 一屏只露一页：横向轨道靠 `transform: translateX` + `transition` 平滑位移（分页按钮驱动） */
+.vine-viewport {
+  flex: 1 1 auto;
   width: min(100%, 360px);
-  height: auto;
-  max-height: calc(100% - 56px);
+  overflow: hidden;
+}
+
+.vine-track {
+  display: flex;
+  height: 100%;
+  width: calc(var(--vine-pages, 5) * 100%);
+  transition: transform var(--vine-slide-ms) ease-out;
+}
+
+.vine-page {
+  flex: 0 0 calc(100% / var(--vine-pages, 5));
+  height: 100%;
+}
+
+.vine-page-svg {
   display: block;
+  width: 100%;
+  height: 100%;
   overflow: visible;
 }
 
-/* 藤蔓本体：`stroke-dasharray/offset` 做「生长」动画（不依赖 JS 逐帧） */
+/* 藤蔓本体：有机曲线（单条平滑贝塞尔）；`stroke-dasharray/offset` 只做一次「生长」观感 */
 .vine-path {
   fill: none;
-  stroke: #2d6a4f;
+  stroke: var(--vine-path);
   stroke-width: 8;
   stroke-linecap: round;
+  stroke-linejoin: round;
   stroke-dasharray: 4000;
   stroke-dashoffset: 4000;
   transition: stroke-dashoffset 900ms ease-out;
@@ -45,19 +73,91 @@
   stroke-dashoffset: 0;
 }
 
+/* 叶子与卷须：沿路径切线方向摆放，做轻微摇曳（尊重 prefers-reduced-motion） */
+.vine-leaf-blade {
+  fill: #40916c;
+  opacity: 0.75;
+  transform-box: fill-box;
+  transform-origin: 0% 50%;
+  animation: sway var(--vine-leaf-ms) ease-in-out infinite alternate;
+}
+
+@keyframes sway {
+  from {
+    transform: rotate(-7deg);
+  }
+  to {
+    transform: rotate(9deg);
+  }
+}
+
+/* 呼吸光效（用户方案：2s 循环，品牌色）—— 当前关卡与 attainable 状态共用这套关键帧 */
+@keyframes pulse {
+  0%,
+  100% {
+    stroke-opacity: 0.45;
+    stroke-width: 2;
+  }
+  50% {
+    stroke-opacity: 1;
+    stroke-width: 4;
+  }
+}
+
 .vine-node {
   cursor: pointer;
 }
 
-.vine-node-body {
-  fill: #3a3357;
-  stroke: rgba(255, 255, 255, 0.35);
+/* 状态环：attainable = 绿色描边 + 轻微脉冲；visited = 亮金边框。19.2 只画不拦 → 没有 locked 样式 */
+.vine-node-ring {
+  fill: none;
   stroke-width: 2;
+  stroke-opacity: 0.45;
 }
 
-.vine-node--cleared .vine-node-body {
-  fill: #ff4fd8;
-  stroke: #ffd93b;
+.vine-node[data-state='attainable'] .vine-node-ring {
+  stroke: var(--vine-attainable);
+  animation: pulse calc(var(--vine-pulse-ms) * 1.6) ease-in-out infinite;
+}
+
+.vine-node[data-state='visited'] .vine-node-ring {
+  stroke: var(--vine-gold);
+  stroke-opacity: 1;
+}
+
+/* 当前关卡：呼吸光效脉冲（旧的「粉色底 + 黄色大边框」已删除） */
+.vine-node-halo {
+  display: none;
+  fill: none;
+  stroke: var(--vine-gold);
+  stroke-width: 3;
+}
+
+.vine-node--current .vine-node-halo {
+  display: inline;
+  animation: pulse var(--vine-pulse-ms) ease-in-out infinite;
+}
+
+/* 节点本体：圆环边框颜色按星级进度（0 星暗灰 / 1 星浅绿 / 2 星中绿 / 3 星亮金） */
+.vine-node-body {
+  fill: #241f38;
+  stroke-width: 2.5;
+}
+
+.vine-node[data-stars='0'] .vine-node-body {
+  stroke: #5b5570;
+}
+
+.vine-node[data-stars='1'] .vine-node-body {
+  stroke: #8ed081;
+}
+
+.vine-node[data-stars='2'] .vine-node-body {
+  stroke: #3f9e4d;
+}
+
+.vine-node[data-stars='3'] .vine-node-body {
+  stroke: var(--vine-gold);
 }
 
 .vine-node-label {
@@ -66,42 +166,93 @@
   pointer-events: none;
 }
 
-.vine-node-stars {
-  fill: #ffd93b;
-  font: 500 11px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  pointer-events: none;
+/* 星星：从节点正下方移出到右侧，尺寸 = starSize × starScale（比第一版大 40%），间距 starGap */
+.vine-node-star {
+  fill: none;
+  stroke: var(--vine-star-off);
+  stroke-width: 1.4;
+}
+
+.vine-node-star--on {
+  fill: var(--vine-gold);
+  stroke: var(--vine-gold);
 }
 
 .vine-node:focus-visible .vine-node-body {
-  stroke: #ffd93b;
-  stroke-width: 3;
+  stroke: var(--vine-gold);
+  stroke-width: 3.5;
 }
 
+/* 总星数进度条（`⭐ 12/150`；只读展示，不写存档） */
+.vine-progress {
+  width: min(100%, 300px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: #ffffff;
+  font: 600 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.vine-progress-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.vine-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--vine-gold);
+  transition: width var(--vine-slide-ms) ease-out;
+}
+
+/* 分页：`[◀] 第 N / 5 页 [▶]`（DOM 按钮，click 由 app.js 委托） */
 .vine-pager {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 4px;
 }
 
 .vine-pager-button {
-  min-width: 58px;
-  padding: 6px 8px;
+  width: 46px;
+  height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 9px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
-  font: 500 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font: 600 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   cursor: pointer;
 }
 
-.vine-pager-button[aria-current='true'] {
-  background: #ff4fd8;
-  color: #2a0b23;
-  border-color: #ffd93b;
+.vine-pager-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.vine-pager-label {
+  min-width: 96px;
+  text-align: center;
+  color: #ffffff;
+  font: 600 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .vine-track {
+    transition: none;
+  }
+
   .vine-path {
     transition-duration: 0.001ms;
     stroke-dashoffset: 0;
+  }
+
+  .vine-node-ring,
+  .vine-node-halo,
+  .vine-leaf-blade {
+    animation: none;
   }
 }

@@ -31,7 +31,15 @@ import {
   calcFinalScore,
   calcSpecialMultiplier
 } from './score.js';
-import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, getRemainingStepBonus, grantSteps, grantTime, isTimeLevel } from './level.js';
+import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, grantSteps, grantTime, isTimeLevel } from './level.js';
+// Step 20（v1.25）：结算阶段（剩余步数 → 奖励分 + 随机特殊糖果 → 连锁引爆）的纯函数都在 settlement.js
+import {
+  conversionPlan,
+  detonationOrder,
+  findCellById,
+  settlementRngFor,
+  settlementStepsScore
+} from './settlement.js';
 
 /**
  * 4.2：createGame(levelConfig, options?) —— 建一局游戏。
@@ -94,11 +102,14 @@ export function trySwap(state, a, b) {
   if (!timed) consumeStep(state.level);
   const moveResult = forced ? resolveBoard(state, { initialClear: forced }) : resolveBoard(state);
 
-  // Step 12.3（用户批准）：走完最后一步（步数用尽）或已经达成目标时，**先引爆盘面上的特殊方块再最终结算**。
-  // 引爆是链式的（引爆过程中新生成的特殊方块继续引爆），成果照常计入目标进度与分数 ——
-  // 因此「最后一步引爆刚好达成目标」算通关。时间关没有「最后一步」，改由归零那一刻引爆（tickTime）。
+  // Step 20（v1.25，3.6 第 7 条）：走完最后一步（步数用尽）或已经达成目标时，进入**结算阶段** ——
+  // 剩余步数先变成递增奖励分与随机特殊糖果，再把盘面上的特殊糖果按「从底部到顶部」依次连锁引爆。
+  // 引爆的消除与得分照常计入目标进度与分数，因此「最后一步引爆刚好达成目标」算通关。
+  // 时间关没有「最后一步」，改由归零那一刻进入结算（tickTime）。
   const stepsExhausted = !timed && state.level.remainingSteps <= 0;
-  const endgame = stepsExhausted || state.level.completed ? detonateSpecials(state) : null;
+  const endgame = stepsExhausted || state.level.completed
+    ? settleEndgame(state, { atIndex: moveResult.levels.length })
+    : null;
   const resolve = endgame ? mergeResolveResults([moveResult, endgame]) : moveResult;
   // 3.8 约束 4：死局且重排超过上限 → 判定关卡异常，进入结束流程（与「步数用尽」同为结束条件）
   const stuck = Boolean(resolve.deadlock) && !resolve.deadlock.shuffled;
@@ -125,13 +136,14 @@ export function trySwap(state, a, b) {
  *   cascades / levels / cleared / spawned / capped（来自 board.resolveCascades）
  *   + scoreDelta（本次结算总分）+ levelScores（逐层明细，供 UI 与测试核对公式）
  *   + deadlock（3.8：消除与填充完成后检测死局并尝试重排；无死局时为 null）
+ * v1.25（Step 20）追加 `options.final`：结算阶段（本局已结束）的每一次引爆都传它 ——
+ * 跳过 3.8 的死局检测与重排，避免「已经结算完了又把棋盘搅乱」。缺省行为与既有调用完全一致。
  */
 export function resolveBoard(state, options = {}) {
   const result = resolveCascades(state.board, state.level.colorCount, {
     rng: state.rng,
     initialClear: options.initialClear // 3.2 的魔力鸟交换用（v1.11 登记）
   });
-
   let scoreDelta = 0;
   const levelScores = [];
   for (const level of result.levels) {
@@ -150,15 +162,15 @@ export function resolveBoard(state, options = {}) {
   // 顺序很重要：目标判定必须用「本步结算后」的计数与分数，否则最后一手永远差一步。
   accumulateProgress(state.level, result);
   if (!state.level.completed && checkGoal(state.level, state.board, state.level.currentScore, state.level.collected)) {
-    // 3.7：达成目标即通关；3.5 的剩余步数转化在通关的**这一刻**一次性结算（repeat 调用不会重复加）
+    // 3.7：达成目标即通关。**v1.25 起不再在这里加「剩余步数分」** —— 剩余步数的转化整体搬到了
+    // 结算阶段（`settleEndgame`），由调用方在本手结算之后执行一次；这样做是为了让「同一个剩余步数」
+    // 只被结算一次（旧的平坦 30 分/步与新的结算阶段会重复计分）。
     state.level.completed = true;
-    const stepBonus = getRemainingStepBonus(state.level.remainingSteps);
-    state.level.currentScore += stepBonus;
-    scoreDelta += stepBonus;
   }
 
-  // 已通关就不必再为重排操心（3.8 的检测是为了继续玩下去，而不是为了结算面板）
-  const deadlock = state.level.completed ? null : ensurePlayable(state);
+  // 已通关就不必再为重排操心（3.8 的检测是为了继续玩下去，而不是为了结算面板）；
+  // 结算阶段的每一次引爆同样跳过重排（`options.final`）—— 本局已经结束，重排只会把棋盘搅乱。
+  const deadlock = state.level.completed || options.final ? null : ensurePlayable(state);
   return { ...result, scoreDelta, levelScores, deadlock };
 }
 
@@ -202,7 +214,7 @@ export function tickTime(state, seconds) {
     return { remainingTime, gameOver: false, won: level.completed, resolve: null };
   }
 
-  const resolve = detonateSpecials(state); // 3.6 第 7 条：本局结束前引爆特殊方块
+  const resolve = settleEndgame(state, { atIndex: 0 }); // 3.6 第 7 条：归零那一刻进入结算阶段
   state.gameOver = true;
   return { remainingTime, gameOver: true, won: level.completed, resolve };
 }
@@ -438,39 +450,107 @@ function normalizeLevelConfig(config) {
 }
 
 /**
- * Step 12.3：本局结束时引爆盘面上的特殊方块，返回合并后的结算结果（没有特殊方块时返回 null）。
- * 每一轮把「盘面上所有特殊方块的坐标」作为 `initialClear` 交给 `resolveCascades` ——
- * Step 10 起 initialClear 的格子同时充当**激活种子**，因此条纹/包装会各自展开、并被链式传播；
- * 魔力鸟在 D025 的保守口径下只清自己，所以这里额外把「它保留的颜色」的全屏同色格一起点燃。
- * 一轮之后若级联又生成了新的特殊方块，就再来一轮，直到盘面没有特殊方块或达到轮数上限。
+ * 3.6 第 7 条（v1.25，Step 20）：本局结束时的**结算阶段**，返回合并后的 ResolveResult。
+ *
+ *   ① 剩余步数 → 递增制奖励分（`settlementStepsScore`，量级 = 该关 1★ 基准分 × 比例）；
+ *   ② 剩余步数 → 随机特殊糖果（**受控伪随机**：`mulberry32(seed + 关卡id)`，落在朴素动物格上）；
+ *   ③ 把盘面上的特殊糖果按「从棋盘底部到顶部」的顺序**依次引爆**：每引爆一颗就走一次完整结算
+ *      （激活 → 下落 → 填充 → 级联），级联中新生成的特殊糖果会被追加到队列继续引爆，
+ *      直到队列清空或达到 `SETTLEMENT_CONFIG.maxChainDetonations`。
+ *
+ * 返回的对象除 4.2 的 ResolveResult 字段外还带一个 `settlement`：
+ *   `{ steps, stepScore, detonations, converted, board, atIndex }` ——
+ *   `board` 是「转化之后、第一颗引爆之前」的棋盘快照，供 UI 先把这批特殊糖果画出来；
+ *   `atIndex` 是引爆批次在 `levels` 里的起始下标（它之前的层属于玩家的最后一手）。
+ *
+ * 没有剩余步数、盘面也没有特殊糖果时返回 null（本局直接就结束了，没有结算演出）。
  */
-function detonateSpecials(state) {
-  const rounds = [];
-  const maxRounds = CONFIG.ENDGAME_CONFIG.maxDetonationRounds;
-  for (let round = 0; round < maxRounds; round += 1) {
-    const seeds = detonationSeeds(state.board);
-    if (seeds.length === 0) break;
-    rounds.push(resolveBoard(state, { initialClear: seeds }));
-  }
-  if (rounds.length === 0) return null;
-  const merged = mergeResolveResults(rounds);
-  merged.deadlock = null; // 本局已结束：3.8 的死局检测是为了继续玩，这里不再重排
+function settleEndgame(state, { atIndex = 0 } = {}) {
+  const level = state.level;
+  const steps = Math.max(0, Math.trunc(level.remainingSteps ?? 0));
+  // 奖励分与转化数量的量级都挂在该关的 1★ 基准分上（理由见 config.js 的 SETTLEMENT_CONFIG 注释）
+  const scale = Number.isFinite(level.starThresholds?.[0]) ? level.starThresholds[0] : 0;
+
+  const plan = conversionPlan(state.board, steps, settlementRngFor(level.id));
+  const converted = applyConversion(state.board, plan);
+  const convertedBoard = cloneBoard(state.board); // 引爆前快照：UI 用它画出「刚变出来的」特殊糖果
+  const stepScore = settlementStepsScore(steps, scale);
+  if (stepScore > 0) level.currentScore += stepScore;
+
+  const chain = chainDetonations(state);
+  if (converted.length === 0 && chain.rounds.length === 0 && stepScore === 0) return null;
+
+  const merged = mergeResolveResults(chain.rounds);
+  merged.deadlock = null; // 本局已结束：3.8 的重排已无意义（结算内部也已用 final 跳过）
+  const detonationScore = merged.scoreDelta; // 连锁引爆本身挣到的分（消除 + 障碍层数 + 连消）
+  merged.scoreDelta += stepScore; // 关卡级一次性结算，不在逐层明细里（app.js 的 tailBonus 兜住）
+  merged.settlement = {
+    steps,
+    stepScore,
+    detonationScore,
+    detonations: chain.count,
+    converted,
+    board: convertedBoard,
+    atIndex
+  };
   return merged;
 }
 
-/** 引爆要点燃的坐标：盘面上每个特殊方块自身；魔力鸟再加上「它自己那颗颜色」的全屏同色格。 */
-function detonationSeeds(board) {
-  const seeds = [];
-  board.forEach((row, r) => {
-    row.forEach((cell, c) => {
-      if (!cell || cell.type === CELL_TYPE.NORMAL) return;
-      seeds.push({ r, c });
-      if (cell.type === CELL_TYPE.MAGIC && cell.color !== null && cell.color !== undefined) {
-        seeds.push(...getMagicTargets(board, cell.color));
-      }
-    });
-  });
-  return seeds;
+/**
+ * 把转化计划落到棋盘上：只改 `type` / `direction`，不动 `color` / `obstacle` / `collectible`
+ * （格子对象本身不变，因此动画的 `cell.id` 追踪仍然成立）。返回已应用的明细。
+ */
+function applyConversion(board, plan) {
+  const applied = [];
+  for (const item of plan) {
+    const cell = board[item.r]?.[item.c];
+    if (!cell || cell.color === null || cell.color === undefined) continue;
+    cell.type = item.type;
+    cell.direction = item.direction;
+    applied.push({ r: item.r, c: item.c, type: item.type, direction: item.direction, color: cell.color });
+  }
+  return applied;
+}
+
+/**
+ * 3.6 第 7 条（v1.25）：队列式连锁引爆 —— 从棋盘底部到顶部依次引爆**一颗**特殊糖果。
+ * 队列里存 `cell.id` 而不是坐标：上一次引爆的级联会让格子随重力移动，坐标当场就失效了。
+ * 每一步都用 `resolveBoard(..., { final: true })` 结算，因此结算期间不会再触发死局重排。
+ */
+function chainDetonations(state) {
+  const maxSteps = Math.max(1, Math.trunc(CONFIG.SETTLEMENT_CONFIG.maxChainDetonations));
+  const rounds = [];
+  const pending = [];
+  const queued = new Set();
+
+  // 把盘面上尚未入队的特殊糖果按「底 → 顶」追加进队列；每引爆一颗后再调一次，把新生成的接上
+  const enqueueAll = () => {
+    for (const pos of detonationOrder(state.board)) {
+      const cell = state.board[pos.r][pos.c];
+      if (queued.has(cell.id)) continue;
+      queued.add(cell.id);
+      pending.push(cell.id);
+    }
+  };
+
+  enqueueAll();
+  let count = 0;
+  while (pending.length > 0 && count < maxSteps) {
+    const pos = findCellById(state.board, pending.shift());
+    if (!pos) continue; // 已被上一波连锁吃掉
+    const cell = state.board[pos.r][pos.c];
+    if (cell.type === CELL_TYPE.NORMAL) continue; // 已被清除并补位成普通格
+
+    // 魔力鸟在 D025 的保守口径下只清自己，故额外把「它保留的颜色」的全屏同色格一起点燃
+    const seeds = [{ r: pos.r, c: pos.c }];
+    if (cell.type === CELL_TYPE.MAGIC && cell.color !== null && cell.color !== undefined) {
+      seeds.push(...getMagicTargets(state.board, cell.color));
+    }
+    rounds.push(resolveBoard(state, { initialClear: seeds, final: true }));
+    count += 1;
+    enqueueAll();
+  }
+  return { rounds, count };
 }
 
 /** 把多轮结算的结果合并成一个 ResolveResult（供 UI 一次播完，字段与 4.2 一致）。 */
@@ -485,7 +565,8 @@ function mergeResolveResults(results) {
     capped: false,
     scoreDelta: 0,
     levelScores: [],
-    deadlock: null
+    deadlock: null,
+    settlement: null // v1.25：结算阶段元信息（无结算时为 null）
   };
   for (const result of results) {
     if (!result) continue;
@@ -499,6 +580,8 @@ function mergeResolveResults(results) {
     merged.scoreDelta += result.scoreDelta;
     merged.levelScores.push(...result.levelScores);
     merged.deadlock = merged.deadlock ?? result.deadlock;
+    // v1.25：结算阶段的元信息（转化明细、奖励分、引爆起始下标）要穿过合并，UI 才能播对首帧
+    if (result.settlement) merged.settlement = result.settlement;
   }
   return merged;
 }

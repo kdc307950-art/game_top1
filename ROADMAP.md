@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.23
+> 版本：v1.25
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -944,9 +944,9 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | 子步骤 | 内容 | 状态 |
 |---|---|---|
 | **19.1** | 存档版本化 + 就地迁移 + 可注入 backend + `totalStars` 改派生函数 | **已完成**（宪法 v1.21） |
-| **19.2** | 藤蔓地图（只读视觉层：SVG 藤蔓 + 关卡节点 + 星级，只画不加门槛）；坐标三件套 + 确定性路径；改写 `verify-step12b` | **已完成**（宪法 v1.23；`_build/verify-step19-2.mjs` 22 项全绿，`verify-step12b` 改后 18 项全绿，`check-vine-map.mjs` PASS） |
+| **19.2** | 藤蔓地图（只读视觉层：SVG 藤蔓 + 关卡节点 + 星级，只画不加门槛）；坐标三件套（**归一化 0–1**）+ 确定性路径（**单条平滑贝塞尔**，锚点进 config）；改写 `verify-step12b` | **已完成**（宪法 v1.23 首版 / **v1.24 按用户修订方案重做**：归一化坐标、有机曲线、节点状态机、星星 +40%、呼吸光效、翻页箭头 + 总星数进度条、叶子点缀；`_build/verify-step19-2.mjs` 全绿，`verify-step12b` 仍绿，`check-vine-map.mjs` PASS —— 见 DECISIONS D040） |
 | **19.3** | 解锁门槛（`unlockStars`）与「天边关卡」云层 | **挂起 —— 需先批准规则**（宪法 3.6 目前没有「解锁」概念） |
-| **20** | 软件化（Tauri 还是保留 Capacitor；工具链、前端零改动加载、存档双写） | 挂起 —— 需改 2.1/0.3 与 Step 18，属用户拍板项 |
+| **软件化** | 软件化（Tauri 还是保留 Capacitor；工具链、前端零改动加载、存档双写） | 挂起 —— 需改 2.1/0.3 与 Step 18，属用户拍板项（**阶段项，不占 Step 号**；Step 20 已被结算阶段占用，见 §4.2） |
 
 **19.2 的范围**：`vine-map.js`（新模块）+ 坐标数据（落 `level.js` 的表或独立数据文件，二者只能有一个真相源）+ 样式 + `index.html` 的 SVG 容器；`hud.js` 的 `drawLevelSelect`/`render.js`/`app.js` 的 canvas 命中链路换成 DOM 事件；`_build/check-vine-map.mjs` 巡检文档与代码表一致。**路径必须确定性**（固定种子 PRNG 或直接写控制点），符合「设计期派生：同一配置永远同一结果」。
 
@@ -966,6 +966,45 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 验收：50 节点可见可点、星级正确、页面不可滚动、改写后的 verify-step12b 与新增 verify-step19-2 全绿
 禁止：解锁门槛（属 19.3）、新依赖/构建工具、地图层读写游戏状态或存档、坐标出现两个真相源
 前置依赖：Step 19.1
+```
+
+---
+
+## 4.2 新增 Step 20：结算阶段与星级统一动态调整（用户方案，已落地）
+
+### Step 20：结算阶段（余步 → 特殊糖果 → 连锁引爆）+ 星级统一动态调整
+
+**目标**：把「过关后剩余步数的处理」从一个**平坦加分**升级为**独立的结算阶段** —— 剩余步数先给**递增制奖励分**，再把每一步变成一颗**随机特殊糖果**，然后**从棋盘底部到顶部逐颗连锁引爆**；星级阈值随之改为**一条公式统一动态派生**（含结算期望分修正），避免结算阶段把 50 关的星级经济冲垮。
+
+**编号说明**：用户方案里建议作为「19.3.1–19.3.4」，本路线图**落在 Step 20.x** —— `19.3` 的「解锁门槛 / 天边关卡」名额**保留**（它仍需先批准规则），§4.1 表里原来的那行 `20`（软件化）是**阶段项、不占 Step 号**，已改名以免与本步冲突。
+
+**拆分与状态**：
+
+| 子步骤 | 内容 | 状态 |
+|---|---|---|
+| **20.1** | 结算阶段：余步 → 递增奖励分 + 随机特殊糖果 → **队列式连锁引爆**（新增 `settlement.js` 与 `game.settleEndgame`）；`resolveBoard({ final: true })` 在结算期间跳过 3.8 的重排；`timeline.js` 加一帧「转化定格」 | **已完成**（宪法 v1.25） |
+| **20.2** | 结算计分：递增奖励分（`settlementStepsScore`）+ 连锁引爆分（**沿用 3.5 的特效倍数表，不另起一套**）；删除平坦的「每剩余一步 30 分」 | **已完成**（宪法 v1.25） |
+| **20.3** | 星级统一动态派生：`level.computeStarThresholds` + `STAR_CONFIG.settlementCoverage` + `SETTLEMENT_CONFIG.typicalRemainingRatio`（**由 300 局实测标定**）；`LEVELS.md` 的阈值列改为公式输出 | **已完成**（宪法 v1.25） |
+| **20.4** | 彩星（`rainbow`）字段预留与存档迁移（`levels` 的值由数字改为对象） | **未开始 —— 需先批准口径**（属存档格式变更，见 `DECISIONS.md` D041 第 8 条） |
+
+**20 的范围**：`settlement.js`（新模块）+ `level.js`（`computeStarThresholds`、删 `getRemainingStepBonus`）+ `game.js`（`settleEndgame` / `applyConversion` / `chainDetonations`）+ `timeline.js` 与 `app.js`（转化定格阶段与日志）+ `config.js`（`SETTLEMENT_CONFIG` 等）+ `LEVELS.md`（阈值列）+ `tests/settlement.test.js`。
+
+**20 的验收**：`node tests/run-all.js` 全绿；`python _build/consistency_check.py` 全绿；`node _build/lint-levels.mjs` 与 `node _build/check-level-table.mjs` PASS；`node _build/measure-step20.mjs` 能给出通关余步分布、结算贡献占比与星级分布（阈值标定依据）；浏览器里过关后**先看到转化定格、再看到连锁引爆**，结束面板的星级与最终分一致。
+
+**20 的禁止**：把结算阶段做成会消耗步数的阶段（1.5：结算阶段不再消耗步数）；让结算阶段使用**运行时随机**（必须是固定种子的受控伪随机）；为连锁引爆另起一套倍数表（必须沿用 3.5）；顺手实现彩星（属 20.4，需先批准）。
+
+**20 的前置依赖**：无 —— Step 12.3 的「结束前引爆」是本步的直接前身，本步把它升级为完整的结算阶段。
+
+**20 的参考**：用户提交的结算阶段方案（余步转特殊糖果 + 连锁引爆计分 + 星级动态调整）与 `DECISIONS.md` D041。
+
+**提示词**：
+```text
+任务：实现 Step 20 结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）与星级统一动态调整
+开始前：读 AGENTS.md（3.5 / 3.6 第 7 条 / 3.7 / 4.2 / 附录 B）、ROADMAP Step 20、DECISIONS D041、PROGRESS 的 Step 20 记录
+范围：新增 settlement.js；level.js 加 computeStarThresholds 并删 getRemainingStepBonus；game.js 加结算阶段；timeline/app 加转化定格；config 加 SETTLEMENT_CONFIG；LEVELS.md 阈值列改公式输出
+验收：node tests/run-all.js 全绿；consistency_check.py 全绿；lint-levels / check-level-table PASS；measure-step20 给出标定数据；浏览器里先转化定格再连锁引爆
+禁止：结算阶段消耗步数、运行时随机、另起一套特效倍数、顺手做彩星字段
+前置依赖：无（Step 12.3 是其前身）
 ```
 
 ---
@@ -1003,6 +1042,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [ ] Step 17：粒子动画与视觉打磨
 - [ ] Step 18：Capacitor 打包
 - [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；**19.2 藤蔓地图已完成**（滚动口径 (a)：5 页 × 每页 10 关，只画不拦）；19.3 解锁与软件化挂起 —— 见 DECISIONS D037 / D039）
+- [x] **Step 20**：结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）+ 星级统一动态调整（20.1–20.3 已完成，见 §4.2 与 DECISIONS D041；20.4 彩星字段待批准）
 
 ---
 
@@ -1023,5 +1063,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |
+| v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | 与宪法 v1.25 同步：新增 §4.2 Step 20（结算阶段 + 星级统一动态调整，20.1–20.3 已完成 / 20.4 彩星待批准）；§4.1 表里的软件化行去掉「20」这个编号以免与 Step 20 冲突；新增 `settlement.js`、`LEVELS.md` 阈值列改公式输出（`sync-levels-stars.mjs` / `measure-step20.mjs`） | §4.1、§4.2、§5、第 6 节 |
+| v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | 与宪法 v1.24 同步：Step 19.2 藤蔓地图按用户修订方案重做（坐标归一化 0–1、路径改单条平滑贝塞尔且锚点进 `VINE_MAP_CONFIG.anchors`、节点显式坐标不参与路径计算、`data-state` 两态、星星 +40%、呼吸光效、翻页箭头 + 总星数进度条、叶子沿切线旋转、附录 B `VINE_MAP_CONFIG` 8→19 键）；19.3 与软件化仍挂起 | §4.1、§5、第 6 节 |
 | v1.23 | 2026-09-22 | Agent（用户批准 19.2） | 与宪法 v1.23 同步：Step 19.2 藤蔓地图完成（`vine-map.js`/`vine-map.css`、`LEVEL_MAP_POS` 与 `LEVELS.md` §9 坐标表 + 巡检、确定性路径、canvas 选关退役、`?map=1` 入口、`VINE_MAP_CONFIG` 8 键）；门禁清单 19→20 套件 | §4.1、§5、第 6 节 |
 | v1.22 | 2026-09-22 | Agent（用户批准） | 与宪法 v1.22 同步：Step 16 音效与震动完成（5.6、`audio.js` 登记、`AUDIO_CONFIG`/`HAPTIC_CONFIG`/`STORAGE_KEYS.PREFS` 进附录 B、P3-13 根治） | §5、Step 16、第 6 节 |

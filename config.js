@@ -85,7 +85,8 @@ export const CONFIG = {
     gemScore: 1500,
     cascadeStep: 30,
     cascadeIceStep: 1000,
-    stepBonus: 30,
+    // v1.25（Step 20）：`stepBonus` 已**删除** —— 剩余步数的转化口径从「每步固定 30 分」
+    // 改为「递增制奖励分 + 转成特殊糖果并连锁引爆」，数值登记在 SETTLEMENT_CONFIG。
     specialMultipliers: {
       striped: 1.5,
       wrapped: 2.0,
@@ -102,6 +103,8 @@ export const CONFIG = {
     clearDuration: 250,      // ms；AGENTS.md 15 允许区间 200-300
     fallDuration: 200,       // ms；AGENTS.md 15 允许区间 150-250，按距离缩放
     cascadeGap: 120,         // ms；AGENTS.md 15 允许区间 100-150
+    // ms；Step 20（v1.25）：结算阶段「转化定格」的时长 —— 要让玩者看清余步变成了哪些特效
+    settleBanner: 900,
     shuffleMaxTries: 50,     // AGENTS.md 3.8
     reducedMotion: false     // 对应 prefers-reduced-motion，见 REFERENCES.md §2.1 Step 5
   },
@@ -134,12 +137,16 @@ export const CONFIG = {
     maxSeconds: 120         // 秒数上限
   },
 
-  // 三星阈值（AGENTS.md 3.7 / 3.6，v1.19）：二星/三星 = 1★ 基准分 × 倍率，取整到 500。
+  // 三星阈值（AGENTS.md 3.7 / 3.6，v1.19；v1.25 起带结算修正）。
+  // 二星/三星 = 1★ 基准分 × 倍率 + 结算期望分 × settlementCoverage，取整到 500。
   // podFactor 只作用于金豆荚关（v1.18：「与水果关的区别只在掉落节奏与三星阈值更高」）。
+  // settlementCoverage（Step 20）是**统一动态调整**的唯一比例旋钮：50 关共用同一公式，
+  // 阈值随各关自己的步数预算与基准分派生，不再逐关手写。
   STAR_CONFIG: {
     secondFactor: 1.7,
     thirdFactor: 2.5,
-    podFactor: 1.2
+    podFactor: 1.2,
+    settlementCoverage: 0.6
   },
 
   // 步数由难度派生（Step 12.2，用户批准）：「难度分 → 步数」公式的系数（附录 B 逐键登记）。
@@ -158,10 +165,28 @@ export const CONFIG = {
     iceUnit: 4       // 消冰目标：每多少层算 1 个工作量单位
   },
 
-  // 本局结束时的「引爆特殊方块」上限（Step 12.3）：引爆会生成新的特殊方块，
-  // 理论上可以「引爆 → 生成 → 再引爆」循环，故给一个确定的轮数上限作为终止保证。
-  ENDGAME_CONFIG: {
-    maxDetonationRounds: 8
+  // 结算阶段（Step 20，用户批准的方案；AGENTS.md 3.6 第 7 条 / 3.5 的口径）。
+  // 过关（或时间归零、步数用尽）时：**剩余步数 → 递增制奖励分 + 把普通动物转成随机特殊糖果
+  // → 从棋盘底部到顶部依次连锁引爆 → 计入最终分数与星级**。
+  //
+  // 为什么奖励分是**比例**而不是绝对值（用户方案给的是 5000/6000/…/10000 的绝对值）：
+  // 本项目的分数体量是「1★ = 5000–40000」，一步白送 5000–10000 会让 50 关的星级经济被结算阶段
+  // 冲垮（第 1 关会一步白送 17 万分）。故保留**递增制的形状**、把量级登记为**该关 1★ 基准分的比例**，
+  // 这样 50 关的「省步收益 / 星级基准」比值完全一致（这才是「统一」）。要改回绝对值只需改本表。
+  SETTLEMENT_CONFIG: {
+    seed: 20260922,           // 受控伪随机的固定种子（`mulberry32(seed + 关卡id)`），无运行时随机
+    // 第 1–6 步的递增比例（递增制形状同用户方案：前 6 步逐级升、第 7 步起取末值）。
+    // 量纲标定：**满余步（步数预算 − 1）的奖励分合计 ≤ 1.0 × 1★ 基准分** —— 这个上限很关键，
+    // 否则结算阶段会单方面把每一关都推成三星（2★/3★ 的倍率只有 1.7 / 2.5）。
+    // 步数预算在 20–34 之间浮动，故末值取 0.030：最坏情况（34 步）合计 ≈ 0.93× 基准分。
+    stepScoreRatios: [0.012, 0.016, 0.020, 0.024, 0.027, 0.030],
+    // 每颗转化出的特殊糖果的类型权重（百分比，和为 100）：横/竖直线特效、爆炸、魔力鸟
+    specialWeights: { stripedH: 50, stripedV: 30, wrapped: 15, magic: 5 },
+    // 星级阈值修正用的「典型余步比例」（设计期代理，替代运行时历史中位数）。
+    // **实测标定**（`_build/measure-step20.mjs`，50 关 × 2 种玩家模型 × 3 种子）：
+    // 通关局的余步中位数 5–6 步，约为步数预算的 19–22%，故取 0.20。
+    typicalRemainingRatio: 0.20,
+    maxChainDetonations: 64   // 连锁引爆的步数上限（每步引爆一颗特殊糖果；= 棋盘格数，终止保证）
   },
 
   // 道具系统（AGENTS.md 3.9，v1.20）。**数量**是跨关卡的账号级状态，持久化在 STORAGE_KEYS.BOOSTERS；
@@ -206,18 +231,38 @@ export const CONFIG = {
     }
   },
 
-  // 藤蔓地图的几何与确定性参数（Step 19.2，AGENTS.md 2.3 / 5.1）。
+  // 藤蔓地图的几何与确定性参数（Step 19.2 v2，AGENTS.md 2.3 / 5.1；口径见 DECISIONS D040）。
   // 地图是**画布外**的 SVG 层：它不参与 `computeBoardSize`，也不改变既有像素取证。
-  // 路径抖动用固定种子（同配置同结果，符合「设计期派生」）；**节点坐标是显式的**（见 LEVEL_MAP_POS / LEVELS.md §9）。
+  // **坐标一律归一化（0–1）**：路径锚点与节点坐标都存 0–1，渲染时乘 viewBox 宽高（再由 SVG 缩放到容器）。
+  // 路径 = 单条平滑贝塞尔曲线（锚点 + 固定种子 PRNG），**节点坐标不参与路径计算**（用户方案带来的取舍）。
   VINE_MAP_CONFIG: {
-    seed: 20260922, // 固定种子：路径控制点的抖动只由它决定，不用运行时随机
+    seed: 20260922, // 固定种子（用户方案里的 VINE_SEED）：抖动只由 mulberry32(seed + page) 决定
     pageSize: 10,   // 每页关卡数（5 页 × 10 关 = 50 关）
-    width: 360,     // SVG viewBox 宽
-    height: 640,    // SVG viewBox 高
-    marginX: 100,   // 节点两列的左右内缩（列 x = marginX 与 width − marginX）
-    marginY: 80,    // 首行 y；末行 y = height − marginY
-    pathJitter: 26, // 控制点抖动量（px，只影响曲线形状，不移动节点）
-    nodeRadius: 16  // 节点半径（px）
+    width: 360,     // 地图 viewBox 宽（归一化 x 的换算基准）
+    height: 640,    // 地图 viewBox 高（归一化 y 的换算基准）
+    // 路径锚点（归一化 0–1；出口 y 故意略超 1，与下一页入口 y（< 1）衔接成「延伸出屏」的接口）
+    anchors: [
+      { x: 0.85, y: 0.05 },
+      { x: 0.15, y: 0.25 },
+      { x: 0.8, y: 0.45 },
+      { x: 0.2, y: 0.65 },
+      { x: 0.75, y: 0.85 },
+      { x: 0.3, y: 1.05 }
+    ],
+    nodeColumns: [0.2, 0.48, 0.76], // 节点 X 列（归一化，≥3 列用于打破「两列对齐」）
+    nodeRows: 5,       // 每页节点行数（每行 2 个 → 每页 10 关）
+    nodeMarginY: 0.08, // 节点区的上下边距（归一化；首行 y = 0.08、末行 y = 0.92）
+    nodeStaggerY: 0.015, // Y 的错落幅度（归一化）：行内两个节点一高一低，形成节奏
+    pathJitter: 26,    // 控制点抖动量（px；控制点 = 弦中点分解 + 该量级的种子抖动）
+    nodeRadius: 16,    // 节点半径（px）
+    starSize: 11,      // 星星基准尺寸（px；= 19.2 第一版 `★` 字形的 11px）
+    starScale: 1.4,    // 星星放大倍率（用户方案：比原来大 40%）
+    starGap: 4,        // 星星间距（px）
+    leafSpacing: 70,   // 叶子沿路径的采样间距（px，用户方案 60–80）
+    leafSize: 7,       // 叶片长度（px）
+    pulseMs: 2000,     // 呼吸光效周期（ms，用户方案 2s 循环）
+    leafSwayMs: 3600,  // 叶片摇曳周期（ms；prefers-reduced-motion 时关闭）
+    pageSlideMs: 320   // 翻页位移时长（ms；transform: translateX + transition）
   },
 
   LEVEL_DEFAULTS: {

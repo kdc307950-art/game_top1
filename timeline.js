@@ -17,7 +17,9 @@ export function motionDurations(systemReduced = false) {
     reduced,
     clear: reduced ? 0 : cfg.clearDuration,
     fall: reduced ? 0 : cfg.fallDuration,
-    gap: cfg.cascadeGap
+    gap: cfg.cascadeGap,
+    // Step 20（v1.25）：结算阶段的「转化」定格时长。减少动效时退化为级联间隔（提示仍然可见）
+    bonus: reduced ? cfg.cascadeGap : cfg.settleBanner
   };
 }
 
@@ -30,13 +32,38 @@ export function fallDurationFor(moves, baseDuration) {
 }
 
 /**
- * 把一次结算拆成阶段列表：每层级联 = 消除 → 下落（若有位移）→ 落定。
+ * 把一次结算拆成阶段列表：每层级联 = 消除 → 下落（若有落定）→ 落定。
  * 只做数据整理，不触发绘制；`board` 是历史快照，`keys/hidden/moves` 供渲染层解释。
+ *
+ * v1.25（Step 20）追加第 4 个参数 `settlement`（`game.js` 的结算阶段元信息，可为 null）：
+ * 在 `settlement.atIndex` 处插入一帧 `bonus` —— 先把「剩余步数变出来的那批特殊糖果」画出来再引爆。
+ * 同时把 `preBoard` 换成 `settlement.board`，后续的清除/下落快照才与逻辑层一致；
+ * 否则玩家会看到一批从未被画出来过的特效凭空炸掉（`clearedKeys` 靠 `cell.id` 对位，
+ * 转化只改 `type`/`direction` 不改对象，因此对位仍然成立）。
  */
-export function buildPhases(resolve, afterSwap, motion) {
+export function buildPhases(resolve, afterSwap, motion, settlement = null) {
   const phases = [];
   let preBoard = afterSwap;
+  let bonusInserted = false;
+
+  const pushBonus = (levelIndex) => {
+    if (!settlement || bonusInserted) return;
+    bonusInserted = true;
+    phases.push({
+      phase: 'bonus',
+      board: settlement.board,
+      levelIndex: Math.max(0, levelIndex),
+      banner: '剩余步数化作特殊糖果，连锁引爆！',
+      duration: motion.bonus
+    });
+  };
+
   resolve.levels.forEach((level, index) => {
+    // Step 20：结算批次的起点先插一帧「转化定格」，并把 preBoard 接到转化后的棋盘
+    if (settlement && index === settlement.atIndex) {
+      pushBonus(index - 1);
+      preBoard = settlement.board;
+    }
     // 本层新生成的特殊元素本层**不被消除**（board.js 的 collectClearKeys 排除了它），
     // 因此它既不该播「缩小淡出」，也不该在下落阶段被隐藏 —— 否则玩家会看到
     // 「刚做出来的条纹糖果一闪就没了」（用户反馈的现象）。做法：把它从消除键里剔除，
@@ -62,6 +89,12 @@ export function buildPhases(resolve, afterSwap, motion) {
     phases.push({ phase: 'settle', board: level.board, levelIndex: index, duration: motion.gap });
     preBoard = level.board;
   });
+
+  // 兜底：结算批次的下标等于 levels 长度时（没有属于引爆的层）也要把转化那一帧补上
+  if (settlement && !bonusInserted) {
+    pushBonus(resolve.levels.length - 1);
+    phases.push({ phase: 'settle', board: settlement.board, levelIndex: Math.max(0, resolve.levels.length - 1), duration: motion.gap });
+  }
 
   // 3.8：若本次结算触发了重排，追加一个重排阶段（前后快照按 cell.id 对位，得到每格起止位置）
   const deadlock = resolve.deadlock;

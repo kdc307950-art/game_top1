@@ -11,6 +11,8 @@
 // 「步数消耗」，而 4.2 未给出对应签名，故在此登记（见 D016）。
 
 import { COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE } from './config.js';
+// Step 20（v1.25）：星级阈值的「结算期望分」修正来自结算模块（纯函数，见 3.7 与 D041）
+import { estimateSettlementScore } from './settlement.js';
 
 const GOAL_TYPES = new Set(Object.values(GOAL_TYPE));
 
@@ -119,11 +121,12 @@ export function getLevelConfig(id) {
     cols: CONFIG.BOARD_SIZE,
     colorCount: spec.colors,
     goal: spec.goal,
-    starThresholds: starThresholdsOf(spec.star1),
     obstacles,
     collectibles: collectibleSpecsFor(spec.goal, CONFIG.BOARD_SIZE, CONFIG.BOARD_SIZE)
   };
-  return { ...config, steps: computeStepBudget(config) };
+  // 3.7（v1.25）：星阈值不再是手写值 —— 先派生步数，再由「基准分 + 步数」统一推出三个阈值
+  const steps = computeStepBudget(config);
+  return { ...config, steps, starThresholds: computeStarThresholds(spec.star1, steps) };
 }
 
 /**
@@ -167,11 +170,11 @@ function obstacleDemoConfig() {
     cols: CONFIG.BOARD_SIZE,
     colorCount: 5,
     goal: { type: GOAL_TYPE.SCORE, target: 4000 },
-    starThresholds: starThresholdsOf(4000),
     obstacles,
     collectibles: []
   };
-  return { ...config, steps: computeStepBudget(config) };
+  const steps = computeStepBudget(config);
+  return { ...config, steps, starThresholds: computeStarThresholds(4000, steps) };
 }
 
 /** 水果关/金豆荚演示关：只在目标与掉落节奏上有别（3.6 v1.18）。 */
@@ -182,11 +185,12 @@ function collectibleDemoConfig(id, type, target) {
     cols: CONFIG.BOARD_SIZE,
     colorCount: 5,
     goal: { type, target },
-    starThresholds: starThresholdsOf(3000, { pod: type === GOAL_TYPE.POD }),
     obstacles: [],
     collectibles: collectibleSpecsFor({ type, target }, CONFIG.BOARD_SIZE, CONFIG.BOARD_SIZE)
   };
-  return { ...config, steps: computeStepBudget(config) };
+  const steps = computeStepBudget(config);
+  // 金豆荚关的三星阈值更高（3.6 v1.18 → `STAR_CONFIG.podFactor`）
+  return { ...config, steps, starThresholds: computeStarThresholds(3000, steps, { pod: type === GOAL_TYPE.POD }) };
 }
 
 /** 时间关演示关（3.6 第 8 条）：`steps: 0` + 派生出的 `timeLimit`，由 `game.tickTime` 推进倒计时。 */
@@ -197,11 +201,11 @@ function timeDemoConfig(id) {
     cols: CONFIG.BOARD_SIZE,
     colorCount: 5,
     goal: { type: GOAL_TYPE.SCORE, target: 3000 },
-    starThresholds: starThresholdsOf(3000),
     obstacles: [],
     collectibles: []
   };
-  return { ...config, steps: 0, timeLimit: computeTimeBudget(config) };
+  // 时间关没有步数 ⇒ 结算阶段不转化、也没有奖励分，故结算期望分为 0（阈值不受修正影响）
+  return { ...config, steps: 0, timeLimit: computeTimeBudget(config), starThresholds: computeStarThresholds(3000, 0) };
 }
 
 /**
@@ -227,12 +231,31 @@ export function collectibleSpecsFor(goal, rows, cols) {
   return specs;
 }
 
-/** 3.7 的三星阈值：1★ = 设计基准分，2★/3★ = 基准分 × `STAR_CONFIG` 的倍率（取整到 500，与 LEVELS.md 口径一致）。 */
-function starThresholdsOf(star1, { pod = false } = {}) {
+/**
+ * 3.7（v1.25，Step 20）：三星阈值的**统一动态派生** —— 50 关与全部演示关共用这一条公式。
+ *
+ *   1★ = 设计基准分 `star1`（分数关即目标分；3.7 规定「达成通关目标即一星」，故 1★ 不上移）
+ *   2★ = round500(star1 × secondFactor × podFactor?) + round500(结算期望分 × settlementCoverage)
+ *   3★ = round500(star1 × thirdFactor  × podFactor?) + 同一个结算修正项
+ *
+ * 为什么要加「结算期望分」修正（用户方案 2.2 第二步）：结算阶段把剩余步数变成了递增奖励分
+ * 与连锁引爆分，阈值不动的话每一关都会变得太容易三星；修正把这份额外分数的**典型值**
+ * 预留进二/三星阈值。**1★ 不动** —— 它的语义是「通关」而不是「分数线」，上移它会与
+ * 3.7「达成通关目标即获得一星」以及 `LEVELS.md` 的「1★ = 设计基准分（分数关即目标分）」冲突。
+ *
+ * 「统一」= 一条公式作用于所有关卡；「动态」= 输入是每关自己的 `star1` 与派生步数，不是手写表。
+ * 系数全部来自 `CONFIG.STAR_CONFIG` 与 `CONFIG.SETTLEMENT_CONFIG`，本函数内没有魔法数字。
+ */
+export function computeStarThresholds(star1, steps, { pod = false } = {}) {
   const stars = CONFIG.STAR_CONFIG;
   const round500 = (value) => Math.round(value / 500) * 500;
   const bonus = pod ? stars.podFactor : 1; // 3.6 v1.18：金豆荚关的三星阈值更高
-  return [star1, round500(star1 * stars.secondFactor * bonus), round500(star1 * stars.thirdFactor * bonus)];
+  const settlement = round500(estimateSettlementScore(star1, steps) * stars.settlementCoverage);
+  return [
+    star1,
+    round500(star1 * stars.secondFactor * bonus) + settlement,
+    round500(star1 * stars.thirdFactor * bonus) + settlement
+  ];
 }
 /**
  * Step 12.2（用户批准）：难度 → 步数。**设计期派生**，不引入运行时随机性 ——
@@ -420,11 +443,9 @@ export function calcStars(score, thresholds) {
   return 0;
 }
 
-/** 4.2：getRemainingStepBonus(stepsLeft) —— 剩余步数转化（3.5「每剩余一步约转化为 30 分」）。 */
-export function getRemainingStepBonus(stepsLeft) {
-  const steps = Number.isFinite(stepsLeft) ? Math.floor(stepsLeft) : 0;
-  return Math.max(0, steps) * CONFIG.SCORE_CONFIG.stepBonus;
-}
+// v1.25（Step 20）：`getRemainingStepBonus` 已**移除** —— 剩余步数的转化口径从
+// 「每剩余一步 30 分」改为「递增制奖励分（`settlement.settlementStepsScore`）+ 转成特殊糖果并连锁引爆」。
+// 同一个剩余步数不再被计两次分，`SCORE_CONFIG.stepBonus` 也随之删除。
 
 function validateLevelConfig(config) {
   if (!config || typeof config !== 'object') throw new Error('createLevel: 缺少关卡配置');
@@ -461,58 +482,58 @@ function validateLevelConfig(config) {
 }
 
 // ==== LEVEL_MAP_POS（由 _build/gen-vine-map.mjs 生成，来源 LEVELS.md §9）====
-/** 19.2：地图上每关的显式坐标（页（1-5）、页内 x/y）。与 `LEVELS.md` §9 的坐标表逐项一致，
- *  由 `_build/check-vine-map.mjs` 反向巡检。节点坐标是**显式**的：藤蔓路径只负责把它们连起来。 */
+/** 19.2：地图上每关的显式坐标（页（1-5）、页内归一化 x/y ∈ 0–1）。与 `LEVELS.md` §9 的坐标表逐项一致，
+ *  由 `_build/check-vine-map.mjs` 反向巡检。节点坐标是**显式**的、**不参与路径计算**（D040）。 */
 export const LEVEL_MAP_POS = Object.freeze([
-  Object.freeze({ id: 1, page: 1, x: 100, y: 80 }),
-  Object.freeze({ id: 2, page: 1, x: 260, y: 80 }),
-  Object.freeze({ id: 3, page: 1, x: 260, y: 200 }),
-  Object.freeze({ id: 4, page: 1, x: 100, y: 200 }),
-  Object.freeze({ id: 5, page: 1, x: 100, y: 320 }),
-  Object.freeze({ id: 6, page: 1, x: 260, y: 320 }),
-  Object.freeze({ id: 7, page: 1, x: 260, y: 440 }),
-  Object.freeze({ id: 8, page: 1, x: 100, y: 440 }),
-  Object.freeze({ id: 9, page: 1, x: 100, y: 560 }),
-  Object.freeze({ id: 10, page: 1, x: 260, y: 560 }),
-  Object.freeze({ id: 11, page: 2, x: 100, y: 80 }),
-  Object.freeze({ id: 12, page: 2, x: 260, y: 80 }),
-  Object.freeze({ id: 13, page: 2, x: 260, y: 200 }),
-  Object.freeze({ id: 14, page: 2, x: 100, y: 200 }),
-  Object.freeze({ id: 15, page: 2, x: 100, y: 320 }),
-  Object.freeze({ id: 16, page: 2, x: 260, y: 320 }),
-  Object.freeze({ id: 17, page: 2, x: 260, y: 440 }),
-  Object.freeze({ id: 18, page: 2, x: 100, y: 440 }),
-  Object.freeze({ id: 19, page: 2, x: 100, y: 560 }),
-  Object.freeze({ id: 20, page: 2, x: 260, y: 560 }),
-  Object.freeze({ id: 21, page: 3, x: 100, y: 80 }),
-  Object.freeze({ id: 22, page: 3, x: 260, y: 80 }),
-  Object.freeze({ id: 23, page: 3, x: 260, y: 200 }),
-  Object.freeze({ id: 24, page: 3, x: 100, y: 200 }),
-  Object.freeze({ id: 25, page: 3, x: 100, y: 320 }),
-  Object.freeze({ id: 26, page: 3, x: 260, y: 320 }),
-  Object.freeze({ id: 27, page: 3, x: 260, y: 440 }),
-  Object.freeze({ id: 28, page: 3, x: 100, y: 440 }),
-  Object.freeze({ id: 29, page: 3, x: 100, y: 560 }),
-  Object.freeze({ id: 30, page: 3, x: 260, y: 560 }),
-  Object.freeze({ id: 31, page: 4, x: 100, y: 80 }),
-  Object.freeze({ id: 32, page: 4, x: 260, y: 80 }),
-  Object.freeze({ id: 33, page: 4, x: 260, y: 200 }),
-  Object.freeze({ id: 34, page: 4, x: 100, y: 200 }),
-  Object.freeze({ id: 35, page: 4, x: 100, y: 320 }),
-  Object.freeze({ id: 36, page: 4, x: 260, y: 320 }),
-  Object.freeze({ id: 37, page: 4, x: 260, y: 440 }),
-  Object.freeze({ id: 38, page: 4, x: 100, y: 440 }),
-  Object.freeze({ id: 39, page: 4, x: 100, y: 560 }),
-  Object.freeze({ id: 40, page: 4, x: 260, y: 560 }),
-  Object.freeze({ id: 41, page: 5, x: 100, y: 80 }),
-  Object.freeze({ id: 42, page: 5, x: 260, y: 80 }),
-  Object.freeze({ id: 43, page: 5, x: 260, y: 200 }),
-  Object.freeze({ id: 44, page: 5, x: 100, y: 200 }),
-  Object.freeze({ id: 45, page: 5, x: 100, y: 320 }),
-  Object.freeze({ id: 46, page: 5, x: 260, y: 320 }),
-  Object.freeze({ id: 47, page: 5, x: 260, y: 440 }),
-  Object.freeze({ id: 48, page: 5, x: 100, y: 440 }),
-  Object.freeze({ id: 49, page: 5, x: 100, y: 560 }),
-  Object.freeze({ id: 50, page: 5, x: 260, y: 560 }),
+  Object.freeze({ id: 1, page: 1, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 2, page: 1, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 3, page: 1, x: 0.76, y: 0.275 }),
+  Object.freeze({ id: 4, page: 1, x: 0.2, y: 0.305 }),
+  Object.freeze({ id: 5, page: 1, x: 0.48, y: 0.485 }),
+  Object.freeze({ id: 6, page: 1, x: 0.76, y: 0.515 }),
+  Object.freeze({ id: 7, page: 1, x: 0.2, y: 0.695 }),
+  Object.freeze({ id: 8, page: 1, x: 0.48, y: 0.725 }),
+  Object.freeze({ id: 9, page: 1, x: 0.76, y: 0.905 }),
+  Object.freeze({ id: 10, page: 1, x: 0.2, y: 0.935 }),
+  Object.freeze({ id: 11, page: 2, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 12, page: 2, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 13, page: 2, x: 0.76, y: 0.275 }),
+  Object.freeze({ id: 14, page: 2, x: 0.2, y: 0.305 }),
+  Object.freeze({ id: 15, page: 2, x: 0.48, y: 0.485 }),
+  Object.freeze({ id: 16, page: 2, x: 0.76, y: 0.515 }),
+  Object.freeze({ id: 17, page: 2, x: 0.2, y: 0.695 }),
+  Object.freeze({ id: 18, page: 2, x: 0.48, y: 0.725 }),
+  Object.freeze({ id: 19, page: 2, x: 0.76, y: 0.905 }),
+  Object.freeze({ id: 20, page: 2, x: 0.2, y: 0.935 }),
+  Object.freeze({ id: 21, page: 3, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 22, page: 3, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 23, page: 3, x: 0.76, y: 0.275 }),
+  Object.freeze({ id: 24, page: 3, x: 0.2, y: 0.305 }),
+  Object.freeze({ id: 25, page: 3, x: 0.48, y: 0.485 }),
+  Object.freeze({ id: 26, page: 3, x: 0.76, y: 0.515 }),
+  Object.freeze({ id: 27, page: 3, x: 0.2, y: 0.695 }),
+  Object.freeze({ id: 28, page: 3, x: 0.48, y: 0.725 }),
+  Object.freeze({ id: 29, page: 3, x: 0.76, y: 0.905 }),
+  Object.freeze({ id: 30, page: 3, x: 0.2, y: 0.935 }),
+  Object.freeze({ id: 31, page: 4, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 32, page: 4, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 33, page: 4, x: 0.76, y: 0.275 }),
+  Object.freeze({ id: 34, page: 4, x: 0.2, y: 0.305 }),
+  Object.freeze({ id: 35, page: 4, x: 0.48, y: 0.485 }),
+  Object.freeze({ id: 36, page: 4, x: 0.76, y: 0.515 }),
+  Object.freeze({ id: 37, page: 4, x: 0.2, y: 0.695 }),
+  Object.freeze({ id: 38, page: 4, x: 0.48, y: 0.725 }),
+  Object.freeze({ id: 39, page: 4, x: 0.76, y: 0.905 }),
+  Object.freeze({ id: 40, page: 4, x: 0.2, y: 0.935 }),
+  Object.freeze({ id: 41, page: 5, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 42, page: 5, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 43, page: 5, x: 0.76, y: 0.275 }),
+  Object.freeze({ id: 44, page: 5, x: 0.2, y: 0.305 }),
+  Object.freeze({ id: 45, page: 5, x: 0.48, y: 0.485 }),
+  Object.freeze({ id: 46, page: 5, x: 0.76, y: 0.515 }),
+  Object.freeze({ id: 47, page: 5, x: 0.2, y: 0.695 }),
+  Object.freeze({ id: 48, page: 5, x: 0.48, y: 0.725 }),
+  Object.freeze({ id: 49, page: 5, x: 0.76, y: 0.905 }),
+  Object.freeze({ id: 50, page: 5, x: 0.2, y: 0.935 }),
 ]);
 // ==== /LEVEL_MAP_POS ====

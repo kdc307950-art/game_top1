@@ -1,7 +1,7 @@
-// tests/level.test.js — level.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 4 / Step 12.1。
+// tests/level.test.js — level.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 4 / Step 12.1 / Step 20。
 //
-// Step 4 实现了 createLevel / consumeStep / getRemainingStepBonus；
-// Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）。
+// Step 4 实现了 createLevel / consumeStep；Step 12.1 补上 checkGoal（3.6 四种目标）与 calcStars（3.7 三星）；
+// Step 20（v1.25）把星阈值改成**统一动态派生** `computeStarThresholds`，并移除 `getRemainingStepBonus`。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, assertThrows, summarize } from './assert.js';
 import { BOOSTER_KIND, COLLECTIBLE_TYPE, CONFIG, GOAL_TYPE, OBSTACLE_TYPE, STORAGE_KEYS } from '../config.js';
@@ -12,17 +12,18 @@ import {
   calcStars,
   checkGoal,
   collectibleSpecsFor,
+  computeStarThresholds,
   computeStepBudget,
   computeTimeBudget,
   consumeStep,
   consumeTime,
   createLevel,
   getLevelConfig,
-  getRemainingStepBonus,
   grantSteps,
   grantTime,
   isTimeLevel
 } from '../level.js';
+import { estimateSettlementScore, settlementStepsScore, stepScoreRatio } from '../settlement.js';
 
 /** 合法关卡配置（4.4 的 LevelConfig 形状）。 */
 function levelConfig(overrides = {}) {
@@ -80,13 +81,52 @@ test('consumeStep：每次减 1，减到 0 后不再变负（4.3.3）', () => {
   assertEqual(level.remainingSteps, 0, '最终状态');
 });
 
-test('getRemainingStepBonus：每剩余一步按 stepBonus 转化（3.5）', () => {
-  const step = CONFIG.SCORE_CONFIG.stepBonus;
-  assertEqual(getRemainingStepBonus(0), 0, '0 步');
-  assertEqual(getRemainingStepBonus(5), 5 * step, '5 步');
-  assertEqual(getRemainingStepBonus(-4), 0, '负数按 0');
-  assertEqual(getRemainingStepBonus(2.7), 2 * step, '小数向下取整');
-  assertTrue(getRemainingStepBonus(undefined) === 0, 'undefined 按 0');
+test('computeStarThresholds（Step 20）：1★ 不动，2★/3★ = 倍率 × 基准分 + 结算期望修正', () => {
+  const round500 = (v) => Math.round(v / 500) * 500;
+  const stars = CONFIG.STAR_CONFIG;
+  const t = computeStarThresholds(10000, 30);
+  const correction = round500(estimateSettlementScore(10000, 30) * stars.settlementCoverage);
+
+  assertEqual(t[0], 10000, '1★ = 设计基准分（结算修正不上移 1★）');
+  assertEqual(t[1], round500(10000 * stars.secondFactor) + correction, '2★ = 1.7× 基准分 + 修正');
+  assertEqual(t[2], round500(10000 * stars.thirdFactor) + correction, '3★ = 2.5× 基准分 + 修正');
+  assertTrue(t[0] <= t[1] && t[1] <= t[2], '三元组非递减（4.4 约束）');
+
+  // 「统一动态」的两条性质：同一公式，输入随关卡变化
+  assertTrue(computeStarThresholds(20000, 30)[2] > t[2], '基准分更高 → 3★ 更高');
+  assertTrue(computeStarThresholds(10000, 34)[1] >= t[1], '步数预算更多 → 2★ 修正不少于');
+  assertTrue(computeStarThresholds(10000, 30, { pod: true })[2] > t[2], '金豆荚关阈值更高（3.6 v1.18）');
+
+  // 时间关没有步数 ⇒ 没有结算阶段 ⇒ 修正为 0
+  assertEqual(
+    computeStarThresholds(3000, 0)[1],
+    round500(3000 * stars.secondFactor),
+    'steps = 0（时间关）没有结算修正'
+  );
+
+  // 50 关的星阈值全部由这一条公式派生（不再手写）
+  for (const id of [1, 12, 25, 40, 50]) {
+    const cfg = getLevelConfig(id);
+    assertDeepEqual(cfg.starThresholds, computeStarThresholds(cfg.starThresholds[0], cfg.steps, {
+      pod: cfg.goal.type === GOAL_TYPE.POD
+    }), `第 ${id} 关阈值可由公式复算`);
+  }
+});
+
+test('settlement 的奖励分是递增制且量级受限（3.5 / Step 20）', () => {
+  assertEqual(stepScoreRatio(1) < stepScoreRatio(6), true, '前 6 步逐级递增');
+  assertEqual(stepScoreRatio(6), stepScoreRatio(99), '第 7 步起取末值（递增制封顶）');
+  assertEqual(stepScoreRatio(0), 0, '非法下标按 0');
+  assertEqual(settlementStepsScore(0, 5000), 0, '0 步 = 0 分');
+  assertEqual(settlementStepsScore(-3, 5000), 0, '负数按 0');
+  assertTrue(settlementStepsScore(5, 5000) < settlementStepsScore(6, 5000), '步数越多分越高');
+
+  // 量纲护栏：**满余步的奖励分不超过该关 1★ 基准分**，否则结算阶段会单方面把每关推成三星
+  for (const id of [1, 10, 20, 30, 40, 50]) {
+    const cfg = getLevelConfig(id);
+    const full = settlementStepsScore(Math.max(0, cfg.steps - 1), cfg.starThresholds[0]);
+    assertTrue(full <= cfg.starThresholds[0], `第 ${id} 关满余步奖励分 ${full} ≤ 1★ 基准分 ${cfg.starThresholds[0]}`);
+  }
 });
 
 test('STORAGE_KEYS 与附录 B 登记值一致（最高分 + 每关星级，v1.14）', () => {

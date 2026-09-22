@@ -1,14 +1,32 @@
-// tests/vine-map.test.js — vine-map.js（藤蔓地图）的单元测试。见 AGENTS.md 7.1 与 19.2 / DECISIONS D039。
+// tests/vine-map.test.js — vine-map.js（藤蔓地图）的单元测试。见 AGENTS.md 7.1 与 19.2 v2 / DECISIONS D040。
 //
-// 只测**纯函数**（分页、坐标、确定性路径、星级规范化）—— DOM 渲染部分由 `_build/verify-step19-2.mjs`
-// 在真实浏览器里取证（L2/L3），坐标表 ↔ LEVELS.md 的一致性由 `_build/check-vine-map.mjs` 巡检。
+// 只测**纯函数**（分页、归一化坐标、确定性路径、节点状态机、星级规范化）—— DOM 渲染部分由
+// `_build/verify-step19-2.mjs` 在真实浏览器里取证（L2/L3），坐标表 ↔ LEVELS.md 的一致性由 `_build/check-vine-map.mjs` 巡检。
+//
+// 19.2 v2 的关键改写：**节点坐标不再参与路径计算**（用户方案），因此删掉了第一版的「每个节点都在路径上」，
+// 改为「路径只由 `VINE_MAP_CONFIG.anchors` + 固定种子决定、与节点坐标无关」。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, summarize } from './assert.js';
 import { CONFIG } from '../config.js';
 import { LEVEL_COUNT, LEVEL_MAP_POS } from '../level.js';
-import { MAP_PAGE_SIZE, buildVineAnchors, buildVinePath, clampStars, mulberry32, pageCount, pageOf, positionsOnPage, renderMap } from '../vine-map.js';
+import {
+  MAP_PAGE_SIZE,
+  buildVineAnchors,
+  buildVinePath,
+  buildVineSegments,
+  clampStars,
+  mulberry32,
+  nodeState,
+  pageCount,
+  pageOf,
+  positionsOnPage,
+  renderMap,
+  starPath
+} from '../vine-map.js';
 
 const MAP = CONFIG.VINE_MAP_CONFIG;
+const round3 = (value) => Math.round(value * 1000) / 1000;
+const round1 = (value) => Math.round(value * 10) / 10;
 
 test('分页：每页 pageSize 关、共 5 页，页号 = ⌈关号 / 每页关数⌉', () => {
   assertEqual(MAP_PAGE_SIZE, MAP.pageSize, '导出的每页关数与配置一致');
@@ -34,17 +52,28 @@ test('positionsOnPage：每页恰好 10 关且关号连续；越界页被夹住'
   assertEqual(positionsOnPage(99)[0].id, 41, '第 99 页夹到第 5 页');
 });
 
-test('LEVEL_MAP_POS：50 项、关号连续、坐标落在 viewBox 内、页内 5 行 × 2 列', () => {
+test('LEVEL_MAP_POS：50 项、关号连续、坐标是归一化值、X 轴 ≥3 个水平位置且打破两列对齐', () => {
   assertEqual(LEVEL_MAP_POS.length, LEVEL_COUNT, '坐标条数 = 关卡数');
   assertDeepEqual(LEVEL_MAP_POS.map((pos) => pos.id), Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1), '关号 1..50 连续');
+  assertTrue(LEVEL_MAP_POS.every((pos) => pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1), '坐标都是 0–1 的归一化值');
   assertTrue(
-    LEVEL_MAP_POS.every((pos) => pos.x === MAP.marginX || pos.x === MAP.width - MAP.marginX),
-    'x 都在两列之一'
+    LEVEL_MAP_POS.every((pos) => MAP.nodeColumns.includes(pos.x)),
+    `x 都落在 nodeColumns（${MAP.nodeColumns.join(' / ')}）之一`
   );
-  assertTrue(LEVEL_MAP_POS.every((pos) => pos.y >= MAP.marginY && pos.y <= MAP.height - MAP.marginY), 'y 在上下边距之间');
-  // 页内是 5 行 × 2 列，所以「页 + 坐标」才唯一（不同页可以复用同一组 x/y）
+  assertTrue(new Set(LEVEL_MAP_POS.map((pos) => pos.x)).size >= 3, 'X 轴至少 3 个不同水平位置（打破两列对齐）');
+  for (let page = 1; page <= pageCount(); page += 1) {
+    const columns = new Set(positionsOnPage(page).map((pos) => pos.x));
+    assertTrue(columns.size >= 3, `第 ${page} 页也有 ≥3 个不同 X 水平位置`);
+  }
+  // 页内是 5 行 × 2 个：Y 由公式给出，行内两个节点一高一低（±nodeStaggerY）形成错落
+  const spanY = (1 - MAP.nodeMarginY * 2) / (MAP.nodeRows - 1);
+  const yExact = LEVEL_MAP_POS.every((pos) => {
+    const index = (pos.id - 1) % MAP.pageSize;
+    const expected = round3(MAP.nodeMarginY + Math.floor(index / 2) * spanY + (index % 2 === 0 ? -MAP.nodeStaggerY : MAP.nodeStaggerY));
+    return pos.y === expected;
+  });
+  assertTrue(yExact, 'y 与「每页 5 行 + ±错落」的公式一致');
   assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.page},${pos.x},${pos.y}`)).size, LEVEL_COUNT, '没有两关落在同一页的同一坐标');
-  assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.x},${pos.y}`)).size, MAP.pageSize, '页内恰好 10 个不同坐标（5 行 × 2 列）');
 });
 
 test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRNG，不用于玩法）', () => {
@@ -59,22 +88,70 @@ test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRN
   assertTrue(seqA1.every((v) => v >= 0 && v < 1), '取值落在 [0,1)');
 });
 
-test('buildVinePath：同页永远同一条 d（设计期派生），且路径依次经过本页每个节点', () => {
+test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × viewBox），与节点坐标无关', () => {
+  const anchors = buildVineAnchors();
+  assertDeepEqual(
+    anchors,
+    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP.height) })),
+    '锚点 = config 的归一化锚点 × viewBox 宽高'
+  );
+  assertTrue(anchors.length >= 4, '锚点至少 4 个');
+  assertTrue(anchors[0].y < MAP.height, '入口在页内（y < 1）');
+  assertTrue(anchors[anchors.length - 1].y > MAP.height, '出口略超出页底（y > 1，跨屏接口）');
+  // 跨屏衔接：上一屏出口 y − 1 屏高 = 下一屏入口 y
+  assertTrue(Math.abs(MAP.anchors[MAP.anchors.length - 1].y - 1 - MAP.anchors[0].y) < 1e-9, '出口与下一页入口在 Y 轴上衔接');
+  const nodePoints = positionsOnPage(1).map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(pos.y * MAP.height) }));
+  assertTrue(
+    anchors.every((anchor) => !nodePoints.some((point) => point.x === anchor.x && point.y === anchor.y)),
+    '锚点与节点坐标不重合（路径不经过节点）'
+  );
+});
+
+test('buildVinePath：同页永远同一条 d（设计期派生）、是曲线而不是直线拼接、且与节点坐标无关', () => {
   const first = buildVinePath(1);
   assertEqual(first, buildVinePath(1), '同一页两次结果相同');
   assertTrue(first.startsWith('M '), '以 M 开头');
-  assertEqual(first.split('C').length - 1, buildVineAnchors(1).length - 1, '每两个锚点之间一段三次贝塞尔');
+  assertEqual(first.split('C').length - 1, buildVineAnchors().length - 1, '每两个锚点之间一段三次贝塞尔');
   assertFalse(buildVinePath(1) === buildVinePath(2), '不同页的路径不同（种子随页变化）');
 
-  const anchors = buildVineAnchors(1);
-  const nodes = positionsOnPage(1);
-  assertEqual(anchors.length, nodes.length + 2, '锚点 = 页顶边缘 + 本页节点 + 页底边缘');
-  assertDeepEqual(anchors[0], { x: MAP.width / 2, y: 0 }, '起点在页顶边缘');
-  assertDeepEqual(anchors[anchors.length - 1], { x: MAP.width / 2, y: MAP.height }, '终点在页底边缘（跨页接口）');
-  nodes.forEach((node, index) => {
-    assertDeepEqual(anchors[index + 1], { x: node.x, y: node.y }, `第 ${index + 1} 个锚点 = 第 ${node.id} 关的坐标`);
-    assertTrue(first.includes(` ${node.x} ${node.y}`), '路径的 d 里出现该节点坐标（节点落在藤蔓上）');
+  // 节点坐标是显式的、**不参与路径计算**（19.2 v2 的用户方案取舍，见 D040）：
+  // 因此路径里不应出现任何节点坐标。
+  positionsOnPage(1).forEach((node) => {
+    const point = `${round1(node.x * MAP.width)} ${round1(node.y * MAP.height)}`;
+    assertFalse(first.includes(` ${point}`), `第 ${node.id} 关的坐标不出现在路径 d 里`);
   });
+
+  // 「曲线而不是直线拼接」：每段的控制点都偏离弦（直线时垂距为 0），且整体确实弯了
+  const segments = buildVineSegments(1);
+  assertEqual(segments.length, buildVineAnchors().length - 1, '分段数 = 锚点数 − 1');
+  const deviations = segments.map((seg) => {
+    const dx = seg.to.x - seg.from.x;
+    const dy = seg.to.y - seg.from.y;
+    const length = Math.hypot(dx, dy) || 1;
+    const distance = (point) => Math.abs((point.x - seg.from.x) * dy - (point.y - seg.from.y) * dx) / length;
+    return Math.max(distance(seg.c1), distance(seg.c2));
+  });
+  assertTrue(deviations.every((value) => value > 0.5), `每段都不是直线（控制点偏离弦）：${JSON.stringify(deviations)}`);
+  assertTrue(Math.max(...deviations) > 5, '曲线确实弯曲（最大偏离 > 5px）');
+});
+
+test('nodeState：只有 visited / attainable 两态，任何星级都不会得到 locked（19.2 只画不拦）', () => {
+  assertEqual(nodeState(0), 'attainable', '0 星 → attainable');
+  assertEqual(nodeState(1), 'visited', '1 星 → visited');
+  assertEqual(nodeState(3), 'visited', '3 星 → visited');
+  assertEqual(nodeState(-1), 'attainable', '脏值 −1 → attainable');
+  assertEqual(nodeState(undefined), 'attainable', '缺省 → attainable');
+  const states = [-1, 0, 0.5, 1, 2, 3, 9, 'x', null, undefined].map((value) => nodeState(value));
+  assertTrue(states.every((state) => state === 'attainable' || state === 'visited'), `任何输入都不产生 locked：${JSON.stringify(states)}`);
+});
+
+test('starPath：五角星是 10 个顶点的闭合路径；尺寸 = starSize × starScale（比第一版大 40%）', () => {
+  const d = starPath(0, 0, MAP.starSize * MAP.starScale);
+  assertTrue(d.startsWith('M '), '以 M 开头');
+  assertTrue(d.trim().endsWith('Z'), '闭合路径');
+  assertEqual(d.split('L').length - 1, 9, '10 个顶点（1 个 M + 9 个 L）');
+  assertEqual(MAP.starScale, 1.4, '放大倍率是 1.4（比第一版的 11px 大字 40%）');
+  assertEqual(round1(MAP.starSize * MAP.starScale), 15.4, '星星尺寸 = 11 × 1.4 = 15.4px');
 });
 
 test('clampStars：星级只接受 0–3 的整数（脏数据 → 0）', () => {

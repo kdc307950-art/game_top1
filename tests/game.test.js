@@ -568,7 +568,7 @@ test('12.1：GameSnapshot 带 v1.14 的五个字段（goal/collected/clearedIce/
   assertTrue(Object.isFrozen(snapshot.collected), 'collected 是冻结副本（UI 不能改到内部状态）');
 });
 
-test('12.1：收集目标达成 → 通关、剩余步数按 3.5 转化、星级 ≥ 1、gameOver', () => {
+test('12.1 + Step 20：收集目标达成 → 通关、剩余步数进入结算阶段、星级 ≥ 1、gameOver', () => {
   const game = createGame(
     { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [100, 1000, 2000] },
     { rng: cycleRng([0.05, 0.4, 0.9]) }
@@ -582,17 +582,29 @@ test('12.1：收集目标达成 → 通关、剩余步数按 3.5 转化、星级
   assertTrue(game.gameOver, '通关也是结束');
   assertEqual(game.level.remainingSteps, 29, '只扣 1 步');
   const snapshot = getState(game);
-  assertEqual(snapshot.collected.ladybug, 3, '进度累加：本步消掉 3 只');
+  // Step 20：结算阶段的连锁引爆会把盘面炸开，因此本局的收集数**只会多不会少**
+  assertTrue(snapshot.collected.ladybug >= 3, `进度累加：至少消掉 3 只，实得 ${snapshot.collected.ladybug}`);
   assertEqual(snapshot.won, true, '快照标记通关');
-  // 30（本步）+ 29 步 × 30（3.5 的剩余步数转化）= 900
-  assertEqual(snapshot.currentScore, 900, '通关瞬间结算剩余步数分');
-  assertEqual(result.scoreDelta, 900, 'SwapResult.scoreDelta 含转化分');
-  assertEqual(snapshot.stars, 1, '900 分落在 [100,1000) → 1 星');
+
+  // v1.25：剩余步数的转化口径 = 递增奖励分 + 转成随机特殊糖果并连锁引爆（不再有平坦的 30 分/步）
+  const settlement = result.resolve.settlement;
+  assertTrue(Boolean(settlement), 'SwapResult 带回结算阶段元信息');
+  assertEqual(settlement.steps, 29, '结算阶段看到 29 个剩余步');
+  assertTrue(settlement.stepScore > 0, `递增奖励分为正：${settlement.stepScore}`);
+  assertTrue(settlement.converted.length > 0, `有格子被转化成特殊糖果：${settlement.converted.length}`);
+  assertTrue(settlement.detonations > 0, `发生了连锁引爆：${settlement.detonations} 次`);
+  assertEqual(game.board.flat().filter((cell) => cell.type !== CELL_TYPE.NORMAL).length, 0, '引爆后盘面无特殊方块');
+  assertTrue(
+    snapshot.currentScore >= 30 + settlement.stepScore,
+    `总分含结算奖励分与引爆分：${snapshot.currentScore} ≥ ${30 + settlement.stepScore}`
+  );
+  assertTrue(result.scoreDelta >= settlement.stepScore, 'SwapResult.scoreDelta 含结算奖励分');
+  assertTrue(snapshot.stars >= 1, '通关至少 1 星');
 });
 
 test('12.1：3.7 通关至少 1 星（分数低于 1★ 线也不给 0 星）', () => {
   const game = createGame(
-    { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [100000, 200000, 300000] },
+    { steps: 30, goal: { type: GOAL_TYPE.COLLECT, targets: { ladybug: 3 } }, starThresholds: [10 ** 12, 2 * 10 ** 12, 3 * 10 ** 12] },
     { rng: cycleRng([0.05, 0.4, 0.9]) }
   );
   singleLevelBoard(game.board);
@@ -600,7 +612,7 @@ test('12.1：3.7 通关至少 1 星（分数低于 1★ 线也不给 0 星）', 
   trySwap(game, { r: 4, c: 2 }, { r: 5, c: 2 });
 
   assertTrue(game.level.completed, '目标达成');
-  assertEqual(getState(game).stars, 1, '3.7：达成通关目标即至少一星');
+  assertEqual(getState(game).stars, 1, '3.7：达成通关目标即至少一星（分数远低于 2★ 线也不给 0/2 星）');
 });
 
 test('12.1：最后一步达成目标算通关，不算「步数用尽」', () => {
