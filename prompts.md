@@ -388,10 +388,12 @@
 - 20.1：settlement.js（PRNG / 转化计划 / 引爆顺序）+ game.settleEndgame（队列式连锁引爆）+ timeline 的「转化定格」一帧。
 - 20.2：递增奖励分 settlementStepsScore + 沿用 3.5 特效倍数表的连锁引爆分；删除 SCORE_CONFIG.stepBonus 与 getRemainingStepBonus。
 - 20.3：level.computeStarThresholds（统一动态派生）+ 用 _build/measure-step20.mjs 的**实测数据**标定 typicalRemainingRatio 与 settlementCoverage。
-- 20.4（待批准）：彩星 rainbow 字段预留与存档迁移。
+- 20.4：彩星 rainbow 字段预留与存档迁移（已完成，v1.26）—— 只做「字段 + 迁移」，彩星的**分数线**仍属后续数值调优。
 验收：node tests/run-all.js 全绿；python _build/consistency_check.py 全绿；lint-levels / check-level-table PASS；
-      浏览器里过关后**先转化定格、再连锁引爆**，结束面板星级与最终分一致；LEVELS.md 阈值列与代码逐项一致。
-禁止：结算阶段消耗步数；运行时随机；为连锁引爆另起一套倍数表；顺手实现彩星；把阈值改成逐关手写的表。
+      浏览器里过关后**先转化定格、再连锁引爆**，结束面板星级与最终分一致；LEVELS.md 阈值列与代码逐项一致；
+      verify-step19-1 / 19-2 在 v2 存档格式下仍全绿。
+禁止：结算阶段消耗步数；运行时随机；为连锁引爆另起一套倍数表；把阈值改成逐关手写的表；
+      把彩星**计入总星数**（口径是「不计入」，见 D042）。
 前置依赖：无（Step 12.3 的「结束前引爆」是本步前身）。
 参考：用户提交的结算阶段方案；DECISIONS.md D041；_build/measure-step20.mjs 的产数据。
 ```

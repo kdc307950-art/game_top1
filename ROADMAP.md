@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.25
+> 版本：v1.26
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -985,7 +985,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | **20.1** | 结算阶段：余步 → 递增奖励分 + 随机特殊糖果 → **队列式连锁引爆**（新增 `settlement.js` 与 `game.settleEndgame`）；`resolveBoard({ final: true })` 在结算期间跳过 3.8 的重排；`timeline.js` 加一帧「转化定格」 | **已完成**（宪法 v1.25） |
 | **20.2** | 结算计分：递增奖励分（`settlementStepsScore`）+ 连锁引爆分（**沿用 3.5 的特效倍数表，不另起一套**）；删除平坦的「每剩余一步 30 分」 | **已完成**（宪法 v1.25） |
 | **20.3** | 星级统一动态派生：`level.computeStarThresholds` + `STAR_CONFIG.settlementCoverage` + `SETTLEMENT_CONFIG.typicalRemainingRatio`（**由 300 局实测标定**）；`LEVELS.md` 的阈值列改为公式输出 | **已完成**（宪法 v1.25） |
-| **20.4** | 彩星（`rainbow`）字段预留与存档迁移（`levels` 的值由数字改为对象） | **未开始 —— 需先批准口径**（属存档格式变更，见 `DECISIONS.md` D041 第 8 条） |
+| **20.4** | 彩星（`rainbow`）字段预留与存档迁移（`levels` 的值由数字改为 `{ stars, rainbow }`，`schemaVersion` 1 → 2） | **已完成**（宪法 v1.26 —— 只做「字段 + 迁移」，彩星**分数线**仍属后续调优，见 `DECISIONS.md` D042） |
 
 **20 的范围**：`settlement.js`（新模块）+ `level.js`（`computeStarThresholds`、删 `getRemainingStepBonus`）+ `game.js`（`settleEndgame` / `applyConversion` / `chainDetonations`）+ `timeline.js` 与 `app.js`（转化定格阶段与日志）+ `config.js`（`SETTLEMENT_CONFIG` 等）+ `LEVELS.md`（阈值列）+ `tests/settlement.test.js`。
 
@@ -1042,7 +1042,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [ ] Step 17：粒子动画与视觉打磨
 - [ ] Step 18：Capacitor 打包
 - [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；**19.2 藤蔓地图已完成**（滚动口径 (a)：5 页 × 每页 10 关，只画不拦）；19.3 解锁与软件化挂起 —— 见 DECISIONS D037 / D039）
-- [x] **Step 20**：结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）+ 星级统一动态调整（20.1–20.3 已完成，见 §4.2 与 DECISIONS D041；20.4 彩星字段待批准）
+- [x] **Step 20**：结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）+ 星级统一动态调整 + 彩星字段预留（20.1–20.4 **全部完成**，见 §4.2 与 DECISIONS D041 / D042）
 
 ---
 
@@ -1063,6 +1063,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |
+| v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | 与宪法 v1.26 同步：**20.4 彩星字段预留 + 存档迁移**（`STORAGE_CONFIG.schemaVersion` 1 → 2，`levels` 的值改为 `{ stars, rainbow }`，v0/v1 就地迁移且老存档不丢；新增 `readLevelRecords`/`writeLevelRecords`/`getTotalRainbows`，对外形状 `readLevelStars`/`getTotalStars`/`recordLevelStars` 不变；彩星不计入总星数）；Step 20 的 20.1–20.4 全部完成 | §4.2、§5、第 6 节 |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | 与宪法 v1.25 同步：新增 §4.2 Step 20（结算阶段 + 星级统一动态调整，20.1–20.3 已完成 / 20.4 彩星待批准）；§4.1 表里的软件化行去掉「20」这个编号以免与 Step 20 冲突；新增 `settlement.js`、`LEVELS.md` 阈值列改公式输出（`sync-levels-stars.mjs` / `measure-step20.mjs`） | §4.1、§4.2、§5、第 6 节 |
 | v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | 与宪法 v1.24 同步：Step 19.2 藤蔓地图按用户修订方案重做（坐标归一化 0–1、路径改单条平滑贝塞尔且锚点进 `VINE_MAP_CONFIG.anchors`、节点显式坐标不参与路径计算、`data-state` 两态、星星 +40%、呼吸光效、翻页箭头 + 总星数进度条、叶子沿切线旋转、附录 B `VINE_MAP_CONFIG` 8→19 键）；19.3 与软件化仍挂起 | §4.1、§5、第 6 节 |
 | v1.23 | 2026-09-22 | Agent（用户批准 19.2） | 与宪法 v1.23 同步：Step 19.2 藤蔓地图完成（`vine-map.js`/`vine-map.css`、`LEVEL_MAP_POS` 与 `LEVELS.md` §9 坐标表 + 巡检、确定性路径、canvas 选关退役、`?map=1` 入口、`VINE_MAP_CONFIG` 8 键）；门禁清单 19→20 套件 | §4.1、§5、第 6 节 |

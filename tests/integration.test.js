@@ -403,14 +403,46 @@ test('storage（v1.21）：星级存档带版本写入，读到旧格式（v0）
   assertDeepEqual(storage.readLevelStars(), { 1: 3, 12: 2 }, '旧格式读回同形（调用方无感）');
   const migrated = JSON.parse(memory.get(STORAGE_KEYS.LEVEL_STARS));
   assertEqual(migrated.version, CONFIG.STORAGE_CONFIG.schemaVersion, '迁移后带 version');
-  assertDeepEqual(migrated.levels, { 1: 3, 12: 2 }, '迁移后关卡表原样保留');
+  // v1.26（Step 20.4）：v2 的记录形状是 `{ stars, rainbow }`，v0/v1 的数字值迁移时补 `rainbow: false`
+  assertDeepEqual(
+    migrated.levels,
+    { 1: { stars: 3, rainbow: false }, 12: { stars: 2, rainbow: false } },
+    '迁移后关卡表原样保留（升级为 v2 记录，含彩星字段）'
+  );
   assertTrue(typeof migrated.updatedAt === 'string' && migrated.updatedAt.length > 0, '迁移后带 updatedAt');
   assertTrue(logs.some(([, m]) => m.includes('迁移')), '迁移会打日志（可诊断）');
 
-  // v1：再读不应重写（幂等）
-  const rawV1 = memory.get(STORAGE_KEYS.LEVEL_STARS);
+  // 当前版本：再读不应重写（幂等）
+  const rawCurrent = memory.get(STORAGE_KEYS.LEVEL_STARS);
   storage.readLevelStars();
-  assertEqual(memory.get(STORAGE_KEYS.LEVEL_STARS), rawV1, '当前版本再读不重写');
+  assertEqual(memory.get(STORAGE_KEYS.LEVEL_STARS), rawCurrent, '当前版本再读不重写');
+
+  // v1 → v2：老存档（值是数字）就地升级成记录，星级一分不丢、彩星一律 false
+  memory.set(STORAGE_KEYS.LEVEL_STARS, JSON.stringify({ version: 1, levels: { 1: 3, 12: 2 } }));
+  assertDeepEqual(storage.readLevelStars(), { 1: 3, 12: 2 }, 'v1 读回同形');
+  const fromV1 = JSON.parse(memory.get(STORAGE_KEYS.LEVEL_STARS));
+  assertEqual(fromV1.version, CONFIG.STORAGE_CONFIG.schemaVersion, 'v1 迁移到当前版本');
+  assertDeepEqual(fromV1.levels[1], { stars: 3, rainbow: false }, 'v1 → v2 补彩星字段');
+  assertEqual(storage.readTotalStars(), 5, '迁移后总星数不变');
+  assertEqual(storage.readTotalRainbows(), 0, '迁移不产生彩星');
+
+  // 彩星字段预留：能写入、能读回、**不计入总星数**，且不会被后续更差的成绩抹掉
+  const rainStars = {};
+  storage.recordLevelStars(rainStars, 5, 3, { rainbow: true });
+  assertDeepEqual(storage.readLevelRecords()[5], { stars: 3, rainbow: true }, '彩星可写可读');
+  assertEqual(storage.readTotalStars(), 8, '总星数只数星级（3 + 3 + 2）');
+  assertEqual(storage.readTotalRainbows(), 1, '彩星单独派生');
+  storage.recordLevelStars(rainStars, 5, 2);
+  assertDeepEqual(storage.readLevelRecords()[5], { stars: 3, rainbow: true }, '更差的成绩不覆盖，也不抹掉彩星');
+
+  // v2 记录里的脏字段：rainbow 只认严格布尔，stars 照旧夹成非负整数
+  memory.set(STORAGE_KEYS.LEVEL_STARS, JSON.stringify({ version: 2, levels: { 1: { stars: 3, rainbow: 'false' }, 2: { stars: -1, rainbow: true }, 3: 2 } }));
+  assertDeepEqual(
+    storage.readLevelRecords(),
+    { 1: { stars: 3, rainbow: false }, 2: { stars: 0, rainbow: true }, 3: { stars: 2, rainbow: false } },
+    'v2 脏字段规范化（rainbow 只认布尔；裸数字仍按 v0/v1 处理）'
+  );
+  assertEqual(storage.readTotalRainbows(), 1, '只有严格 true 才算彩星');
 
   // 未来版本：只尽力读取，绝不降级覆盖
   memory.set(STORAGE_KEYS.LEVEL_STARS, JSON.stringify({ version: 99, levels: { 5: 3 }, extra: 'x' }));

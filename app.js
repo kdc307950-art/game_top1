@@ -691,7 +691,7 @@ function drawFrame(entry = null, progress = 1) {
     clearing: entry && entry.phase === 'clear' ? { keys: entry.keys, progress } : null,
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
-    banner: entry?.banner ?? null, // 5.5：重排提示 / Step 20：结算阶段的「转化定格」提示
+    banner: entry?.banner ?? null, // 5.5：重排前给出明确提示（结算阶段刻意不叠加任何横幅，见 timeline.js）
     // Step 19.2：选关界面已改为画布外的藤蔓地图层（`#map`），canvas 场景里不再有选关网格
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,

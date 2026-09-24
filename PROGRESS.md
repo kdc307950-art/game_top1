@@ -5,22 +5,28 @@
 
 ---
 
-## 2026-09-23（Step 20：结算阶段（余步 → 特殊糖果 → 连锁引爆）+ 星级统一动态调整 —— 机制与计分已落地并验证；浏览器套件待改写）
+## 2026-09-23（Step 20：结算阶段（余步 → 特殊糖果 → 连锁引爆）+ 星级统一动态调整 + 彩星字段预留 —— 20.1–20.4 全部完成并验证）
 
 用户提交了完整的结算阶段方案（余步转特殊糖果并引爆 / 连锁引爆计分 / 星级动态调整）。方案里「需要拍板」的三处口径本轮未作答，按项目惯例（D035/D036 的「长时间没有选择就按推荐默认执行」）取**推荐默认**：**递增制**、**1 步 = 1 颗**、**转化取代平坦加分**。用户还明确要求「阈值的合理值必须基于实际产出数据来定，提前调是盲调」—— 故先做机制与计分，再用新增的产数据脚本标定两个系数。口径与理由见 `DECISIONS.md` **D041**（编号：用户方案的「19.3.x」落在 **Step 20.x**，19.3 的解锁名额保留）。
 
 - **宪法 v1.25（用户批准）**：3.6 第 7 条改写为「结算阶段」三步（递增奖励分 → 随机特殊糖果 → 从棋盘底部到顶部逐颗连锁引爆）；3.5 的「剩余步数转化」改写并**删除** `SCORE_CONFIG.stepBonus` 与 `getRemainingStepBonus`；3.7 新增 `level.computeStarThresholds` 的**统一动态派生**；2.2/2.3 登记新模块 `settlement.js`；4.2 追加 `resolveBoard({ final })`、`ResolveResult.settlement` 与 `level.computeStarThresholds`；附录 B 新增 10 键、删除 2 键；`ROADMAP.md` 新增 §4.2 Step 20；`prompts.md` 同步。
+- **宪法 v1.26（Step 20.4，用户方案第 4 项）**：**彩星字段预留 + 存档迁移** —— `STORAGE_CONFIG.schemaVersion` 1 → 2（`levels` 的值由数字改为 `{ stars, rainbow }`），v0/v1 **就地迁移**逐关补 `rainbow: false`（老存档不丢、幂等、更高版本仍只读不写）；新增 `readLevelRecords` / `writeLevelRecords` / `getTotalRainbows`，而 `readLevelStars` / `getTotalStars` / `recordLevelStars` 的对外形状**一点不动**（后者加可选 `options.rainbow` 并默认沿用既有标志，写入因此不会抹掉彩星）；口径为**彩星不计入总星数**（`⭐ n/150` 只数星级）。**本步只做字段与迁移，不做彩星分数线**（口径见 D042）。
+- **动画预算（`SETTLEMENT_CONFIG.maxAnimationLevels` = 8）**：`timeline.buildPhases` 只限制**逐层播放**的层数（逻辑与计分早在 `game.js` 算完），超出部分一次性跳到最终盘面并把 `levelIndex` 顶到末尾（HUD 分数一次到终值）。**实测**：典型通关（余步 29 / 转化 29 / 引爆 1 次 / levels 2）**2.0 秒 · 7 个阶段**；退化夹具（恒定补位色 → 单次引爆链式炸出 128 层）是 **28 秒 · 148 个阶段**，没有预算时是 **48.6 秒 · 259 个阶段**。预算防的是后者那种极端局面。
 - **`settlement.js`（新模块，纯逻辑）**：`mulberry32` 固定种子 PRNG、`settlementStepsScore`（递增奖励分）、`estimateSettlementScore`（星级修正用的结算期望分）、`conversionPlan`（只落**朴素动物格**）、`detonationOrder`（**从棋盘底部到顶部**）、`findCellById`（引爆期间格子随重力移动，队列按 `cell.id` 追踪）。不认识 `GameState`，可在 Node 里逐项测。
 - **`game.js`**：`settleEndgame` = 转化 → **队列式连锁引爆**（每次引爆走一次完整 `resolveBoard({ initialClear, final: true })`，级联新生成的特效**追加队列**，上限 `maxChainDetonations` = 64）；返回的 `ResolveResult.settlement` 带 `{ steps, stepScore, detonationScore, detonations, converted, board, atIndex }`，供 UI 播「转化定格」，也让 HUD 的尾款（`tailBonus`）对得上。`mergeResolveResults` 会把这套元信息穿过合并。
 - **`timeline.js` / `app.js`**：`buildPhases` 在引爆批次起点插入一帧 `bonus`（banner「剩余步数化作特殊糖果，连锁引爆！」，`ANIMATION_CONFIG.settleBanner` = 900ms），并把随后的消除基线棋盘换成**转化后**的快照 —— 否则那批特效会「没被画出来就凭空炸掉」。日志新增一行结算摘要（余步 / 奖励分 / 转化颗数 / 引爆次数）。
 - **`level.js` / `LEVELS.md`**：星阈值改为 `computeStarThresholds(1★基准分, 派生步数)` 一条公式（**1★ 不动**；`2★/3★ = round500(基准分 × 倍率) + round500(结算期望分 × 0.6)`）；`LEVELS.md` 的阈值列由新增的 `_build/sync-levels-stars.mjs` 重写，`lint-levels.mjs` 用同一份实现独立复算。
 - **验证**：
-  - **L1**：`node tests/run-all.js` → **11 个文件 / 249 用例 / 2161 断言 / 0 失败 / exit 0**（新增 `tests/settlement.test.js` 11 例：PRNG 确定性、转化候选过滤、落点与类型、引爆顺序、端到端两步；改写 `game.test.js` 的两例结算口径、`level.test.js` 的旧接口例为 `computeStarThresholds` 两例 + 递增制量纲护栏）。
+  - **L1**：`node tests/run-all.js` → **11 个文件 / 249 用例 / 2172 断言 / 0 失败 / exit 0**（新增 `tests/settlement.test.js` 11 例；`tests/integration.test.js` 的存档用例由 8 条断言扩到 20 条，覆盖 v0→v2 与 v1→v2 迁移、幂等、未来版本只读、**彩星往返与不被更差成绩覆盖**、v2 脏字段规范化；另改写 `game.test.js` 的两例结算口径与 `level.test.js` 的旧接口例）。
   - **L0**：`python _build/consistency_check.py` **全部通过**；`node _build/lint-levels.mjs` PASS；`node _build/check-level-table.mjs` PASS；`node _build/gen-levels.mjs` 的星阈值列与代码一致。
   - **产数据（标定依据）**：`node _build/measure-step20.mjs`（**300 局**，真实模块，玩家模型如实声明为 greedy / random）—— 通关率 greedy 59.3% / random 65.3%；**通关余步中位 5–6 步（≈ 步数预算的 19–22% → `typicalRemainingRatio = 0.20`）**；结算分占最终分中位 **30–36%（→ `settlementCoverage = 0.6`）**；连锁引爆次数中位 4 / max 13；星级分布 greedy 1★ 82% / 2★ 13% / 3★ 4%，对照「旧世界（基础分 + 旧阈值）」为 1★ 99% / 2★ 1% / 3★ 0%。
-  - **L2/L3：未执行** —— 既有 `_build/verify-step12.mjs` 的阶段 7（结束前引爆）与 `verify-step12b` 的断言写的是**旧口径**（平坦 30 分/步、一次性引爆），必须先按结算阶段改写才能复跑；本轮如实登记为**未验证边界**。
-- **未验证边界（如实）**：① 浏览器 L2/L3（结算演出的观感、结束面板星级与最终分的一致性、既有浏览器套件的改写与复跑）；② 真机上的演出时长与性能（极端情况最多 64 次引爆 × 每次一条完整级联）；③ **20.4 彩星字段未实现**（属存档格式变更，待批准）。
-- **下一步（二选一）**：改写 `_build/verify-step12.mjs` / `verify-step12b.mjs` 的结算相关断言并复跑浏览器套件；或先做 20.4 的彩星字段预留（需先批准口径）。
+  - **L2/L3（四个套件全部全绿）**：`node _build/verify-step12.mjs`（按结算阶段改写阶段 4 的三条旧断言后）**失败 0 项** —— 控制台无 error/warning、无未捕获异常、真实滑动 24 次、棋盘无空洞无三连、阶段 7 的两条引爆断言照常通过；`node _build/verify-step12b.mjs` **失败 0 项**（28 次真实滑动后结束面板正常弹出，`buttonPixels=6026`，两个按钮与「选关→藤蔓地图」链路正常）；`_build/verify-step19-1.mjs` 与 `_build/verify-step19-2.mjs`（v2 存档格式）**失败 0 项**。**注意**：`verify-step12b` 单独跑需要约 2 分钟（阶段 4 会滑到本局结束），短预算的命令会误报超时。
+  - **排查记录（如实）**：把 4–6 个浏览器套件**串在一条命令里连跑**时，`verify-step12` 阶段 5 的「当前棋盘无三连」会间歇性 FAIL，而**单独跑必过**。根因是巡检探针（`waitSettled` 的 3 帧稳定窗口 + 6 秒等待预算）在机器负载下的**时序敏感性**，**不是游戏缺陷**；正确修法是给探针更长的等待预算（属 Gate 0.1 收尾轮的验证工具改进），不应靠改游戏去迁就探针。同一轮里还定位并修掉了一个**真问题**：结算的「转化定格」原本画横幅，而横幅画在棋盘正中 —— 既盖住了它本该展示的那批特效，又让像素巡检把横幅当成「同色三连」（见下 P3-A）。
+  - **缺陷记录**：
+    - **P3-A（本轮引入，已定位并修复）**：`verify-step12.mjs` 阶段 5 的「当前棋盘无三连」在加完结算阶段后**稳定复现 FAIL**（三次里失败两次）。根因是**我自己引入的**：「转化定格」那一帧原本画了一条横幅，而 `hud.js` 的 `drawBanner` 画在**棋盘区正中央**（宽 92%、高约两行）—— 于是 ① 它盖住了这一帧本该让玩家看清的那批特效，② 像素巡检把横幅读成「一片同色格子」→ 误判三连。修法：这一帧**不再叠加任何横幅**（提示改走日志），配置键也从 `ANIMATION_CONFIG.settleBanner` 更名为诚实的 **`settleHold`**；修后 `verify-step12` 复跑全绿。**这条一度被当作「既有探针抖动」记过一笔，属误判，特此更正**（记在此以免下次再踩）。
+    - **P3-B（既有偶发，Step 15 遗留，未修）**：`tests/game.test.js` 的「useBooster：刷新重排棋盘…满足 3.8 的四条约束」在**逐文件跑 25 次时失败 2 次**（≈8%）。根因是随机棋局下 `shuffleBoard` 的 50 次尝试可能找不到同时满足「无初始三连 + 存在可行交换」的排列，于是 `used === false`，而用例断言的是「刷新必定成功」。**与 Step 20 无关**；留待 Gate 0.1 的收尾轮修（用例改成「允许极端棋局下失败，但失败时不得扣次数」，并以注入 rng 构造可复现夹具）。
+- **未验证边界（如实）**：① 真机上的演出时长与性能（极端情况最多 64 次引爆 × 每次一条完整级联），以及结算演出的**观感**（本机桌面 Chrome 属 L2/L3，不代表真机）；② **彩星的分数线与展示未做**（20.4 只落地字段与迁移，属后续数值调优）。
+- **下一步**：Step 20 已收口。可选项：① 跑 Gate 0.1 的扩展前 Bug Audit（把 P3-A / P3-B 一并关掉）；② 定彩星的分数线与展示（需用户拍板数值口径）；③ 20.4 留下的字段已就位，接规则时**不必再动存档格式**。
 
 ## 2026-09-22（Step 19.2 v2：藤蔓地图按用户修订方案重做 —— 完成并验证 + Gate 0.1 第十一轮通过）
 

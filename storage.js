@@ -36,35 +36,59 @@ export const localStorageBackend = {
 };
 
 /**
- * 星级表解析 + 版本迁移（v1.21）。
- *   v0（历史格式，无 version 字段）：`{ "1": 3, "2": 2 }` —— 顶层就是关卡表
- *   v1（当前格式）：`{ version: 1, levels: { "1": 3 }, updatedAt: "..." }`
- * 返回 `{ levels, migrated, writable }`：
- *   levels    —— 展平的关卡表（对调用方与旧格式完全同形，hud/app 不需要改）
+ * 星级表解析 + 版本迁移（v1.21 引入，v1.26 扩到 v2）。
+ *   v0（历史格式，无 version 字段）：`{ "1": 3, "2": 2 }` —— 顶层就是关卡表，值是**数字**
+ *   v1：`{ version: 1, levels: { "1": 3 }, updatedAt }` —— 关卡表进 `levels`，值仍是数字
+ *   v2（当前，v1.26 / Step 20.4）：`{ version: 2, levels: { "1": { stars: 3, rainbow: false } }, updatedAt }`
+ *       —— 值是**对象**，为「彩星（rainbow）」预留字段；彩星**不计入总星数**（见 `getTotalRainbows`）
+ * 迁移是**就地**且幂等的：v0/v1 读进来后逐关补 `rainbow: false` 并写回，老存档一分不丢。
+ * 返回 `{ levels, records, migrated, writable }`：
+ *   levels    —— 展平的星级表 `{ id: 数字 }`（对调用方与旧格式完全同形，hud/app/vine-map 不需要改）
+ *   records   —— 完整的 v2 记录 `{ id: { stars, rainbow } }`（彩星与将来的解锁门槛从这里取）
  *   migrated  —— 读到的是旧格式，调用方应写回（老存档因此不会在下次改动时丢）
  *   writable  —— false 表示读到的是**未来版本**，只尽力读取、**绝不写回**（避免降级覆盖）
  */
 export function parseStarsRecord(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { levels: {}, migrated: false, writable: true };
+    return { levels: {}, records: {}, migrated: false, writable: true };
   }
   const version = Number.isFinite(raw.version) ? Math.trunc(raw.version) : 0;
   if (version > SCHEMA_VERSION) {
-    return { levels: normalizeLevels(raw.levels), migrated: false, writable: false };
+    const records = normalizeLevels(raw.levels);
+    return { levels: flattenStars(records), records, migrated: false, writable: false };
   }
   // v0 的顶层键就是关卡 id；v1 起关卡表在 levels 字段里。两者都经过同一套规范化（只收数字键、非负整数）。
-  const levels = normalizeLevels(version >= 1 ? raw.levels : raw);
-  return { levels, migrated: version < SCHEMA_VERSION, writable: true };
+  const records = normalizeLevels(version >= 1 ? raw.levels : raw);
+  return { levels: flattenStars(records), records, migrated: version < SCHEMA_VERSION, writable: true };
 }
 
-/** 关卡表的规范化：只保留 `"<数字>"` 键，值夹成非负整数（脏数据不会变成 NaN 或负数）。 */
+/**
+ * 关卡表的规范化：只保留 `"<数字>"` 键，逐关归一成 v2 的记录 `{ stars, rainbow }`。
+ * 值是数字（v0/v1）时补 `rainbow: false`；值是对象（v2）时只认 `stars` 与**严格布尔**的 `rainbow` ——
+ * 脏数据因此既不会变成 NaN/负数，也不会把 `'false'` 这种真值当成彩星。
+ */
 function normalizeLevels(source) {
-  const levels = {};
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return levels;
+  const records = {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return records;
   for (const [key, value] of Object.entries(source)) {
     if (!/^\d+$/.test(key)) continue;
-    levels[key] = normalizeStars(value);
+    records[key] = normalizeLevelEntry(value);
   }
+  return records;
+}
+
+/** 单关记录归一化：数字（v0/v1）→ `{ stars, rainbow: false }`；对象（v2）→ 只取合法字段。 */
+function normalizeLevelEntry(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return { stars: normalizeStars(value.stars), rainbow: value.rainbow === true };
+  }
+  return { stars: normalizeStars(value), rainbow: false };
+}
+
+/** v2 记录 → 展平的星级表（hud/app/vine-map 用的形状，与旧格式完全同形）。 */
+function flattenStars(records) {
+  const levels = {};
+  for (const [key, entry] of Object.entries(records ?? {})) levels[key] = entry.stars;
   return levels;
 }
 
@@ -73,13 +97,30 @@ function normalizeStars(value) {
   return Math.max(0, stars);
 }
 
-/** 把展平的关卡表包成当前版本的存档记录（写入路径的唯一出口，保证 version 与 updatedAt 一定存在）。 */
-function serializeStars(stars) {
+/**
+ * 把存档包成当前版本的记录（写入路径的唯一出口，保证 version 与 updatedAt 一定存在）。
+ * 入参可以是**展平的星级表**（`{ id: 数字 }`，app.js 与旧调用）或**完整的 v2 记录**
+ * （`{ id: { stars, rainbow } }`）—— 两者都先归一成记录再落盘，彩星字段因此不会在写入时被抹掉。
+ */
+function serializeStars(source) {
   return {
     version: SCHEMA_VERSION,
-    levels: normalizeLevels(stars),
+    levels: normalizeLevels(source),
     updatedAt: new Date().toISOString()
   };
+}
+
+/**
+ * 彩星数量（v1.26 / Step 20.4）：与 `getTotalStars` 一样是**派生量**，不进存档。
+ * 口径：**彩星不计入总星数**（用户方案 §2.2 第三步）—— 选关地图的 `⭐ n/150` 只数星级，
+ * 彩星是「三星之上的额外荣誉」，将来单独展示。入参是 v2 的记录表。
+ */
+export function getTotalRainbows(records) {
+  let total = 0;
+  for (const entry of Object.values(records ?? {})) {
+    if (entry && typeof entry === 'object' && entry.rainbow === true) total += 1;
+  }
+  return total;
 }
 
 /**
@@ -149,6 +190,20 @@ export function createStorage(logger = () => {}, backend = localStorageBackend) 
     }
   };
 
+  /**
+   * 读一次星级存档并解析（含迁移判定与**就地写回**）—— 三个读取入口共用，避免重复解析。
+   * 迁移只发生在「是可写的老版本」时：读到未来版本绝不写回（v1.21 的降级保护）。
+   */
+  const readRecords = () => {
+    const raw = read(STORAGE_KEYS.LEVEL_STARS, null, (text) => JSON.parse(text));
+    const parsed = parseStarsRecord(raw);
+    if (parsed.migrated && parsed.writable) {
+      write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(parsed.records)), '关卡星级');
+      logger('info', `星级存档已就地迁移到 v${SCHEMA_VERSION}（${Object.keys(parsed.records).length} 关，含彩星字段）`);
+    }
+    return parsed;
+  };
+
   return {
     /** 最高分；不可用或内容非法时回落 0（不让整局崩掉）。 */
     readBestScore() {
@@ -164,23 +219,32 @@ export function createStorage(logger = () => {}, backend = localStorageBackend) 
     },
 
     /**
-     * 每关星级表 `{ 关卡id: 星数 }`（对调用方**与旧格式同形**，hud/app 无需改动）。
-     * 脏数据一律回落空表；读到旧格式（v0）时**就地迁移**并写回 —— 老存档不会在下次改动时丢（v1.21）。
+     * 每关星级表 `{ 关卡id: 星数 }`（对调用方**与旧格式同形**，hud/app/vine-map 无需改动）。
+     * 脏数据一律回落空表；读到旧格式（v0/v1）时**就地迁移**并写回 —— 老存档不会在下次改动时丢（v1.21 / v1.26）。
      * 读到比当前更高的版本时只尽力读取、不写回（避免把新版数据降级覆盖）。
      */
     readLevelStars() {
-      const raw = read(STORAGE_KEYS.LEVEL_STARS, null, (text) => JSON.parse(text));
-      const parsed = parseStarsRecord(raw);
-      if (parsed.migrated && parsed.writable) {
-        write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(parsed.levels)), '关卡星级');
-        logger('info', `星级存档已从旧格式迁移到 v${SCHEMA_VERSION}（${Object.keys(parsed.levels).length} 关）`);
-      }
-      return parsed.levels;
+      return readRecords().levels;
     },
 
-    /** 写入带版本与时间戳的存档记录（v1.21）；入参仍是展平的关卡表。 */
+    /**
+     * 完整的 v2 记录表 `{ 关卡id: { stars, rainbow } }`（v1.26 / Step 20.4）。
+     * **彩星字段的预留出口**：本步只把字段与迁移做出来，真正决定「什么条件给彩星」的规则
+     * 需要单独的数值调优（用户方案 §2.2 第三步），因此当前 UI 还不消费它 ——
+     * 但迁移、写回、脏数据规范化都已生效，将来接规则时不必再改存档格式。
+     */
+    readLevelRecords() {
+      return readRecords().records;
+    },
+
+    /** 写入带版本与时间戳的存档记录（v1.21）；入参可以是展平的星级表，也可以是完整的 v2 记录。 */
     writeLevelStars(stars) {
       return write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(stars)), '关卡星级');
+    },
+
+    /** 写入完整的 v2 记录表（v1.26）—— 与 `writeLevelStars` 是同一个出口，只是入参形状更明确。 */
+    writeLevelRecords(records) {
+      return write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(records)), '关卡星级');
     },
 
     /** 总星数（派生量，不入存档）—— 选关界面与未来的解锁门槛都从这里取，见 `getTotalStars`。 */
@@ -188,16 +252,35 @@ export function createStorage(logger = () => {}, backend = localStorageBackend) 
       return getTotalStars(this.readLevelStars());
     },
 
+    /** 彩星数量（派生量，不入存档；**不计入总星数**，见 `getTotalRainbows`）。 */
+    readTotalRainbows() {
+      return getTotalRainbows(this.readLevelRecords());
+    },
+
     /**
      * 记录一次通关的星级：每关只留最好成绩，并立刻落盘。
-     * 返回 `{ best, updated }`，供调用方打日志（「更新/沿用旧纪录」）。
+     * 返回 `{ best, updated }`，供调用方打日志（「更新/沿用旧纪录」）—— 形状与 v1.21 一致，调用方无需改。
+     *
+     * v1.26（Step 20.4）：写入走 **v2 记录**，因此**彩星标志不会被抹掉** ——
+     * `options.rainbow` 缺省时沿用该关既有的标志（将来接了彩星规则，只要在这里传 true）。
+     * 同时把 `stars[levelId]` 同步回调用方持有的展平表，避免两处读数不一致。
      */
-    recordLevelStars(stars, levelId, earned) {
-      const previous = Number(stars?.[levelId] ?? 0);
-      const best = Math.max(Number.isFinite(previous) ? previous : 0, earned);
-      stars[levelId] = best;
-      this.writeLevelStars(stars);
-      return { best, updated: earned > previous };
+    recordLevelStars(stars, levelId, earned, options = {}) {
+      const key = String(levelId);
+      const records = readRecords().records;
+      // 调用方持有的展平表可能含存档里还没有的关卡：只补缺，**存档里已有的以存档为准**（防止降级覆盖）
+      if (stars && typeof stars === 'object') {
+        for (const [id, value] of Object.entries(stars)) {
+          if (!/^\d+$/.test(id) || id in records) continue;
+          records[id] = { stars: normalizeStars(value), rainbow: false };
+        }
+      }
+      const previous = records[key] ?? { stars: 0, rainbow: false };
+      const best = Math.max(previous.stars, normalizeStars(earned));
+      records[key] = { stars: best, rainbow: options.rainbow ?? previous.rainbow };
+      write(STORAGE_KEYS.LEVEL_STARS, JSON.stringify(serializeStars(records)), '关卡星级');
+      if (stars && typeof stars === 'object') stars[levelId] = best;
+      return { best, updated: normalizeStars(earned) > previous.stars };
     },
 
     /**

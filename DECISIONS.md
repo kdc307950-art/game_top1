@@ -8,6 +8,25 @@
 
 ---
 
+## D042：Step 20.4 —— 彩星（rainbow）字段预留与存档 v1 → v2 迁移
+
+- 日期：2026-09-23
+- 状态：**已落地**（只做「字段 + 迁移」；彩星的**分数线/判定规则**仍未定义，属后续数值调优）
+- 背景：用户方案 §2.2 第三步提出「开心消消乐在三星之上还有彩星，且彩星不计入总星数」，并建议**现在就把字段预留出来** —— 理由是 19.1 刚做完版本化存档，此刻把 `levels` 的值从数字扩成对象**迁移成本最低**（用户方案 §2.4）。`DECISIONS.md` D041 第 8 条曾把本项挂起（怕它把已很大的 Step 20 再撑开），本轮作为独立子步落地。
+- 决定：
+  1. **存档格式 v1 → v2**（`STORAGE_CONFIG.schemaVersion` 1 → 2）：`levels` 的值由**数字**改为 `{ stars, rainbow }` 记录。v0（顶层就是关卡表）与 v1（`levels` 里是数字）都**就地迁移**：逐关补 `rainbow: false` 并写回，**老存档一分不丢**；迁移幂等；读到更高版本仍然只读不写、绝不降级覆盖（沿用 v1.21 的三条保护）。
+  2. **对外形状一点不动**：`readLevelStars()` 仍返回展平的 `{ 关卡id: 星数 }`，`getTotalStars()` 与 `recordLevelStars()` 的签名/返回值不变 —— 因此 `hud.js` / `app.js` / `vine-map.js` **一行都不用改**（用户方案 §2.4 的兼容要求）。这是本步最关键的设计约束：**格式演进不能变成调用方的重构**。
+  3. **新增彩星出入口**：`readLevelRecords()` / `writeLevelRecords()`（完整 v2 记录表）与派生量 `getTotalRainbows()` / `storage.readTotalRainbows()`。当前 UI 还不消费它们 —— 但迁移、写回、脏数据规范化都已生效，将来接规则时**不必再碰存档格式**。
+  4. **彩星不计入总星数**（用户方案原文）：选关地图的 `⭐ n/150` 仍然只数星级；`getTotalRainbows` 是**独立**的派生量（与 `getTotalStars` 同一口径 —— 派生而非入库，避免两处真相源）。
+  5. **写入时不能抹掉彩星**：`recordLevelStars` 改为**先读回 v2 记录、再合并**，并新增可选第 4 参 `options.rainbow`（缺省**沿用该关既有标志**）。理由：它原先直接写调用方持有的展平表，格式升到 v2 后那样写会把彩星标志清零 —— 这是本步唯一的**读写耦合**风险点，用「存档为准 + 只补缺」的合并规则处理（调用方表里比存档更差的成绩**不会**覆盖存档）。
+  6. **脏数据口径**：`rainbow` 只认**严格布尔**（`'false'` 这类真值一律按 `false`）；`stars` 照旧夹成非负整数；`levels` 里混入裸数字仍按 v0/v1 处理（向后兼容）。
+  7. **不做的事**：不定义彩星分数线、不在 UI 上展示彩星、不把彩星计入 `⭐ n/150`、不改 `vine-map.js` 的节点状态机（它仍只有 `visited`/`attainable` 两态，没有「彩星态」）。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **249 用例 / 2172 断言 / 0 失败 / exit 0**。`tests/integration.test.js` 的存档用例由 8 条断言扩到 20 条，覆盖：v0 → v2 迁移（值是 `{stars, rainbow:false}`、总星不变）、v1 → v2 迁移、迁移幂等（再读不重写）、未来版本（v99）只读不写、**彩星往返**（`recordLevelStars(..., { rainbow: true })` 后 `readLevelRecords()` 读回 `{stars:3, rainbow:true}`）、**更差成绩不覆盖也不抹掉彩星**、以及 v2 脏字段（`'false'` → `false`、负数 → 0、裸数字按旧格式）规范化。
+  - **L2/L3**：`_build/verify-step19-1.mjs` 的四处版本断言（写入记录、v0 迁移后的记录形状、注入后端时的真实存档）改成 v2 后**复跑全绿（失败 0 项）**；`_build/verify-step19-2.mjs`（藤蔓地图的 50 节点 / `data-stars` / 总星数进度条）**无需改动即全绿** —— 这就是第 2 条「对外形状不变」的直接证据（写进去的是 v1 记录，页面照常读出 3/2/1 星与 `⭐ 6/150`）。
+- 影响：`config.js`（`STORAGE_CONFIG.schemaVersion` 1 → 2）、`storage.js`（`parseStarsRecord` 返回 `records`、`normalizeLevelEntry`、`flattenStars`、`serializeStars` 收两种入参、`getTotalRainbows`、`readLevelRecords` / `writeLevelRecords` / `readTotalRainbows`、`recordLevelStars` 改为合并写入）、`tests/integration.test.js`、`_build/verify-step19-1.mjs`、`AGENTS.md` v1.26（附录 B 默认值 + 2.3 边界）、`ROADMAP.md` §4.2（20.4 完成）、`prompts.md`。
+- 替代方案：① 现在就把彩星**规则**也做出来（否决：分数线需要独立调优 —— 它依赖「三星之上还能打多少分」的实测分布，属另一步；用户方案自己也把「实现」放到后续）；② 让 `readLevelStars()` 直接返回记录表（否决：会逼 `hud/app/vine-map` 三处跟着改，把一次格式演进变成一次跨模块重构）；③ 另开一个 `xxl_level_rainbow` 存档键（否决：星级与彩星是同一件事的两个维度，拆成两个键就要处理「写入一半失败」的不一致；放在同一条记录里天然原子）；④ 沿用 v1、把 `rainbow` 塞进额外字段（否决：会得到一个「既不是数字也不是对象」的混合格式，脏数据判定立刻变成一团乱麻）。
+
 ## D041：Step 20 —— 结算阶段（余步 → 特殊糖果 → 连锁引爆）与星级统一动态调整
 
 - 日期：2026-09-23
@@ -24,12 +43,13 @@
   8. **彩星（20.4）不做，只登记为待批准**：用户建议「先预留字段」（`levels` 的值由数字改为对象，并要求 `STORAGE_CONFIG.schemaVersion` 升到 2）。这是一次**存档格式变更**，会牵动 `storage.js` 的迁移、`vine-map.js` 的星级读取与 `verify-step19-1/19-2` 两个套件。按宪法「每次只做一件事」，20.4 单独走一次批准，不混在本步里。
   9. **未采纳用户表格里的一处外部口径**：连锁引爆表的「爆炸特效 → 周围 12 格」与本项目 3.2/3.3 的既有口径（包装糖果 = **3×3 共 9 格**）冲突。结算阶段**沿用本项目 3.5 的倍数表与 3.3 的范围**，不引入第二套范围定义。
   10. **`resolveBoard` 追加 `options.final`**：结算期间的每一次引爆都跳过 3.8 的死局检测与重排（本局已结束，重排只会把棋盘搅乱；在最多 64 次引爆里反复重排会让观感失控）。
-  11. **时间线只加一帧**：`buildPhases` 在结算批次的起点插入一帧 `bonus`（「转化定格」，`ANIMATION_CONFIG.settleBanner` = 900ms），并把随后的消除基线棋盘换成**转化后**的快照。**没有**新增 UI 状态机（用户方案 1.5 的 `playing → … → result_screen`）—— 本项目 5.4 已规定「逻辑先算完再播快照」，再叠一层状态机会与 `timeline.js` 重复，故状态机由**时间线的阶段序列**表达。
+  11. **时间线只加一帧，且**不叠加任何横幅**：`buildPhases` 在结算批次的起点插入一帧 `bonus`（「转化定格」，`ANIMATION_CONFIG.settleHold` = 900ms），并把随后的消除基线棋盘换成**转化后**的快照 —— 否则那批特效会「没被画出来就凭空炸掉」。这一帧**刻意不画横幅**：`hud.js` 的 `drawBanner` 画在棋盘区**正中央**（宽 92%、高约两行），叠加层既会盖住它本该展示的那批特效，又会让像素巡检把横幅当成「一片同色格子」—— `verify-step12` 阶段 5 的「当前棋盘无三连」因此当场误判（这条一度被我误记为「探针抖动」，实际是本步引入的，已修）。提示文案改走 `app.js` 的日志（`settlementText`）。**也没有**新增 UI 状态机（用户方案 1.5 的 `playing → … → result_screen`）—— 本项目 5.4 已规定「逻辑先算完再播快照」，再叠一层状态机会与 `timeline.js` 重复，故状态机由**时间线的阶段序列**表达。
 - 依据与证据：
-  - **L1**：`node tests/run-all.js` → **11 个文件 / 249 用例 / 2161 断言 / 0 失败 / exit 0**（新增 `tests/settlement.test.js` 11 例；改写 `game.test.js` 的两例结算口径与 `level.test.js` 的旧接口例）。
+  - **L1**：`node tests/run-all.js` → **11 个文件 / 249 用例 / 2161 断言 / 0 失败 / exit 0**（新增 `tests/settlement.test.js` 11 例；改写 `game.test.js` 的两例结算口径与 `level.test.js` 的旧接口例）。**偶发（已定位，与 Step 20 无关）**：整轮套件首跑曾出现一次 248/249，逐文件跑 25 次定位到 `tests/game.test.js` 的**刷新道具**用例（随机棋局下 `shuffleBoard` 的 50 次尝试可能失败 → `used === false`，≈8%，属 Step 15 遗留）；随后 26 次整轮复跑全部 249/249 —— 见 `PROGRESS.md` 的 **P3-B**。
   - **L0**：`python _build/consistency_check.py` 全部通过（`settlement.js` 已登记 2.2/2.3、附录 B 新增 10 键且无幽灵键、AGENTS/ROADMAP 版本同为 v1.25、ROADMAP 与 prompts 覆盖 Step 0-20）；`node _build/lint-levels.mjs` PASS；`node _build/check-level-table.mjs` PASS（50 关阈值列与代码逐项一致）。
   - **产数据（标定依据）**：新增 `_build/measure-step20.mjs`，用真实模块跑 **50 关 × 2 种玩家模型 × 3 个种子 = 300 局**：通关局余步中位数 **5–6 步**（约步数预算的 19–22%）→ `typicalRemainingRatio = 0.20`；结算阶段占最终分的中位比例 **30–36%** → `settlementCoverage = 0.6`；连锁引爆次数中位 **4**、max 13（演出时长与性能的代理指标）。星级对照：旧世界（基础分 + 旧阈值）1★ 99% / 2★ 1% / 3★ 0%；新世界（最终分 + 新阈值）1★ 82% / 2★ 13% / 3★ 4%；**若不修阈值**则是 1★ 82% / 2★ 12% / 3★ 6% —— 修正把 3★ 收回约三分之一。
-  - **未验证（如实）**：浏览器 L2/L3（结算演出观感、结束面板一致性与既有 `verify-step12*.mjs` 的旧口径断言）；真机上的演出时长与性能；20.4 彩星字段。
+  - **L2/L3**：`node _build/verify-step12.mjs` 按结算阶段改写三条旧断言后**全绿（失败 0 项 / exit 0）** —— 控制台无 error/warning、无未捕获异常、真实滑动 24 次、结算后棋盘无空洞、阶段 7 的两条引爆断言照常通过；说明「转化定格 + 连锁引爆」的播放没有破坏既有渲染、输入与结束链路。**P3（登记未修）**：该套件阶段 5 的「当前棋盘无三连」在两次运行中一次 FAIL 一次 PASS（同一份代码），属 `waitSettled` 探针在结算演出末帧附近的**既有**时序抖动，非本步引入。
+  - **未验证（如实）**：结算演出的**观感**与真机演出时长/性能（本机桌面 Chrome 只到 L3）；彩星的**分数线与展示**未做（20.4 只落地字段与迁移）。四个浏览器套件（`verify-step12` / `12b` / `19-1` / `19-2`）本轮均**失败 0 项**，但 `12b` 单跑需要约 2 分钟（短命令预算会误报超时）。
 - 影响：`config.js`（`SETTLEMENT_CONFIG` 5 键、`STAR_CONFIG.settlementCoverage`、`ANIMATION_CONFIG.settleBanner`；删 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG` 整块）、`settlement.js`（新模块）、`level.js`（`computeStarThresholds`；删 `getRemainingStepBonus`）、`game.js`（`settleEndgame` / `applyConversion` / `chainDetonations`、`resolveBoard({ final })`、`ResolveResult.settlement`）、`timeline.js`、`app.js`、`LEVELS.md`（阈值列 + §5/§6/§7）、`AGENTS.md` v1.25、`ROADMAP.md` §4.2、`prompts.md`、`_build/{gen-levels,lint-levels,consistency_check}` + 新增 `_build/{sync-levels-stars,measure-step20}.mjs`、`tests/{settlement,level,game}.test.js`。
 - 替代方案：① 照抄 5000–10000/步的绝对值（否决：量级差一个数量级，会把 50 关的星级经济冲垮，见第 3 条）；② 运行时随机转化（否决：违反 3.6 第 6 条，结算不可复现、无法巡检）；③ 保留平坦 30 分/步并叠加结算（否决：同一批步数计两次分）；④ 用用户方案 2.2 的「基准阈值 × 难度系数」重建星阈值表（否决：与既有 1★ 基准分重复表达同一件事，且要重写 50 关 — 改为只加结算修正）；⑤ 新增 `playing → settlement → result` 的 UI 状态机（否决：与 5.4「先算完再播快照」+ `timeline.js` 重复）；⑥ 现在就把彩星字段做进存档（否决：属存档格式变更，应单独批准，见第 8 条）。
 

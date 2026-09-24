@@ -103,8 +103,9 @@ export const CONFIG = {
     clearDuration: 250,      // ms；AGENTS.md 15 允许区间 200-300
     fallDuration: 200,       // ms；AGENTS.md 15 允许区间 150-250，按距离缩放
     cascadeGap: 120,         // ms；AGENTS.md 15 允许区间 100-150
-    // ms；Step 20（v1.25）：结算阶段「转化定格」的时长 —— 要让玩者看清余步变成了哪些特效
-    settleBanner: 900,
+    // ms；Step 20（v1.25）：结算阶段「转化定格」的**停留时长** —— 让玩家看清余步变成了哪些特效。
+    // 注意：这一帧**不画任何叠加层**（横幅会盖住它本该展示的那批特效，也会让像素巡检误判），提示走日志。
+    settleHold: 900,
     shuffleMaxTries: 50,     // AGENTS.md 3.8
     reducedMotion: false     // 对应 prefers-reduced-motion，见 REFERENCES.md §2.1 Step 5
   },
@@ -186,7 +187,12 @@ export const CONFIG = {
     // **实测标定**（`_build/measure-step20.mjs`，50 关 × 2 种玩家模型 × 3 种子）：
     // 通关局的余步中位数 5–6 步，约为步数预算的 19–22%，故取 0.20。
     typicalRemainingRatio: 0.20,
-    maxChainDetonations: 64   // 连锁引爆的步数上限（每步引爆一颗特殊糖果；= 棋盘格数，终止保证）
+    maxChainDetonations: 64,  // 连锁引爆的步数上限（每步引爆一颗特殊糖果；= 棋盘格数，终止保证）
+    // **动画预算**（v1.25）：结算批次的**逻辑与计分完全不变**，但逐层播放最多这么多层，之后直接跳到最终盘面。
+    // 为什么必须有它：一次 29 余步的通关实测会产生 **259 个动画阶段 ≈ 48.6 秒**（见 PROGRESS 的 Step 20 记录）——
+    // 那种演出既没人愿意看，也会让浏览器巡检的等待预算全部超时。8 层 ≈ 8 × (250 + ~200 + 120) ≈ 4.6 秒，
+    // 加上「转化定格」与玩家自己那一手，总时长仍在 6 秒量级。
+    maxAnimationLevels: 8
   },
 
   // 道具系统（AGENTS.md 3.9，v1.20）。**数量**是跨关卡的账号级状态，持久化在 STORAGE_KEYS.BOOSTERS；
@@ -201,8 +207,10 @@ export const CONFIG = {
   // 本地存档的格式版本（AGENTS.md 2.3 / v1.21，`storage.js` 的读写都带它）。
   // 加这个键的理由（用户方案 §1.3）：用户清缓存 / 换后端 / 未来改星级规则时，靠版本号做迁移，
   // 而不是靠猜字段形状。读到**更高**版本时只读不写，绝不把新版数据降级覆盖。
+  // v1 → v2（v1.26 / Step 20.4）：`levels` 的值由数字改为 `{ stars, rainbow }`，为彩星预留字段；
+  // 迁移是**就地**的（v0/v1 读进来逐关补 `rainbow: false` 并写回），老存档一分不丢。
   STORAGE_CONFIG: {
-    schemaVersion: 1
+    schemaVersion: 2
   },
 
   // 音效（Step 16，AGENTS.md 5.6）：**Web Audio 合成**，不引入任何音频素材（延续 D009 的零素材策略）。

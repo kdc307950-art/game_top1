@@ -18,8 +18,8 @@ export function motionDurations(systemReduced = false) {
     clear: reduced ? 0 : cfg.clearDuration,
     fall: reduced ? 0 : cfg.fallDuration,
     gap: cfg.cascadeGap,
-    // Step 20（v1.25）：结算阶段的「转化」定格时长。减少动效时退化为级联间隔（提示仍然可见）
-    bonus: reduced ? cfg.cascadeGap : cfg.settleBanner
+    // Step 20（v1.25）：结算阶段的「转化定格」停留时长。减少动效时退化为级联间隔（不会完全跳过）
+    hold: reduced ? cfg.cascadeGap : cfg.settleHold
   };
 }
 
@@ -45,6 +45,12 @@ export function buildPhases(resolve, afterSwap, motion, settlement = null) {
   const phases = [];
   let preBoard = afterSwap;
   let bonusInserted = false;
+  // Step 20（v1.25）：结算批次的**动画预算** —— 逻辑与计分不受影响（它们早已在 game.js 里算完），
+  // 这里只限制「逐层播放」的层数。没有它，一次 29 余步的通关会有 259 个阶段 ≈ 48.6 秒的演出。
+  const cap = settlement
+    ? settlement.atIndex + Math.max(1, Math.trunc(CONFIG.SETTLEMENT_CONFIG.maxAnimationLevels))
+    : Number.POSITIVE_INFINITY;
+  let truncated = false;
 
   const pushBonus = (levelIndex) => {
     if (!settlement || bonusInserted) return;
@@ -53,12 +59,21 @@ export function buildPhases(resolve, afterSwap, motion, settlement = null) {
       phase: 'bonus',
       board: settlement.board,
       levelIndex: Math.max(0, levelIndex),
-      banner: '剩余步数化作特殊糖果，连锁引爆！',
-      duration: motion.bonus
+      // **刻意不画横幅**：这一帧存在的意义就是让玩家看清「哪些格子变成了特效」，
+      // 而 hud.js 的 drawBanner 画在棋盘区**正中央** —— 叠加层会盖住它本该展示的东西，
+      // 而且会让像素巡检把横幅当成「一片同色格子」（verify-step12 阶段 5 的「无三连」当场误判）。
+      // 因此提示文案走 app.js 的日志（`settlementText`），画布上只做「定格」。
+      banner: null,
+      duration: motion.hold
     });
   };
 
   resolve.levels.forEach((level, index) => {
+    // 超出动画预算：不再逐层播放（分数与盘面早已算定），循环结束后一次性跳到最终盘面
+    if (index >= cap) {
+      truncated = true;
+      return;
+    }
     // Step 20：结算批次的起点先插一帧「转化定格」，并把 preBoard 接到转化后的棋盘
     if (settlement && index === settlement.atIndex) {
       pushBonus(index - 1);
@@ -96,6 +111,12 @@ export function buildPhases(resolve, afterSwap, motion, settlement = null) {
     phases.push({ phase: 'settle', board: settlement.board, levelIndex: Math.max(0, resolve.levels.length - 1), duration: motion.gap });
   }
 
+  // 动画预算用尽：直接停在最终盘面，并把 levelIndex 顶到末尾 —— HUD 的分数因此一次性到终值
+  // （app.js 的 hudScoreAt 按 levelIndex 取分，若停在中间层，HUD 会显示一个永远到不了终值的分数）
+  if (truncated) {
+    const last = resolve.levels[resolve.levels.length - 1];
+    phases.push({ phase: 'settle', board: last.board, levelIndex: resolve.levels.length - 1, duration: motion.gap });
+  }
   // 3.8：若本次结算触发了重排，追加一个重排阶段（前后快照按 cell.id 对位，得到每格起止位置）
   const deadlock = resolve.deadlock;
   if (deadlock && deadlock.shuffled) {

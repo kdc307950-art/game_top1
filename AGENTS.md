@@ -1,9 +1,22 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.25
+> 版本：v1.26
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.25 → v1.26 关键变更）
+
+本次修订按**用户方案的第 4 项**（「彩星机制预留」）落地 **Step 20.4：彩星字段预留 + 存档迁移**。**不改动任何玩法数值，也不改 `readLevelStars()` 的对外形状**（仍返回展平的 `{ 关卡id: 星数 }`，hud/app/vine-map 一行都不用改）；口径记入 `DECISIONS.md` **D042**。
+
+1. **存档格式 v1 → v2**：`STORAGE_CONFIG.schemaVersion` 由 1 改为 2 —— `levels` 的值从**数字**改为 `{ stars, rainbow }` 记录，为彩星预留字段。迁移**就地**且幂等：v0（顶层是关卡表）与 v1（`levels` 里是数字）读进来后逐关补 `rainbow: false` 并写回，**老存档一分不丢**；读到更高版本仍只读不写、绝不降级覆盖。
+2. **对外形状保持不变**：`readLevelStars()` 仍返回展平的星级表（对 v0/v1 完全同形），`getTotalStars` 与 `recordLevelStars` 的签名/返回值都不变；`recordLevelStars` 新增可选第 4 参 `options.rainbow`（缺省**沿用该关既有的彩星标志**，因此写入不会把彩星抹掉）。
+3. **新增彩星出入口**：`readLevelRecords()` / `writeLevelRecords()`（完整 v2 记录表）与派生量 `getTotalRainbows()` / `storage.readTotalRainbows()`。口径：**彩星不计入总星数** —— 选关地图的 `⭐ n/150` 仍然只数星级，彩星是「三星之上的额外荣誉」，将来单独展示。
+4. **本步只做「字段 + 迁移」，不做彩星规则**：什么条件给彩星需要独立的数值调优（用户方案 §2.2 第三步），因此当前 UI 还不消费该字段 —— 但迁移、写回、脏数据规范化都已生效，将来接规则时**不必再改存档格式**。
+5. **脏数据口径**：`rainbow` 只认**严格布尔**（`'false'` 这类真值一律按 `false`），`stars` 照旧夹成非负整数；`levels` 里混入裸数字仍按 v0/v1 处理（向后兼容）。
+6. **验证**：`tests/integration.test.js` 的存档用例扩写为「v0 → v2 迁移 / v1 → v2 迁移 / 幂等 / 未来版本只读 / 彩星往返与不被更差成绩覆盖 / v2 脏字段规范化」；浏览器套件 `_build/verify-step19-1.mjs` 的三处版本断言改成 v2 后复跑（见 `PROGRESS.md`）。
 
 ---
 
@@ -26,7 +39,7 @@
 4. **新增模块 `settlement.js`**（2.2 / 2.3 登记）：结算阶段的纯逻辑 —— 固定种子 PRNG、递增奖励分、结算期望分、
    转化计划、引爆顺序、按 `cell.id` 追踪格子。不碰 DOM、不认识 `GameState`，可在 Node 里逐项测。
 5. **`game.resolveBoard` 追加 `options.final`（纯追加）**：结算阶段的每一次引爆都传它，跳过 3.8 的死局检测与重排。
-6. **附录 B**：新增 `SETTLEMENT_CONFIG`（5 键）、`STAR_CONFIG.settlementCoverage`、`ANIMATION_CONFIG.settleBanner`；
+6. **附录 B**：新增 `SETTLEMENT_CONFIG`（5 键）、`STAR_CONFIG.settlementCoverage`、`ANIMATION_CONFIG.settleHold`；
    删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`（`ENDGAME_CONFIG` 整块被 `SETTLEMENT_CONFIG` 取代）。
 7. **`ROADMAP.md` 新增 Step 20**（用户方案里的「19.3.x」落在这里，**19.3 的解锁/天边关卡名额保留**）；`prompts.md` 同步。
 
@@ -481,7 +494,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
 - `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀）。只接收「坐标表 + 星级表 + 当前关 + 总星数」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**，节点状态只有 `visited`/`attainable` 两态（**没有 `locked`**）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24，见 D040）。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
-- `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。
+- `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
@@ -1153,6 +1166,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | **彩星字段预留 + 存档迁移**：`STORAGE_CONFIG.schemaVersion` 1 → 2（`levels` 的值由数字改为 `{ stars, rainbow }`），v0/v1 **就地迁移**逐关补 `rainbow: false`（老存档不丢、幂等、更高版本仍只读不写）；新增 `readLevelRecords` / `writeLevelRecords` / `getTotalRainbows`，而 `readLevelStars` / `getTotalStars` / `recordLevelStars` 的对外形状**不变**（后者加可选 `options.rainbow`，缺省沿用既有标志）；口径为**彩星不计入总星数**；本步只做字段与迁移、**不做彩星规则**；附录 B 的 `schemaVersion` 默认值 1 → 2；`ROADMAP.md` 标 20.4 完成并同步 v1.26 | 2.3、附录 B、11、`config.js`、`storage.js`、`ROADMAP.md`、`tests/integration.test.js` |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | **结算阶段 + 星级统一动态调整**：3.6 第 7 条改写为「余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部逐颗连锁引爆」（受控伪随机 `mulberry32(seed + 关卡id)`、只落朴素动物格、`resolveBoard({final:true})` 跳过重排）；3.5 删除「每剩余一步 30 分」（`SCORE_CONFIG.stepBonus` / `getRemainingStepBonus`），避免与结算阶段重复计分；3.7 新增统一动态派生 `level.computeStarThresholds`（`2★/3★ = 倍率 × 基准分 + 结算期望分 × settlementCoverage`，`typicalRemainingRatio` 由 300 局实测标定为 0.20）；新增模块 `settlement.js`（2.2/2.3 登记）；`ResolveResult` 追加 `settlement`、`resolveBoard` 追加 `options.final`；附录 B 新增 `SETTLEMENT_CONFIG` 5 键 + `STAR_CONFIG.settlementCoverage` + `ANIMATION_CONFIG.settleBanner`，删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 阈值列改为公式输出（新增 `sync-levels-stars.mjs` / `measure-step20.mjs`）；`ROADMAP.md` 新增 Step 20（用户方案的「19.3.x」落此，19.3 解锁名额保留） | 2.2、2.3、3.5、3.6、3.7、4.2、15、附录 B、11、`config.js`、`level.js`、`game.js`、`settlement.js`、`timeline.js`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
 | v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | Step 19.2 藤蔓地图重做（第三次迭代）：坐标改**归一化 0–1**（`LEVELS.md` §9 / `LEVEL_MAP_POS` / 巡检都只比归一化值）；路径改**单条平滑贝塞尔**（锚点进 `VINE_MAP_CONFIG.anchors`、跨屏靠 Y 轴衔接、抖动只用 `mulberry32(seed + page)`、不写死控制点）；节点显式坐标且**不参与路径计算**（取舍见 D040）；节点状态机 `data-state` 只有 `visited`/`attainable`（无 `locked`）；星星移出节点正下方并放大 40%；当前关卡改呼吸光效（删掉粉色底 + 黄边框）；分页改 `[◀] 第 N / 5 页 [▶]` + 总星数进度条 + 平移动画；叶子沿切线旋转；附录 B `VINE_MAP_CONFIG` 8 → 19 键 | 2.2、2.3、附录 B、11、`ROADMAP.md`、`config.js`、`level.js`、`LEVELS.md`、`vine-map.js`、`vine-map.css`、`app.js`、`tests/vine-map.test.js` |
 | v1.23 | 2026-09-22 | Agent（用户批准 19.2） | Step 19.2 藤蔓关卡地图：新增 `vine-map.js` / `vine-map.css`（画布外 SVG 层、分页按钮、确定性路径）与 `LEVEL_MAP_POS` 坐标表；`LEVELS.md` 新增 §9 坐标表（真相源）+ `_build/gen-vine-map.mjs` 生成器 + `_build/check-vine-map.mjs` 巡检；canvas 选关链路（`hud.js` 的 `drawLevelSelect`、`render.js` 的 `levelRects`）退役，`app.js` 改用 DOM 事件委托；附录 B 新增 `VINE_MAP_CONFIG` 8 键；**只画不拦**（不加解锁门槛） | 2.2、2.3、附录 B、11、`ROADMAP.md`、`vine-map.js`、`level.js`、`app.js`、`hud.js`、`render.js` |
@@ -1398,7 +1412,7 @@ const LEVEL_3 = {
 | `SCORE_CONFIG.specialMultipliers`  | 特效倍数表         | 见 3.5               | 3.5      |
 | `SCORE_CONFIG.cascadeStep`         | 普通连消递增       | 30                   | 3.5      |
 | `SCORE_CONFIG.cascadeIceStep`      | 冰块连消递增       | 1000                 | 3.5      |
-| `ANIMATION_CONFIG.settleBanner`    | 结算「转化定格」时长（ms） | 900           | 15 / 3.6 |
+| `ANIMATION_CONFIG.settleHold`      | 结算「转化定格」停留（ms；**不叠加横幅**） | 900 | 15 / 3.6 |
 | `ANIMATION_CONFIG.swipeThreshold`  | 滑动阈值（px）     | 25                   | 5.3      |
 | `ANIMATION_CONFIG.clearDuration`   | 消除动画时长（ms） | 250                  | 15       |
 | `ANIMATION_CONFIG.fallDuration`    | 下落动画时长（ms） | 200                  | 15       |
@@ -1423,6 +1437,7 @@ const LEVEL_3 = {
 | `SETTLEMENT_CONFIG.specialWeights.magic` | 转化出魔力鸟的权重（%） | 5 | 3.6 |
 | `SETTLEMENT_CONFIG.typicalRemainingRatio` | 星级修正用的「典型余步比例」 | 0.20 | 3.7 |
 | `SETTLEMENT_CONFIG.maxChainDetonations` | 连锁引爆的步数上限 | 64          | 3.6      |
+| `SETTLEMENT_CONFIG.maxAnimationLevels` | 结算批次的**动画预算**（层；逻辑与计分不受影响） | 8 | 3.6 / 15 |
 | `STAR_CONFIG.secondFactor`         | 二星阈值倍率（× 1★ 基准分） | 1.7         | 3.7 v1.19 |
 | `STAR_CONFIG.thirdFactor`          | 三星阈值倍率（× 1★ 基准分） | 2.5         | 3.7 v1.19 |
 | `STAR_CONFIG.podFactor`            | 金豆荚关 2★/3★ 的额外倍率 | 1.2          | 3.6 / 3.7 v1.19 |
@@ -1458,7 +1473,7 @@ const LEVEL_3 = {
 | `AUDIO_CONFIG.events`              | 音效事件表（波形 / 起止频率 / 时长 / 增益 / 升调倍率） | 见 5.6 | 5.6 v1.22 |
 | `HAPTIC_CONFIG.events`             | 震动事件表（毫秒模式） | 见 5.6            | 5.6 v1.22 |
 | `STORAGE_KEYS.PREFS`               | 音效/震动偏好存储键 | `xxl_prefs`          | 5.6 / ROADMAP Step 16 |
-| `STORAGE_CONFIG.schemaVersion`     | 存档格式版本（迁移判据） | 1             | 2.3 v1.21 |
+| `STORAGE_CONFIG.schemaVersion`     | 存档格式版本（迁移判据） | 2             | 2.3 v1.21 / v1.26 |
 | `LEVEL_DEFAULTS.steps`             | 关卡默认步数       | 30                   | 3.6      |
 | `LEVEL_DEFAULTS.starThresholds`    | 关卡默认三星阈值   | [7000, 12000, 18000] | 3.7      |
 | `COLOR_NAMES`                      | 颜色索引 0-5 到动物名映射 | `['frog','hippo','ladybug','octopus','chick','fox']` | 3.6 / 13 |
