@@ -8,6 +8,32 @@
 
 ---
 
+## D043：Gate 0.1 第十二轮（Step 20 + 20.4）的收口 —— 三处 harness 根因、门禁环境固定与 L1 确定性口径
+
+- 日期：2026-09-25
+- 状态：**已落地**（产品代码零改动；本条目只记测试夹具、验证脚本与门禁环境的口径）
+- 背景：Step 20（结算阶段 + 星级统一动态派生）与 20.4（彩星字段 + 存档 v2）完成后，上一轮门禁**没有收口**：`_build/g12i-summary.txt` 写到 `audit-gate-step11` 就断了、**没有 DONE 行**（`gate12.ps1` 被中途打断），补跑的收口轮里 `verify-step12b` 复跑 **FAIL 2 项**，而 `PROGRESS.md` 当时只写了「四个套件全绿」。用户要求先做 P0 收口：提交基线、把红项定位到根因、补齐门禁记录。
+- 决定：
+  1. **提交与基线**：Step 20.4 与结算收尾（P3-A 的 `settleBanner → settleHold`、「转化定格」不再叠加横幅、`SETTLEMENT_CONFIG.maxAnimationLevels` 动画预算）落成 `e09e0d7`，打 tag `step20.4-done`。
+  2. **L1 偶发用例的根因是夹具假设，不是探针抖动**：`createGame(..., { rng })` 的 rng **不覆盖初始盘面** —— `createBoard` 的逐格着色走 `board.js` 的 `buildColorLayer → pickColor → Math.random`（4.2 / D015 / D016 把 rng 定义为「**补充新格子**」的随机源）。于是只注入 rng 而不断言盘面的用例，初始盘面每次不同：
+     - 「刷新必定成功」：`shuffleBoard` 只做**置换**（色数不变），而 2 色棋盘格唯一「无三连」的排列就是棋盘格本身、它没有可行交换 → 50 次尝试**必然全败**（`_build/probe-booster-fixture.mjs` 实测 5/5 `FAIL@50`）。改用六色夹具 `(r*2+c*3)%6` + `seededRng(37)`：第 9 次命中，确定性成功。
+     - 「金豆荚每次消除只下落 1 格」：口径是 `collectibleFall` **每次 `applyGravity` 各算一次**（D035），而一次 `resolveBoard` 可能含多个级联层 → 断言改为「单次消解内下落格数 ≤ 该次级联层数」，并**新增一例直接对重力取证**（`applyGravity` 一次恰好推进 1 格，且位移轨迹里有这一步）。
+     - `paintFixture` 与新增夹具**跳过收集物格**（3.6：收集物占格但不是动物；给它着色会让 `shuffleBoard` 把它当成可搬动的普通格）。
+     - 复跑证据：`tests/game.test.js` 连续 **40 次 0 失败**（修前 65 次里 1 次失败）；整套由 249 用例/2172 断言 → **250 用例 / 2178 断言 / 0 失败**。
+  3. **门禁套件清单 20 → 21**：Step 20 起 +1（`verify-step20`，45 项）；D034 第 3 条的「后续更新」已同步。
+  4. **`verify-step12b` 的 stage-4 预算缺陷（P0 修正）**：原实现把「交换无效」也算作推进（与它自己的注释矛盾），而无效交换**不扣步数** → 像素分类器抖动时 120 次预算被无效交换耗光、本局永远结束不了（`_build/g12i-verify-step12b-2.log` 实证 `swaps=120, buttonPixels=0`）。改法：只有日志「交换有效」才计入 `swaps`；无效或被输入锁丢弃 → 换下一对候选；预算分三类（生效交换 120 / 触摸 240 / 墙钟 150 s），三项都打进日志。修后单跑与门禁内连跑均 0 失败（该局 `27 次生效 / 28 次触摸 / 47 s`）。
+  5. **`verify-step4` 阶段 4 的判据缺陷（P0 修正）**：① 每次滑动前 `consoleLog.length = 0` 会把**同一局**稍早写下的「游戏结束 / 关卡结果」一起丢掉，于是套件以为本局没结束、又开一局；② 判据写的是「写入的最高分 = **本局**得分」，而 app 存的是**跨局最大值** —— 两者叠加必然误报（本轮实测 `5925 vs 1890`）。改法：改用 mark 取样、Step 20 的结算演出变长后**轮询等结束日志**、判据改为与「历次尝试里的最高分」比较。
+  6. **门禁环境必须固定 Chrome 启动参数（P3-D，本轮处置）**：`verify-step20` 用**精确像素哈希**把逐格贴图与 `candy.js` 的 `buildSpriteAtlas` 对表。Chrome 153.0.8010.53 的 `--headless=new` **默认开 GPU 光栅化**时该对表稳定失败（`未识别=10`、`观察转化=3~4`（日志为 7）、5 项 FAIL；连跑 3 次、换干净 profile 同样复现），而**产品代码与 2026-09-22 那次 45/45 PASS 逐字节相同**（`candy.js` / `render.js` 未动，Chrome 由 .48 升到 .53）。改用 `--disable-gpu --force-color-profile=srgb` 启动后 `未识别=0`、45/45 PASS。**口径**：像素哈希类探针的结论只在**固定光栅化路径**下成立 —— 新增 `_build/launch-chrome-pinned.ps1` 固化这两个参数，门禁与复跑一律用它启动。
+  7. **像素通道与规则通道分开判读**：verify-step20 的红项全部落在「画布观察 ≠ 日志」的**像素通道**，而 40 项**规则通道**（奖励分公式、转化颗数 = 余步、最终分恒等式、星级一致、确定性、结算不扣步）全绿 —— 这类失败先怀疑探针标定，而不是先改产品（延续 D022 的原则）。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → 11 文件 / **250 用例 / 2178 断言 / 0 失败 / exit 0**；`tests/game.test.js` 连续 40 次 0 失败。
+  - **L0**：`python _build/consistency_check.py` → 全部通过（失败 0 项）；`lint-levels` / `check-level-table` / `check-vine-map` PASS。
+  - **L2/L3**：固定启动参数后的门禁清扫 `_build/g12c2-summary.txt`（21 套件 + 6 次复跑）；未固定参数的那一轮留作对照证据 `_build/g12c-summary.txt`（1 项 harness 红 + 5 项像素通道红）。
+  - 日志：`_build/g12c2-*.log`、`_build/g12i-*`（第十二轮原始证据）、`_build/g12c-verify-step20-{clean,gpu,gpuonly,pinned-1,pinned-2}.log`（光栅化对照）、`_build/probe-booster-fixture.mjs`。
+- 影响：`tests/game.test.js`（夹具 + 两例判据）、`PROGRESS.md`、`DECISIONS.md`（D034 清单 20→21）；`_build/verify-step12b.mjs`、`_build/verify-step4.mjs`、`_build/launch-chrome-pinned.ps1`（工具不入库）。
+- 替代方案：① 让初始盘面也接注入 rng（否决：那是 4.2 的**契约变更**，会牵动 `createBoard` 签名与一次宪法修订，应作为独立的一小步，而不是在收口轮里顺手动）；② 把 verify-step20 的红项改成跳过（否决：红与跳过混在一起会掩盖真实回归）；③ 为了让 verify-step20 变绿去改产品渲染（否决：产品与上次 45/45 时逐字节相同，改产品只会掩盖探针的光栅化依赖）；④ 不固定 Chrome 参数、把红项记成「环境问题」了事（否决：门禁的意义就是可复现，固定两个参数成本极低）。
+- 未验证：真机演出与性能（L4/L5 仍空白）；`verify-step20` 的「定格帧」判据在**只加** `--disable-gpu`（不带颜色 profile）时出现过 1 次 `定格帧=-1`，而固定组合下连跑 3 次全绿 —— 记为**低频脆弱**（P3-E），回归计划：若再现，把 hold 判据从「画布哈希静止」换成「日志里的 hold 帧序号」。
+
 ## D042：Step 20.4 —— 彩星（rainbow）字段预留与存档 v1 → v2 迁移
 
 - 日期：2026-09-23
@@ -180,7 +206,7 @@
   1. **退役而不是移植**：两个脚本覆盖的 Step 2/3 事实（首屏渲染与色类识别、无效交换回退、级联回放帧、方向锁与越界、步数与结束面板）已由 `verify-step4`–`verify-step13` 在现代解码器上覆盖；为它们单独维护一份平行解码器只会再次漂移（P3-5 的教训）。脚本移入 `_build/retired/`（`_build/` 本就不入库），从门禁套件清单移除。
   2. **登记 P3-10**：环的像素级取证随之失去（绘制仍在 `render.js`）。计划在 Step 14 需要动渲染或输入时，把两个探针按当前渲染器重新标定后加回 `verify-step5`（只扫棋盘区域、用环的精确描边色、在环半径处取样）。
   3. **固定门禁套件清单**：以后每轮 Gate 0.1 的浏览器冒烟 = `verify-step4`–`verify-step13` + `audit-gate-step7`–`audit-gate-step11`（共 16 个）；退役脚本不计入，新增脚本须同步更新本清单。
-     - **后续更新（按本条自行维护）**：Step 15 起 +1（`verify-step15`）→ 17 套件；Step 16 起 +1（`verify-step16`）→ 18 套件（Gate 0.1 第九/第十轮已各按 18/19 套件执行）；**Step 19.2 起 +1（`verify-step19-2`）→ 20 套件**（见 D039 第 8 条）。
+     - **后续更新（按本条自行维护）**：Step 15 起 +1（`verify-step15`）→ 17 套件；Step 16 起 +1（`verify-step16`）→ 18 套件（Gate 0.1 第九/第十轮已各按 18/19 套件执行）；**Step 19.2 起 +1（`verify-step19-2`）→ 20 套件**（见 D039 第 8 条）；**Step 20 起 +1（`verify-step20`）→ 21 套件**（第十二轮与其收口轮的实际执行清单，见 D043 第 3 条）。
   4. **放行与标记**：Step 13 门禁通过，打 tag `gate-0.1-step13-pass`；Step 14 开工前必须先补宪法（三种关卡类型的规则未定义）。
 - 依据与证据：L1 = 181 用例 / 1573 断言 / 0 失败；L0 = 一致性脚本、代码表巡检、`LEVELS.md` 巡检三项 PASS；L2/L3 = 16 个套件 593 项断言 PASS / 0 FAIL。日志 `_build/g7-*.log`。
 - 影响：`_build/verify-step2.mjs`、`_build/verify-step3.mjs`（移入 `_build/retired/`，本机证据不入库）；`PROGRESS.md`、`README.md`、`ROADMAP.md`、本文件。

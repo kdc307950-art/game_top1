@@ -1,8 +1,14 @@
 // tests/game.test.js — game.js 的单元测试。见 AGENTS.md 7.1 与 ROADMAP Step 4。
 //
 // 夹具约定（宪法 4.1）：棋盘一律经 createBoard 构造（createGame 内部已如此）后再覆盖 color。
-// 随机性控制：createGame 的 options.rng 决定补充新格子的颜色（见 D016），
+// 随机性控制：createGame 的 options.rng 决定**补充新格子**的颜色（见 D016），
 // 因此需要精确分数时注入确定性序列，不需要时用带种子的 LCG。
+//
+// ⚠ 陷阱（P0 收口时定位，见 PROGRESS 的「L1 偶发」）：`createGame(..., { rng })` **不**决定
+// **初始盘面**的颜色 —— `createBoard` 的逐格着色走 `Math.random`（board.js 的 buildColorLayer，
+// 因为 4.2 只把 rng 定义为「补充新格子」的随机源）。所以只注入 rng 而不断言盘面的用例，
+// **初始盘面仍然是随机的**：凡是断言「精确格数 / 精确分数 / 必定生效」的用例，必须先用
+// `paintFixture`（或等价夹具）把整盘覆盖掉。
 
 import {
   test,
@@ -14,6 +20,7 @@ import {
 } from './assert.js';
 import { BOOSTER_KIND, CELL_TYPE, COLLECTIBLE_TYPE, CONFIG, DIRECTION, GOAL_TYPE, OBSTACLE_TYPE } from '../config.js';
 import { createGame, getState, resolveBoard, tickTime, trySwap, useBooster } from '../game.js';
+import { applyGravity, createBoard } from '../board.js'; // 重力本身的取证（金豆荚的「每次重力 1 格」）
 import { hasPossibleMove } from '../shuffle.js'; // Step 6.1：从 board.js 移到 shuffle.js
 import { findMatches } from '../match.js';
 
@@ -36,10 +43,11 @@ function seededRng(seed) {
   };
 }
 
-/** 把棋盘覆盖成 0/1 棋盘格，再按 paint 覆盖目标形状。 */
+/** 把棋盘覆盖成 0/1 棋盘格，再按 paint 覆盖目标形状。收集物格**不着色**（3.6：它占格，但不是动物）。 */
 function paintFixture(board, paint) {
   for (let r = 0; r < SIZE; r += 1) {
     for (let c = 0; c < SIZE; c += 1) {
+      if (board[r][c].collectible !== null && board[r][c].collectible !== undefined) continue;
       board[r][c].color = (r + c) % 2;
     }
   }
@@ -65,6 +73,23 @@ function deadlockBoard(board) {
   for (let r = 0; r < SIZE; r += 1) {
     for (let c = 0; c < SIZE; c += 1) {
       board[r][c].color = (r + 2 * c) % 3;
+    }
+  }
+}
+
+/**
+ * 六色确定性夹具（P0 收口新增）：`(r*2 + c*3) % 6` 无初始三连，且**六色多重集**使
+ * `shuffleBoard` 必定能在 `shuffleMaxTries` 内找到合法排列（实测 seededRng(37) 第 9 次命中）。
+ *
+ * 为什么不能拿 `paintFixture` 的 0/1 棋盘格当刷新夹具：`shuffleBoard` 只做**置换**（色数不变），
+ * 而 2 色棋盘格唯一「无三连」的排列就是棋盘格本身 —— 它没有可行交换，于是 50 次尝试必然全败
+ * （`_build/probe-booster-fixture.mjs` 实测 5/5 FAIL@50）。这正是原 P3-B 用例偶发 FAIL 的机制。
+ */
+function sixColorBoard(board) {
+  for (let r = 0; r < SIZE; r += 1) {
+    for (let c = 0; c < SIZE; c += 1) {
+      if (board[r][c].collectible !== null && board[r][c].collectible !== undefined) continue;
+      board[r][c].color = (r * 2 + c * 3) % CONFIG.COLOR_COUNT;
     }
   }
 }
@@ -846,22 +871,44 @@ test('水果关（v1.19）：收集物落到出口行即计数，集满目标即
   assertTrue(getState(game).stars >= 1, '通关至少 1 星（3.7）');
 });
 
-test('金豆荚关（v1.19）：每次消除只下落 1 格，需多次消除才能到出口', () => {
+test('金豆荚关（v1.19）：单次重力最多下落 1 格，需多次消除（级联层）才能到出口', () => {
+  // 口径（D035）：「每次消除只下落 1 格」由**重力本身**表达 —— 上限是 collectibleFall 的
+  // podFallPerStep，**每次 applyGravity 各算一次**；而一次 resolveBoard 可能含多个级联层
+  // （每层一次重力），所以端到端断言必须按该次消解的级联层数封顶，不能假定「一次 resolve = 1 格」。
   const game = createGame({
     steps: 20,
     goal: { type: GOAL_TYPE.POD, target: 1 },
     collectibles: [{ r: 3, c: 5, type: COLLECTIBLE_TYPE.POD }]
-  }, { rng: seededRng(13) });
+  }, { rng: cycleRng([0.9]) });
+  paintFixture(game.board, null); // 0/1 棋盘格 + 确定性补位色 5：整盘可复现，且不产生级联
 
-  // 连续两层都把豆荚下方的动物清掉：每层它只下移 1 格
-  resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
-  const afterFirst = game.board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
-  resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
-  const afterSecond = game.board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
+  const podRow = () => game.board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
+  const start = podRow();
+  const first = resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
+  const afterFirst = podRow();
+  const second = resolveBoard(game, { initialClear: [{ r: 6, c: 5 }] });
+  const afterSecond = podRow();
 
-  assertTrue(afterFirst > 3, `第一次消除后豆荚下移（3 → ${afterFirst}）`);
-  assertTrue(afterSecond <= afterFirst + 1, `第二次消除最多再下移 1 格（${afterFirst} → ${afterSecond}）`);
+  assertEqual(start, 3, '豆荚初位置');
+  assertTrue(afterFirst > start, `第一次消除后豆荚下移（${start} → ${afterFirst}）`);
+  assertTrue(afterFirst - start <= first.levels.length,
+    `单次消解内下落格数不超过重力次数（${afterFirst - start} 格 ≤ ${first.levels.length} 层级联）`);
+  assertTrue(afterSecond - afterFirst <= second.levels.length,
+    `第二次同理（${afterFirst} → ${afterSecond} 格 ≤ ${second.levels.length} 层级联）`);
+  assertTrue(afterSecond < SIZE - 1, `还没到出口（第 ${afterSecond} 行 < 出口行 ${SIZE - 1}）`);
   assertEqual(game.level.collectedPod, 0, '还没到出口，不应计数');
+});
+
+test('金豆荚（v1.19 口径取证）：单次重力恰好只推进 1 格 —— 是规则而不是动画', () => {
+  const board = createBoard(SIZE, SIZE, CONFIG.COLOR_COUNT, [], [{ r: 3, c: 5, type: COLLECTIBLE_TYPE.POD }]);
+  paintFixture(board, null);
+  board[6][5].color = null; // 模拟「它下方的动物被消除」：把 (6,5) 挖空
+  const moves = applyGravity(board);
+  const podRow = board.findIndex((row) => row[5].collectible === COLLECTIBLE_TYPE.POD);
+
+  assertEqual(podRow, 4, '一次重力只推进 1 格（3 → 4）');
+  assertTrue(moves.some((m) => m.to.r === 4 && m.to.c === 5), '重力轨迹记录了豆荚这一步（动画据此播放）');
+  assertEqual(board[7][5].collectible, null, '豆荚没被跳过 (5,5)(6,5) 直接吸到出口');
 });
 
 test('时间关（v1.19）：消除不扣步数、开局不判负，倒计时归零才失败（3.6 第 8 条）', () => {
@@ -929,6 +976,11 @@ test('useBooster（v1.20）：刷新重排棋盘、不消耗步数、满足 3.8 
     obstacles: [{ r: 2, c: 2, type: OBSTACLE_TYPE.ICE, layers: 2 }],
     collectibles: [{ r: 0, c: 4, type: COLLECTIBLE_TYPE.FRUIT }]
   }, { rng: seededRng(37) });
+
+  // 初始盘面必须显式给定：createGame 的 rng 只决定补位颜色（见文件头的陷阱说明），
+  // 否则 shuffleBoard 的输入每次都不同 —— 这就是原 P3-B「刷新必定成功」偶发 FAIL 的根因。
+  // 夹具用六色盘（见 sixColorBoard 的注释：0/1 棋盘格会让重排**必然**失败）。
+  sixColorBoard(game.board);
 
   const beforeIds = game.board.flat().map((cell) => cell.id).join(',');
   const result = useBooster(game, BOOSTER_KIND.REFRESH);
