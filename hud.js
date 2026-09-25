@@ -13,12 +13,17 @@
 import { CONFIG } from './config.js';
 
 export const HUD_RATIO = 0.13; // HUD 带高度 / 画布边长（render.js 据此切分棋盘区）
-const HUD_LOW_STEPS = 5; // 剩余步数 ≤ 此值时用警示色
-const HUD_LOW_TIME = 10; // 剩余秒数 ≤ 此值时用警示色（3.6 v1.18 的时间关）
+// 低步数 / 低时间的**阈值**：`heartbeatScale` 与 `drawHud` 共用这两个常量，避免两处判定漂移。
+export const HUD_LOW_STEPS = 5; // 剩余步数 ≤ 此值：**红色警告 + 心跳**（P0-2，用户 2026-09-26）
+export const HUD_LOW_TIME = 10; // 剩余秒数 ≤ 此值：同一条警告路径（3.6 v1.18 的时间关）
 const HUD_CELL_BG = 'rgba(255, 255, 255, 0.06)'; // 修饰性底色；透明度 ≤ 0.1（REFERENCES §3.5 红线 3）
 const HUD_LABEL_COLOR = 'rgba(255, 255, 255, 0.55)';
 const HUD_VALUE_COLOR = '#ffffff';
-const HUD_WARN_COLOR = '#ffd93b';
+/** P0-2：低步数警告色改为**红**（原来是品牌金 `#ffd93b`，与「达标闪烁」「进度条填充」撞色，
+ *  玩家读不出「危险」）。现在金色只用于正向反馈，红色只用于预警，语义不再重叠。 */
+export const HUD_WARN_COLOR = '#ff4d5e';
+const HUD_WARN_FRAME = 'rgba(255, 77, 94, 0.85)'; // 低步数时套在步数格外的警示边框
+const HUD_WARN_RING = 'rgba(255, 77, 94, 0.30)'; // 心跳时向外扩散的一圈（几何描边，不是模糊）
 const OVERLAY_DIM = 'rgba(10, 8, 20, 0.78)';
 const OVERLAY_PANEL = '#241f3a';
 const OVERLAY_TITLE_COLOR = '#ffffff';
@@ -165,7 +170,28 @@ export function drawHud(ctx, { sizePx, hudHeight, hud, nowMs = 0 }) {
     ctx.font = `700 ${Math.max(12, Math.round(base * (stat.pulse ?? 1)))}px ${FONT_STACK}`;
     ctx.fillStyle = stat.warn ? HUD_WARN_COLOR : HUD_VALUE_COLOR;
     ctx.fillText(stat.value, cx, box.y + box.h * 0.68);
+    // P0-2：低步数时**在步数格外套一圈红框 + 一圈随心跳扩散的描边**（纯几何、1–2 次描边，
+    // 零模糊、零每帧渐变）。心跳波形与字号缩放**同源**（都来自 `heartbeatScale` 的同一 phase）。
+    if (stat.warn) drawWarnFrame(ctx, box, hudHeight, stat.pulse ?? 1);
   });
+}
+
+/** 低步数/低时间的警示框（P0-2）：`pulse`（1 → lowStepsScale）越大，外圈越远、越淡。 */
+function drawWarnFrame(ctx, box, hudHeight, pulse) {
+  const inset = Math.max(1.5, hudHeight * 0.035);
+  const radius = Math.max(4, hudHeight * 0.12);
+  roundRectPath(ctx, box.x + inset, box.y + inset, box.w - inset * 2, box.h - inset * 2, radius);
+  ctx.lineWidth = Math.max(1.5, hudHeight * 0.035);
+  ctx.strokeStyle = HUD_WARN_FRAME;
+  ctx.stroke();
+  // 心跳外圈：`pulse` 的归一化位置决定扩散距离与透明度（不新增 PRNG，也不读额外状态）
+  const cfg = CONFIG.HUD_CONFIG;
+  const t = Math.max(0, Math.min(1, (pulse - 1) / Math.max(0.001, cfg.lowStepsScale - 1)));
+  const grow = t * hudHeight * 0.07;
+  roundRectPath(ctx, box.x + inset - grow, box.y + inset - grow, box.w - (inset - grow) * 2, box.h - (inset - grow) * 2, radius + grow);
+  ctx.lineWidth = Math.max(1, hudHeight * 0.022);
+  ctx.strokeStyle = HUD_WARN_RING;
+  ctx.stroke();
 }
 
 /** 目标进度条（21.1）：1 条轨道 + 1 条填充，共 2 次路径填充，无渐变、无阴影（15 节红线）。 */

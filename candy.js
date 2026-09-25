@@ -26,8 +26,23 @@ const BAKED_SHADOW = 'rgba(18, 14, 28, 0.22)'; // 预烘焙的几何投影（不
 const EYE_MIX = 0.78;        // 眼睛 = 糖果底色与近黑的混合比例（留一点色相，护住按色相识别的探针）
 const EYE_GLINT = 'rgba(255, 255, 255, 0.85)';
 const BLUSH_COLOR = 'rgba(255, 186, 202, 0.5)'; // 偏**浅**的粉（在红糖果上「粉色压红」几乎看不见，浅粉才在 6 色上都读得出来）
-const STRIPE_COLOR = 'rgba(255, 255, 255, 0.88)';
-const ARROW_COLOR = 'rgba(255, 255, 255, 0.92)';
+const STRIPE_COLOR = 'rgba(255, 255, 255, 0.96)';
+/** P0-1（用户 2026-09-26）：条纹的**深色边** —— 浅色棋子（尤其黄）上白纹对比不足，
+ *  在每条白纹下面先铺一条深色描边，任何底色上都能读出「高对比度条纹」。
+ *  颜色刻意用**中性暗**（不是棕色）：混向中性暗能**保住底色的色相**，
+ *  否则格心取样会偏 20°+，`verify-step12b` 那类「按色相识别棋子」的探针会被打扰。 */
+const STRIPE_EDGE_COLOR = 'rgba(20, 16, 30, 0.58)';
+const STRIPE_EDGE_RATIO = 0.22; // 深色边的厚度 / 糖果半径（白纹 0.16r 居中叠在它上面）
+const STRIPE_CORE_RATIO = 0.16; // 白纹厚度 / 糖果半径（21.3 v3 由 0.14 加厚）
+const ARROW_COLOR = 'rgba(255, 255, 255, 0.96)';
+/** **特殊糖果的发光线**（P0-1）：两层几何描边，零模糊、零每帧渐变（15 节红线）。
+ *  外圈淡、内圈亮 ⇒ 在深色棋盘上像一圈发光，让特殊棋子从普通棋子中跳出来。
+ *  最远 = 最高形状（三角形纵向 1.16r）× 1.10 + 0.07 = **1.35r < 1.389r**（精灵半格），
+ *  探针会逐张量「最外 1px 必须全透明」。 */
+const SPECIAL_AURA = [
+  [1.1, 0.14, 'rgba(255, 240, 190, 0.16)'],
+  [1.04, 0.09, 'rgba(255, 248, 220, 0.36)']
+];
 const WRAPPED_HALO = 1.25; // 包装糖果光晕半径 / 糖果半径（仍在格子内：0.36 × 1.25 = 0.45 < 0.5）
 // ---- 魔力鸟（21.3 v2）：亮白鸟身 + 彩虹冠羽 + 短翅膀 + 小喙（材质与普通糖果共用 paintVolume） ----
 const MAGIC_BODY_COLOR = '#f4f2ff'; // 亮白偏冷（**不在 6 色之内** ⇒ 「不属于任何颜色」；在深色棋盘上也不再发空）
@@ -103,10 +118,10 @@ export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff
 const SHAPES = [
   { kind: 'circle', face: 1 },
   { kind: 'roundRect', corner: 0.42, face: 0.94 },
-  // 21.3 v2 按用户反馈「加宽主体、软化尖角、降低纵向尖长」进一步调整：
-  // 三角形 outer 0.9→**1.0**、squash 0.34→**0.26** ⇒ 宽 1.73r、纵向半高 1.26r
-  // （既比原来的 1.56r 宽一档、又仍落在精灵 1.389r 之内），视觉重量向红圆/橙方靠齐。
-  { kind: 'polygon', sides: 3, spin: 0, outer: 1, squash: 0.26, face: 0.9 },
+  // 21.3 v2/v3 按用户反馈「加宽主体、软化尖角、降低纵向尖长」调整：
+  // `outer 0.9→1.0`、`squash 0.34→0.16` ⇒ 宽 1.73r、纵向半高 **1.16r**（更矮更宽、视觉重量向红圆/橙方靠齐），
+  // 也**给发光线留出余量**（1.16 × 1.10 + 0.07 = 1.35r < 精灵 1.389r）。
+  { kind: 'polygon', sides: 3, spin: 0, outer: 1, squash: 0.16, face: 0.9 },
   { kind: 'polygon', sides: 4, spin: 0, outer: 1.06, face: 0.82 },
   { kind: 'star', points: 5, outer: 1.08, inner: 0.52, face: 0.86 },
   { kind: 'polygon', sides: 6, spin: 0, outer: 1.02, face: 0.94 }
@@ -604,24 +619,46 @@ function paintMotif(ctx, shape, cx, cy, r) {
   ctx.stroke();
 }
 
+/** 特殊糖果共用的一圈**发光线**（P0-1）：只描边、不填充，画在糖体之前（外圈露在外面）。
+ *  ⚠️ 必须 `lineJoin = 'round'`：默认的 **miter 尖角**在三角形的锐角处会向外戳出
+ *  `width/2 / sin(θ/2)`（实测顶点能到 1.58r，**超过精灵半格 1.389r** 被裁 —— 探针量到 4 个越界像素）。
+ *  圆角接头既消除尖刺，也是发光该有的样子。 */
+function paintSpecialAura(ctx, shape, cx, cy, radius) {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (const [scale, width, color] of SPECIAL_AURA) {
+    shapePath(ctx, shape, cx, cy, radius * scale);
+    ctx.lineWidth = radius * width;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /**
  * 条纹糖果：在普通糖果上叠 3 条白色条纹 + 方向箭头。
  * 3.2：条纹方向 = 匹配方向（横向 4 连 → 横条纹 → 消整行）；5.4 要求方向可辨，故保留箭头。
+ * **P0-1（用户 2026-09-26）**：每条白纹下先铺一条**深色边**（浅色棋子上才有对比度），
+ * 并给整颗糖套一圈**发光线**，让特殊棋子一眼跳出来。
  */
 function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
+  paintSpecialAura(ctx, shape, cx, cy, radius);
   paintCandy(ctx, cx, cy, radius, base, shape, false);
   const horizontal = direction !== DIRECTION.V;
 
   ctx.save();
   shapePath(ctx, shape, cx, cy, radius * 0.98);
   ctx.clip();
-  ctx.fillStyle = STRIPE_COLOR;
+  const bar = (offset, thickness, color) => {
+    ctx.fillStyle = color;
+    if (horizontal) ctx.fillRect(cx - radius * 0.95, cy + offset - thickness / 2, radius * 1.9, thickness);
+    else ctx.fillRect(cx + offset - thickness / 2, cy - radius * 0.95, thickness, radius * 1.9);
+  };
   for (let i = -1; i <= 1; i += 1) {
-    if (horizontal) {
-      ctx.fillRect(cx - radius * 0.95, cy + i * radius * 0.34 - radius * 0.07, radius * 1.9, radius * 0.14);
-    } else {
-      ctx.fillRect(cx + i * radius * 0.34 - radius * 0.07, cy - radius * 0.95, radius * 0.14, radius * 1.9);
-    }
+    const offset = i * radius * 0.34;
+    bar(offset, radius * STRIPE_EDGE_RATIO, STRIPE_EDGE_COLOR); // 深色边（先画，白纹压在它上面）
+    bar(offset, radius * STRIPE_CORE_RATIO, STRIPE_COLOR); // 高对比度白纹
   }
   ctx.restore();
 
@@ -655,6 +692,7 @@ function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
  *   · 全部在格内（最远 1.14r + 投影偏移 ≈ 1.25r < 1.389r），无模糊类 API。
  */
 function paintWrappedCandy(ctx, cx, cy, radius, base, shape) {
+  paintSpecialAura(ctx, shape, cx, cy, radius);
   const halo = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius * WRAPPED_HALO);
   halo.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
   halo.addColorStop(1, 'rgba(255, 255, 255, 0)');
@@ -712,6 +750,7 @@ function paintWrappedCandy(ctx, cx, cy, radius, base, shape) {
  *   ⑤ **脸**：与普通糖果同一套 `paintFace`（眼睛/腮红尺寸、眼距、高光位置全部沿用，只按糖体缩放）。
  */
 function paintMagicCandy(ctx, cx, cy, radius) {
+  paintSpecialAura(ctx, SHAPES[0], cx, cy, radius); // P0-1：特殊棋子都套一圈发光线
   // ① 彩虹冠羽（画在鸟身之前，露在头顶上方）
   //    ⚠️ 羽片必须落在**一格之内**：`0.72r + 0.26r + 0.3r = 1.28r < 1.389r`（探针量最外 1px 必须全透明）。
   for (let i = 0; i < 6; i += 1) {
