@@ -53,9 +53,11 @@ body {
   -webkit-user-drag: none;
 }
 
-/* Step 15/16（v1.20 / v1.22）画布外控件区；Step 21.2（v1.32 / D048）改版：
-   道具键 = 糖果质感（圆角 + 顶部高光 + 厚底边 + 投影 + 按下下沉），计数 = 右上角红色圆形徽章，
-   音效/震动收进**设置齿轮的浮层**。
+/* Step 15/16（v1.20 / v1.22）画布外控件区；Step 21.2（v1.32 / D048）改版；
+   **P1（用户 2026-09-26）**：道具键统一成 HUD 语言 —— **深色底 + 果冻图标**。
+   原来整颗按钮是荧光粉（比棋盘里的特殊棋子还抢眼），现在**底色回到 HUD 的深紫面板**（与卡片同一语言），
+   **颜色只出现在 28×28 的「果冻图标」上**（每种道具一个色相：刷新=蓝 / 加步=绿 / 木锤=琥珀），
+   图标带顶部高光 + 厚底边 ⇒「果冻」；徽章仍是红色（它是**功能性的数量**，要保持醒目）。
    ⚠️ 契约：`#controls` 的高度仍是 `--booster-bar-h`（100px），齿轮与设置浮层都是**绝对定位的浮层**、
    不占布局 —— render.js 从可用高度里扣掉的就是这一个值（它决定 computeBoardSize / boardRect）。
    这些材质都是 **CSS 静态样式**：不在 canvas 的每帧绘制路径上（15 节红线只针对那 6 个 JS 绘制模块）。 */
@@ -87,38 +89,61 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-width: 84px;
-  padding: 9px 10px 11px;
-  border: 0;
+  gap: 7px;
+  min-width: 88px;
+  padding: 8px 11px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
-  background: linear-gradient(180deg, #ff8ce6 0%, #ff4fd8 52%, #e0249f 100%);
-  color: #2a0b23;
-  font: 700 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* HUD 同款深色底：半透明白的顶光叠在深紫面板上（与 canvas 里的卡片同一语言） */
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.045) 100%);
+  background-color: #241f3a;
+  color: #f2f0ff;
+  font: 700 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   cursor: pointer;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(122, 9, 84, 0.35),
-    0 4px 0 #a8126f, 0 7px 12px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 3px 0 #15112a, 0 6px 12px rgba(0, 0, 0, 0.35);
   transition: transform 120ms ease-out, box-shadow 120ms ease-out;
 }
 
 /* 按下时「压下去」：位移 + 阴影收短（弹性手感的零素材做法） */
 .booster:active:not([disabled]) {
-  transform: translateY(3px);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.45), 0 1px 0 #a8126f, 0 3px 6px rgba(0, 0, 0, 0.35);
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 0 #15112a, 0 3px 6px rgba(0, 0, 0, 0.35);
 }
 
+/* 「果冻」图标：颜色只在这里（每种道具一个色相）。顶部径向高光 + 内嵌厚底边 ⇒ 软糖质感。
+   `flex: 0 0 auto` 是必须的：它在 flex 行里若允许收缩，会被文字挤成 25×28（探针实测抓到的）。 */
 .booster-icon {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.24), inset 0 2px 0 rgba(255, 255, 255, 0.42), 0 2px 5px rgba(0, 0, 0, 0.38);
+}
+
+.booster[data-kind='refresh'] .booster-icon {
+  background-image: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(180deg, #8fd8ff 0%, #3f9ee8 100%);
+}
+
+.booster[data-kind='addSteps'] .booster-icon {
+  background-image: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(180deg, #9fe89a 0%, #3fa55c 100%);
+}
+
+.booster[data-kind='hammer'] .booster-icon {
+  background-image: radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(180deg, #ffd98a 0%, #e09020 100%);
 }
 
 .booster-icon svg {
-  width: 20px;
-  height: 20px;
-  fill: #2a0b23;
-  stroke: #2a0b23;
-  stroke-width: 1.8;
+  width: 17px;
+  height: 17px;
+  fill: #1d1a30;
+  stroke: #1d1a30;
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -147,21 +172,35 @@ body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
+/* 小木锤「已选好、等格子」：金色描边 + 图标加亮（底色仍是深色，不再整颗变粉） */
 .booster[aria-pressed='true'] {
-  outline: 2px solid #ffd93b; /* 小木锤「已选好、等格子」的状态 */
-  background: linear-gradient(180deg, #ffa6ee 0%, #ff77e4 52%, #f034b0 100%);
+  outline: 2px solid #ffd93b;
+  border-color: rgba(255, 217, 59, 0.55);
 }
 
+.booster[aria-pressed='true'] .booster-icon {
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.24), inset 0 2px 0 rgba(255, 255, 255, 0.5),
+    0 0 0 2px rgba(255, 217, 59, 0.5), 0 2px 5px rgba(0, 0, 0, 0.38);
+}
+
+/* 用光（disabled）：底色更暗、图标退成灰果冻；徽章也退灰 */
 .booster[disabled] {
-  background: linear-gradient(180deg, #cfcbd8 0%, #a9a4b8 100%);
-  color: rgba(35, 30, 50, 0.6);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #7d7890;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  background-color: #1c1830;
+  color: rgba(242, 240, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 3px 0 #15112a;
   cursor: default;
 }
 
+.booster[disabled] .booster-icon {
+  background-image: linear-gradient(180deg, #6f6b82 0%, #4a4660 100%);
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.22), inset 0 2px 0 rgba(255, 255, 255, 0.18);
+}
+
 .booster[disabled] .booster-icon svg {
-  fill: rgba(35, 30, 50, 0.55);
-  stroke: rgba(35, 30, 50, 0.55);
+  fill: rgba(255, 255, 255, 0.5);
+  stroke: rgba(255, 255, 255, 0.5);
 }
 
 .booster[disabled] .booster-count {
