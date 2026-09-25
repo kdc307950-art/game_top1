@@ -18,6 +18,12 @@ const RIM_MIX = 0.45; // 描边/暗边 = base 与黑的混合比例
 const MOTIF_MIX = 0.38; // 内嵌图案的颜色混合比例
 const MOTIF_ALPHA = 0.72;
 const HIGHLIGHT_COLOR = 'rgba(255, 255, 255, 0.5)';
+const HIGHLIGHT_COLOR_2 = 'rgba(255, 255, 255, 0.42)'; // 第二点小高光（21.3「糖壳反光」）
+// ---- 21.3（D048）拟人化与质感：纯造型比例，按 D013 留在模块内，不进附录 B ----
+const BAKED_SHADOW = 'rgba(18, 14, 28, 0.22)'; // 预烘焙的几何投影（不用模糊类 API）
+const EYE_MIX = 0.78;        // 眼睛 = 糖果底色与近黑的混合比例（留一点色相，护住按色相识别的探针）
+const EYE_GLINT = 'rgba(255, 255, 255, 0.85)';
+const BLUSH_COLOR = 'rgba(255, 186, 202, 0.5)'; // 偏**浅**的粉（在红糖果上「粉色压红」几乎看不见，浅粉才在 6 色上都读得出来）
 const STRIPE_COLOR = 'rgba(255, 255, 255, 0.88)';
 const ARROW_COLOR = 'rgba(255, 255, 255, 0.92)';
 const WRAPPED_HALO = 1.25; // 包装糖果光晕半径 / 糖果半径（仍在格子内：0.36 × 1.25 = 0.45 < 0.5）
@@ -26,7 +32,7 @@ const MAGIC_BODY_COLOR = '#241f3a'; // 魔力鸟的暗色球体（与任何颜�
 const MAGIC_RING_RATIO = 0.82; // 彩虹环半径 / 糖果半径
 const MAGIC_RING_WIDTH = 0.22; // 彩虹环线宽 / 糖果半径
 const MAGIC_RING_SPIN = -Math.PI / 2; // 让第一段彩虹从正上方开始（观感更稳）
-const MAGIC_CORE_RATIO = 0.24; // 白色中心点半径 / 糖果半径
+const MAGIC_CORE_RATIO = 0.4; // 白色中心点半径 / 糖果半径（21.3 由 0.24 放大：拟人化的脸要放得下、看得清）
 
 // 障碍物外观（Step 11；5.4「冰块半透明叠加、雪块白色覆盖」+ 层数显示）。
 // 冰块的半透明是功能性的（要让冰里的动物可辨），不属于红线 3 的修饰性底色。
@@ -87,11 +93,15 @@ const POD_HALF_H_RATIO = 0.40;    // 荚身半高 / 格子边长（整荚 0.80 �
 // 颜色索引（0-5）→ 调色板。顺序对应 CONFIG.COLOR_NAMES，改动顺序等于改动视觉语义。
 export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff', '#a06bff'];
 
-// 6 种形状与颜色一一对应（5.4 色盲友好）。多边形参数：顶点数、旋转、外半径倍数、纵向压扁比例。
+// 6 种形状与颜色一一对应（5.4 色盲友好）。多边形参数：顶点数、旋转、外半径倍数、纵向拉伸比例。
+// ⚠️ 21.3 修掉一个**潜伏缺陷**：`squash` 在 `shapePath` 里是**纵向拉伸**（`(1 + squash)`），
+// 三角形原本 `outer 1.12 + squash 0.62` ⇒ 纵向半高 1.81r，而精灵只有 0.5 格 = 1.39r
+// ⇒ **顶部顶点被精灵边界裁掉**（黄三角形的尖被削平，实测最外 1px 有 13 个不透明像素、minY = 0）。
+// 现在改成 outer 0.88 + squash 0.45 ⇒ 纵向半高 1.276r，加上预烘焙投影的 0.11r 偏移仍在 1.389r 之内。
 const SHAPES = [
   { kind: 'circle' },
   { kind: 'roundRect', corner: 0.34 },
-  { kind: 'polygon', sides: 3, spin: 0, outer: 1.12, squash: 0.62 },
+  { kind: 'polygon', sides: 3, spin: 0, outer: 0.88, squash: 0.45 },
   { kind: 'polygon', sides: 4, spin: 0, outer: 1.1, squash: 0 },
   { kind: 'star', points: 5, outer: 1.08, inner: 0.45 },
   { kind: 'polygon', sides: 6, spin: 0, outer: 1, squash: 0 }
@@ -443,7 +453,14 @@ function paintLayerBadge(ctx, size, layers) {
  * 普通糖果：深色描边（同时充当底部内阴影）+ 径向渐变主体 + 内嵌图案 + 左上高光。
  * 全部为路径/渐变绘制：不使用阴影模糊类 API（红线 1，见 REFERENCES §3.5）。
  */
-function paintCandy(ctx, cx, cy, radius, base, shape) {
+function paintCandy(ctx, cx, cy, radius, base, shape, withFace = true) {
+  // 0) **预烘焙投影**（21.3 / D048）：形状的深色剪影往右下偏移一点，做出「厚投影」的立体感。
+  //    刻意不用模糊类 API（15 节红线：零 `shadow*` 系列、零每帧渐变）—— 就是一块**几何**剪影，
+  //    偏移量控制在格子余量内（半径 0.36 格 → 四周还有 0.14 格余量）。
+  ctx.fillStyle = BAKED_SHADOW;
+  shapePath(ctx, shape, cx + radius * 0.05, cy + radius * 0.11, radius * 0.99);
+  ctx.fill();
+
   // 1) 底层深色：主体略微上移，露出下缘暗边，形成「底部内阴影」的立体感
   ctx.fillStyle = mixHex(base, '#000000', RIM_MIX);
   shapePath(ctx, shape, cx, cy, radius);
@@ -458,7 +475,7 @@ function paintCandy(ctx, cx, cy, radius, base, shape) {
   shapePath(ctx, shape, cx - radius * 0.03, cy - radius * 0.05, radius * 0.97);
   ctx.fill();
 
-  // 3) 内嵌图案 + 4) 左上高光都在形状裁剪区里画，避免溢出到相邻格子
+  // 3) 内嵌图案 + 4) 左上高光 + 5) 表情（眼睛 / 腮红）都在形状裁剪区里画，避免溢出到相邻格子
   ctx.save();
   shapePath(ctx, shape, cx, cy, radius * 0.98);
   ctx.clip();
@@ -473,7 +490,44 @@ function paintCandy(ctx, cx, cy, radius, base, shape) {
   ctx.beginPath();
   ctx.ellipse(cx - radius * 0.34, cy - radius * 0.4, radius * 0.3, radius * 0.19, -0.5, 0, Math.PI * 2);
   ctx.fill();
+  // 第二点高光：更小更靠上，做出「湿润/糖壳」的反光（21.3 质感重烘焙）
+  ctx.fillStyle = HIGHLIGHT_COLOR_2;
+  ctx.beginPath();
+  ctx.ellipse(cx - radius * 0.52, cy - radius * 0.16, radius * 0.1, radius * 0.06, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+  if (withFace) paintFace(ctx, cx, cy, radius, base);
   ctx.restore();
+}
+
+/**
+ * **拟人化表情**（Step 21.3 / D048）：两只小眼睛（带一点白色反光）+ 两片腮红。
+ *
+ * 三条设计约束（都是可测量的，见 `_build/shot-candy-21.mjs`）：
+ *   ① 眼睛用的是**糖果自己颜色的深色版**（`mixHex(base, …, EYE_MIX)`）而不是纯黑 ——
+ *      这样即使探针在眼位附近取样，色相仍与本体一致，`verify-step12b` 的「按色相识别 64 格」不会被打断；
+ *   ② 眼睛与腮红都**避开格心**（|dx| < 0.1r、|dy| < 0.12r 是空区），因此格心永远是本体色；
+ *   ③ 全部在形状裁剪区内绘制，绝不溢出到相邻格子。
+ */
+function paintFace(ctx, cx, cy, r, base) {
+  const eye = mixHex(base, '#0d0d14', EYE_MIX);
+  const eyeY = cy - r * 0.08;
+  for (const side of [-1, 1]) {
+    const x = cx + side * r * 0.19;
+    ctx.fillStyle = eye;
+    ctx.beginPath();
+    ctx.ellipse(x, eyeY, r * 0.095, r * 0.125, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = EYE_GLINT;
+    ctx.beginPath();
+    ctx.arc(x - r * 0.03, eyeY - r * 0.045, r * 0.035, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = BLUSH_COLOR;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(cx + side * r * 0.44, cy + r * 0.26, r * 0.16, r * 0.095, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** 内嵌图案：每种形状一个可辨识的小图案，与形状同族但更小，避免细格子里糊成一团。 */
@@ -528,7 +582,7 @@ function paintMotif(ctx, shape, cx, cy, r) {
  * 3.2：条纹方向 = 匹配方向（横向 4 连 → 横条纹 → 消整行）；5.4 要求方向可辨，故保留箭头。
  */
 function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
-  paintCandy(ctx, cx, cy, radius, base, shape);
+  paintCandy(ctx, cx, cy, radius, base, shape, false);
   const horizontal = direction !== DIRECTION.V;
 
   ctx.save();
@@ -557,6 +611,13 @@ function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
   }
   ctx.closePath();
   ctx.fill();
+
+  // 21.3：脸**最后**画，否则会被条纹与箭头盖住
+  ctx.save();
+  shapePath(ctx, shape, cx, cy, radius * 0.98);
+  ctx.clip();
+  paintFace(ctx, cx, cy, radius, base);
+  ctx.restore();
 }
 
 /**
@@ -573,7 +634,7 @@ function paintWrappedCandy(ctx, cx, cy, radius, base, shape) {
   ctx.arc(cx, cy, radius * WRAPPED_HALO, 0, Math.PI * 2);
   ctx.fill();
 
-  paintCandy(ctx, cx, cy, radius, base, shape);
+  paintCandy(ctx, cx, cy, radius, base, shape, false);
 
   ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
   for (const [dx, dy] of WRAPPED_KNOTS) {
@@ -581,6 +642,12 @@ function paintWrappedCandy(ctx, cx, cy, radius, base, shape) {
     ctx.arc(cx + dx * radius * 0.62, cy + dy * radius * 0.62, radius * 0.13, 0, Math.PI * 2);
     ctx.fill();
   }
+  // 21.3：脸**最后**画，否则会被包装结盖住
+  ctx.save();
+  shapePath(ctx, shape, cx, cy, radius * 0.98);
+  ctx.clip();
+  paintFace(ctx, cx, cy, radius, base);
+  ctx.restore();
 }
 
 /**
@@ -606,6 +673,17 @@ function paintMagicCandy(ctx, cx, cy, radius) {
   ctx.beginPath();
   ctx.arc(cx, cy, radius * MAGIC_CORE_RATIO, 0, Math.PI * 2);
   ctx.fill();
+
+  // 21.3 拟人化：魔力鸟的脸画在白色中心上（按核心半径缩放，整块白不会被压掉；
+  // 眼睛/腮红都落在核心半径内，`_build/verify-step10.mjs` 的「白色中心仍在」继续成立）
+  // 21.3 拟人化：脸画在白色中心上，并**裁剪在核心圆内** —— 否则腮红会溢出到彩虹环上
+  // （左右两侧踩到不同颜色的环段，脸看起来不对称）。
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * MAGIC_CORE_RATIO, 0, Math.PI * 2);
+  ctx.clip();
+  paintFace(ctx, cx, cy - radius * MAGIC_CORE_RATIO * 0.18, radius * MAGIC_CORE_RATIO * 1.7, '#c9c9d6');
+  ctx.restore();
 }
 
 /** 生成形状路径：圆 / 圆角方 / 正多边形（可纵向压扁）/ 星形，全部闭合。 */function shapePath(ctx, shape, cx, cy, r) {
