@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-25（Step 19.5 执行卡：把「左右翻页」换成「藤蔓向上蔓延」（世界坐标 + 纵向平移）—— **待开工**）
+
+> 用户口径（本轮）：把分页换成**纵向自由平移**的向上蔓延；地图区域是固定视口，移动内部世界；进入地图自动定位当前关；加「回到当前关」悬浮按钮；藤蔓改为**一条贯穿全局的曲线**；节点三态、星星放大、固定进度条、**两层视差背景 + 粒子**；验收清单八项（见下）。**用户明确要求：先做一版纵向平移的原型，截图看效果。**
+>
+> **⚠️ 一处口径冲突（必须澄清）**：用户方案「不做」一栏写的是「不加 `unlockStars` 硬门槛、不加云层、不加隐藏关」—— 这三项**已经在 Step 19.3 交付并验收**（`gate-0.1-step19.3-pass`）。本轮是**换导航方式**，不涉及回退玩法。因此本卡按「**保留 19.3 的解锁/云层/隐藏关**，只把「分页」换成「世界纵向平移」、云层从「第 6 页」改为「世界顶部的云层带」」执行；若用户确实想回退 19.3，需单独批准（那是一次规则回退）。
+
+1. **开始前置条件**：Step 19.4 已验收（`step19.4-done`）+ Gate 0.1 第十五轮通过（`gate-0.1-step19.4-pass`）；起点 = 该 tag，工作区干净（本卡写下时已确认：`node tests/run-all.js` 260/3253/0、`consistency_check` 全通过、`check-vine-map` PASS 20/20）。相关章节：AGENTS 2.3（`vine-map.js` 只接收数据的画布外渲染层）、**5.1（禁页面滚动/缩放 —— 本步只在容器内做 `translateY`，不破这条）**、附录 B；D040 / D045 / D046。
+2. **已完成的侦察（本轮）**：① `input.js` 的 `bindInput({ target })` 绑的是 **canvas**，地图手势不经过它；② `bindViewportGuards` 在 **document** 上 `preventDefault` 了 `gesturestart/gesturechange/touchmove` —— 它只挡默认行为、不阻断投递，而地图自己的监听挂在**目标元素**上（先于 document 冒泡执行），因此「地图内拖拽 + 页面不滚动」可以同时成立，**不需要改 `input.js`**；③ 现有 `vine-map.js` 的分页模型（`pageCount`/`pageOf`/`positionsOnPage`/`pageSlideMs`）是本步要退役的部分。
+3. **坐标模型（19.5）**：放弃「页」——`LEVEL_MAP_POS` 改为**世界坐标**（`{ id, x, y }`，y 为 SVG 世界归一化：0 = 世界顶部、1 = 世界底部；`climbDirection = 'up'` 时第 1 关在世界最底、关号越大越靠上）；世界总高 = 视口高 × `worldHeightRatio`（默认 5）。**生成器仍是唯一写入方**（`_build/gen-vine-map.mjs` → `level.js` + `LEVELS.md` §9），`_build/check-vine-map.mjs` 的反向巡检改写为世界模型的不变量：文档/代码逐项一致、x 落在 `nodeColumns` 且 ≥3 个水平位置、**y 随关号单调**、y ∈ 0–1、锚点跨越整个世界（入口在世界外底部、出口在世界外顶部）。
+4. **交互（19.5）**：视口 `overflow: hidden` + 世界 `transform: translateY`；触摸/鼠标拖拽（`touchstart/move/end` + `mousedown/move/up`，松手按 `scrollInertia` 惯性衰减）；`▲`/`▼` 导航按钮（一次移动 `navStepRatio` 个视口高，替代分页按钮）；**「回到当前关」悬浮按钮**（固定在地图角落，不随世界滚动）；**进入地图自动居中当前关**（`translateY = 视口中心 − 当前关世界 Y`，并夹到 `[视口高 − 世界高, 0]`）；分页文本改为「第 X 关 / 共 50 关」。
+5. **视觉（19.5）**：① 单条贯通世界的平滑贝塞尔（锚点 + `mulberry32(seed)`，全曲线、无硬折线；仍占位「节点不参与路径计算」）；② **两层视差**：远景（山脉/云，`parallaxFar` = 0.25）+ 近景星光（`parallaxNear` = 1.45 的反向视差，`particleCount` 个确定性光点）；③ 三态节点沿用 19.3/19.4 的样式体系（`visited`/`attainable`/`locked` + 锁形图标 + 当前关指针 + 呼吸环）；④ 背景由世界底部的深绿渐变到世界顶部的深空蓝（`linearGradient` 随世界高度）；⑤ 进度条 `⭐ n/150` **固定在世界之外的视口底部**（不随平移）。
+6. **云层与隐藏关（保留 19.3）**：`tianbianBand`（世界顶部 12% 的云层带）替代「第 6 页」；云层未散时隐藏关 51–53 不渲染、只画云带与「还差 N ⭐」；解锁/门槛/`pickLevel` 拦截逻辑**不动**。
+7. **允许修改范围**：`config.js`（`VINE_MAP_CONFIG` 世界模型键）、`_build/gen-vine-map.mjs`、`_build/check-vine-map.mjs`、`level.js`（`LEVEL_MAP_POS` 由生成器写入）、`LEVELS.md`（§9 表与说明）、`vine-map.js`/`vine-map.css`（世界渲染 + 视差 + 导航 + 回中按钮）、`app.js`（地图手势/惯性/导航/回中/自动居中；沿用事件委托）、`tests/vine-map.test.js`、`AGENTS.md` v1.30（2.3 + 附录 B + 第 11 节）、`ROADMAP.md` v1.30（新增 19.5 行）、`prompts.md`、`DECISIONS.md` D047。**禁止**：改玩法规则与数值（解锁/星级/关卡表一律不动）；改 `input.js`（侦察结论：不需要）；引入素材或依赖；让页面本身滚动或缩放（5.1）。
+8. **验收清单（映射到断言）**：① 上下滑动 → 世界 `translateY` 变化且 `document.documentElement.scrollHeight === clientHeight`（页面不滚动）；② 进入地图当前关居中（`|节点中心 − 视口中心| ≤ 2px`）；③ 两次独立渲染 `#vine-path` 的 `d` 完全一致、抽样点偏离弦 > 5px（是曲线）；④ 50 个 `[data-level]` 节点、X 轴 ≥3 个水平位置、三态取值合法；⑤ 星星尺寸 = `starSize × starScale`（渲染包围盒复算）；⑥ ≥2 层视差（远景/近景的 `transform` 位移比例是 `parallaxFar` / `parallaxNear`）+ 粒子数 = `particleCount`；⑦ `node _build/check-vine-map.mjs` 全绿、`python _build/consistency_check.py` 全绿、`node tests/run-all.js` 0 失败；⑧ **改写** `verify-step19-2.mjs` 的分页断言（改为世界平移/自动居中/导航按钮/回中按钮 —— 这是**规则变更式改写**，要在 PROGRESS 明写）；`verify-step12b.mjs` 增加「模拟滑动并断言视口变换」一项；`verify-step19-3.mjs` 的「第 6 页云层」改为「世界顶部云层带」。
+9. **用户列出的风险 + 本卡的补充**：① `verify-step12b` 改写量增加（要模拟滑动 + 断言 `translateY`）；② `input.js` 互斥 —— **已侦察确认天然隔离**（input 绑 canvas；document 级 `preventDefault` 只挡默认行为）；③ 视差性能 —— 视差只改**两个 SVG 图层容器的 `transform`**（不是逐元素），星光点用**单个** `<g>` 内的确定性圆点，避免大量 DOM 抖动；④ **新风险**：世界高 = 视口高 × 5 时，53 个节点的间距约 0.06×世界高 ≈ 视口高的 30%，需要实机确认「一屏能看到 2–3 个节点」的密度是否舒适（可调 `worldHeightRatio`）；⑤ **新风险**：自动居中与「当前关已在视口内」时的抖动 —— 用 `scrollMs` 平滑滚动 + 只在进入地图时定位一次。
+10. **执行顺序**：执行卡与 DoR → 宪法 v1.30 登记 → `VINE_MAP_CONFIG` 世界模型 → 生成器/巡检改写（跑通 → 重写 `LEVEL_MAP_POS` 与 `LEVELS.md` §9）→ `vine-map.js` 世界渲染（视口/世界/路径/背景/视差/粒子/节点/云带/导航/回中）→ `vine-map.css` → `app.js`（手势 + 惯性 + 导航 + 回中 + 自动居中）→ `tests/vine-map.test.js` 改写 → 浏览器原型 + **截图三张（世界底 / 当前关居中 / 世界顶云带）** → 用户看效果 → 通过后补 `verify-step19-2/12b/19-3` 改写与第十六轮门禁 → 文档 + 提交。
+11. **证据等级与回滚**：L1 + L2 + L3；真机未验证。回滚点 = `gate-0.1-step19.4-pass`（本步开工前的最后一个绿点）。
+
+**DoR 判定**：目标（纵向平移 + 自动居中 + 导航/回中 + 全局曲线 + 视差背景）与非目标（不改玩法、不改 `input.js`、不加素材/依赖）明确；前置 Step 19.4 与第十五轮门禁已过；允许修改文件已列出；**一处口径冲突待确认**（是否保留 19.3 的解锁/云层/隐藏关 —— 本卡按「保留」执行）；夹具与验收路径可执行；风险已识别；回滚点已登记 → **可开工（下一轮执行；本轮只做了侦察与建卡）**。
+
+---
+
 ## 2026-09-25（Step 19.4：藤蔓地图「从下往上」+ 画风增强 —— 完成并验证 + Gate 0.1 第十五轮）
 
 用户口径：「**藤蔓关卡从下往上**，**ui 画风增强**，**参考其他消消乐游戏源码**」。这是对已交付地图层的**朝向 + 观感**修订：**玩法零改动**（解锁规则、门槛、隐藏关、50 关表、所有逻辑模块一行未动）；口径与参考来源记入 `DECISIONS.md` **D046**。
