@@ -5,6 +5,12 @@
 // 与 render.js 的关系：render.js 负责棋盘层、本文件负责信息层；render.js **单向**依赖本文件
 // （需要 HUD_RATIO / hudCells 来烘焙静态图层）。为避免 render ↔ hud 形成模块环，
 // 圆角矩形路径在本文件就地实现一份（10 行纯几何），不反向 import render.js。
+//
+// Step 21.1（v1.31 / D048）：HUD「果汁感」—— 目标进度条（含达标闪烁）、步数 ≤5 的心跳缩放、
+// 分数向上飘字、连击文案。**纯信息层观感**：所有数值只影响绘制；飘字池是纯函数（有界 / 按时间回收 /
+// 偏移确定性）；动效只由传入的 `nowMs` 与 `HUD_CONFIG` 的周期键决定（不使用运行时随机）。
+
+import { CONFIG } from './config.js';
 
 export const HUD_RATIO = 0.13; // HUD 带高度 / 画布边长（render.js 据此切分棋盘区）
 const HUD_LOW_STEPS = 5; // 剩余步数 ≤ 此值时用警示色
@@ -23,6 +29,16 @@ const GOAL_DONE_COLOR = '#4ecb71'; // 已完成的目标分项（与糖果绿色
 const BANNER_BG = 'rgba(20, 16, 34, 0.92)';
 const BANNER_TEXT_COLOR = '#ffe9a8';
 const FONT_STACK = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+// Step 21.1（D048）：进度条 / 飘字的配色与文案。纯观感常量按 D013 留在模块内（不进规则层）。
+const PROGRESS_FILL = '#ffd93b';
+const PROGRESS_DONE = '#4ecb71';
+const PROGRESS_DONE_FLASH = '#ffe9a8';
+const PROGRESS_TRACK = 'rgba(255, 255, 255, 0.14)';
+const FLOAT_COLOR = '#ffe9a8';
+const FLOAT_OUTLINE = 'rgba(28, 22, 48, 0.85)';
+// 连击文案：第 3 / 4 / 5+ 层各一句（`comboText` 是纯函数，可在 Node 里测）
+const COMBO_TEXTS = ['太棒了！', '干得好！', '不可思议！'];
+const COMBO_FROM_LEVEL = 2; // 级联层下标 ≥ 2（= 第 3 层）起显示连击文案
 
 /** HUD 四个信息格的位置（静态图层与文字共用，避免两处各算一遍）。v1.14：3 格 → 4 格（5.5）。 */
 export function hudCells(sizePx, hudHeight) {
@@ -38,18 +54,93 @@ export function hudCellBackground() {
   return HUD_CELL_BG;
 }
 
+/** HUD 卡片的烘焙参数（render.js 在布局期用；本文件不画卡片，只提供数值）。21.1 / D048 */
+export function hudCardStyle() {
+  const cfg = CONFIG.HUD_CONFIG;
+  return { radiusRatio: cfg.cardRadius, highlightRatio: cfg.cardHighlight };
+}
+
+/**
+ * 目标分项（**数值形态**）：目标进度条与文本共用同一份推导。
+ * 纯函数 —— 只读传入的场景描述，不认识棋盘状态（2.3），可在 Node 里逐项测。
+ * `text` 与 v1.14 的 5.5 文案逐字一致（`分数 3200/7000`、`冰 5/12`、`frog 8/12`…）。
+ */
+export function goalEntries(hud) {
+  const goal = hud?.goal ?? null;
+  if (!goal) return [];
+  const collected = hud.collected ?? {};
+  const entries = [];
+  const push = (label, value, target) => {
+    const current = Number.isFinite(Number(value)) ? Number(value) : 0;
+    const need = Number.isFinite(Number(target)) ? Number(target) : 0;
+    entries.push({ label, value: current, target: need, done: current >= need, text: `${label ? `${label} ` : ''}${current}/${need}` });
+  };
+  if (goal.type === 'score') push('', hud.score, goal.target);
+  if (goal.type === 'clearIce') push('冰', hud.clearedIce ?? 0, goal.target);
+  // 3.6（v1.18）：水果关/金豆荚关的进度就是「已收到几个」
+  if (goal.type === 'fruit') push('水果', hud.collectedFruit ?? 0, goal.target);
+  if (goal.type === 'pod') push('豆荚', hud.collectedPod ?? 0, goal.target);
+  if (goal.type === 'collect' || goal.type === 'mixed') {
+    const targets = goal.type === 'collect' ? goal.targets : goal.collect;
+    for (const [name, need] of Object.entries(targets ?? {})) push(name, collected[name] ?? 0, need);
+  }
+  if (goal.type === 'mixed') {
+    if (goal.score !== undefined) push('', hud.score, goal.score);
+    if (goal.clearIce !== undefined) push('冰', hud.clearedIce ?? 0, goal.clearIce);
+  }
+  return entries;
+}
+
+/** 主进度（进度条用）：优先第一个**未完成**的分项；全完成则取最后一项（于是条子显示满格）。 */
+export function goalProgress(hud) {
+  const entries = goalEntries(hud);
+  if (entries.length === 0) return { has: false, ratio: 0, done: false, text: '' };
+  const primary = entries.find((entry) => !entry.done) ?? entries[entries.length - 1];
+  const ratio = primary.target > 0 ? Math.min(1, Math.max(0, primary.value / primary.target)) : 1;
+  return { has: true, ratio, done: primary.done, text: primary.text };
+}
+
+/** 心跳缩放（步数 ≤5 或时间 ≤10s）：只由 `nowMs` 与周期键决定 —— 纯函数、无随机。 */
+export function heartbeatScale(steps, remainingTime, timeLimit, nowMs) {
+  const cfg = CONFIG.HUD_CONFIG;
+  const timed = Number.isFinite(timeLimit) && timeLimit > 0;
+  const low = timed ? (Number(remainingTime) || 0) <= HUD_LOW_TIME : (Number(steps) || 0) <= HUD_LOW_STEPS;
+  if (!low) return 1;
+  const phase = ((Number(nowMs) || 0) % cfg.lowStepsPulseMs) / cfg.lowStepsPulseMs;
+  const wave = (1 - Math.cos(phase * Math.PI * 2)) / 2; // 0 → 1 → 0
+  return 1 + (cfg.lowStepsScale - 1) * wave;
+}
+
+/** 目标达成后的闪烁因子（0..1）：进度条用它在「亮金 ↔ 完成绿」之间闪。 */
+export function flashFactor(done, nowMs) {
+  if (!done) return 0;
+  const phase = ((Number(nowMs) || 0) % CONFIG.HUD_CONFIG.progressFlashMs) / CONFIG.HUD_CONFIG.progressFlashMs;
+  return (1 - Math.cos(phase * Math.PI * 2)) / 2;
+}
+
+/** 连击文案（第 3 / 4 / 5+ 层）：纯函数，返回 `null` 表示这一层不弹。 */
+export function comboText(levelIndex) {
+  const index = Math.trunc(Number(levelIndex));
+  if (!Number.isFinite(index) || index < COMBO_FROM_LEVEL) return null;
+  return COMBO_TEXTS[Math.min(index - COMBO_FROM_LEVEL, COMBO_TEXTS.length - 1)];
+}
+
 /** HUD 常驻信息（5.5 / v1.14）：分数 / 剩余步数 / 关卡目标进度 / 最高分。
- *  v1.19：时间关**没有步数**，第二格改显示剩余时间（3.6 第 8 条 + 5.5）。 */
-export function drawHud(ctx, { sizePx, hudHeight, hud }) {
+ *  v1.19：时间关**没有步数**，第二格改显示剩余时间（3.6 第 8 条 + 5.5）。
+ *  Step 21.1（D048）：目标格加**进度条**（含达标闪烁）、步数/时间低值时**心跳缩放**；
+ *  `nowMs` 只驱动这两个动效（不参与任何判定，缺省 0 也能画出静止态）。 */
+export function drawHud(ctx, { sizePx, hudHeight, hud, nowMs = 0 }) {
   const boxes = hudCells(sizePx, hudHeight);
   const timed = Number.isFinite(hud.timeLimit) && hud.timeLimit > 0;
+  const low = timed ? (hud.remainingTime ?? 0) <= HUD_LOW_TIME : hud.steps <= HUD_LOW_STEPS;
+  const pulse = heartbeatScale(hud.steps, hud.remainingTime, hud.timeLimit, nowMs);
   const stats = [
-    { label: '分数', value: String(hud.score), warn: false },
+    { label: '分数', value: String(hud.score) },
     timed
-      ? { label: '时间', value: `${Math.max(0, Math.ceil(hud.remainingTime ?? 0))}s`, warn: (hud.remainingTime ?? 0) <= HUD_LOW_TIME }
-      : { label: '步数', value: String(hud.steps), warn: hud.steps <= HUD_LOW_STEPS },
-    { label: '目标', value: '', warn: false, lines: goalLines(hud) },
-    { label: '最高分', value: String(hud.best), warn: false }
+      ? { label: '时间', value: `${Math.max(0, Math.ceil(hud.remainingTime ?? 0))}s`, warn: low, pulse }
+      : { label: '步数', value: String(hud.steps), warn: low, pulse },
+    { label: '目标', lines: goalLines(hud), bar: goalProgress(hud) },
+    { label: '最高分', value: String(hud.best) }
   ];
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -58,21 +149,96 @@ export function drawHud(ctx, { sizePx, hudHeight, hud }) {
     const cx = box.x + box.w / 2;
     ctx.font = `500 ${Math.max(9, Math.round(hudHeight * 0.2))}px ${FONT_STACK}`;
     ctx.fillStyle = HUD_LABEL_COLOR;
-    ctx.fillText(stat.label, cx, box.y + box.h * (stat.lines ? 0.2 : 0.32));
+    ctx.fillText(stat.label, cx, box.y + box.h * (stat.lines ? 0.18 : 0.32));
 
     if (stat.lines) {
-      // 目标格最多两行（v1.14 的 5.5 口径）：一行一个「当前值/目标值」
-      ctx.font = `700 ${Math.max(9, Math.round(hudHeight * 0.26))}px ${FONT_STACK}`;
+      // 目标格最多两行（v1.14 的 5.5 口径）+ 底部进度条（21.1）
+      ctx.font = `700 ${Math.max(9, Math.round(hudHeight * 0.24))}px ${FONT_STACK}`;
       stat.lines.forEach((line, i) => {
         ctx.fillStyle = line.done ? GOAL_DONE_COLOR : HUD_VALUE_COLOR;
-        ctx.fillText(line.text, cx, box.y + box.h * (i === 0 ? 0.52 : 0.8));
+        ctx.fillText(line.text, cx, box.y + box.h * (stat.lines.length === 1 ? 0.5 : 0.44 + i * 0.22));
       });
+      if (stat.bar?.has) drawProgressBar(ctx, box, stat.bar, hudHeight, nowMs);
       return;
     }
-    ctx.font = `700 ${Math.max(12, Math.round(hudHeight * 0.36))}px ${FONT_STACK}`;
+    const base = Math.max(12, Math.round(hudHeight * 0.36));
+    ctx.font = `700 ${Math.max(12, Math.round(base * (stat.pulse ?? 1)))}px ${FONT_STACK}`;
     ctx.fillStyle = stat.warn ? HUD_WARN_COLOR : HUD_VALUE_COLOR;
     ctx.fillText(stat.value, cx, box.y + box.h * 0.68);
   });
+}
+
+/** 目标进度条（21.1）：1 条轨道 + 1 条填充，共 2 次路径填充，无渐变、无阴影（15 节红线）。 */
+function drawProgressBar(ctx, box, progress, hudHeight, nowMs) {
+  const height = Math.max(3, Math.round(hudHeight * CONFIG.HUD_CONFIG.progressBarH));
+  const width = box.w * 0.82;
+  const x = box.x + (box.w - width) / 2;
+  const y = box.y + box.h - height - hudHeight * 0.06;
+  roundRectPath(ctx, x, y, width, height, height / 2);
+  ctx.fillStyle = PROGRESS_TRACK;
+  ctx.fill();
+  const filled = Math.max(height, width * progress.ratio);
+  roundRectPath(ctx, x, y, filled, height, height / 2);
+  if (!progress.done) ctx.fillStyle = PROGRESS_FILL;
+  else ctx.fillStyle = flashFactor(true, nowMs) > 0.5 ? PROGRESS_DONE_FLASH : PROGRESS_DONE;
+  ctx.fill();
+}
+
+/**
+ * 分数飘字池（21.1）：与 particles.js 同一条思路的**纯逻辑** —— 有界、按时间回收、偏移确定性。
+ * `spawnFloat` 返回**新数组**（不改入参），池满时丢最旧的一条（O(1) 语义、永不阻塞）。
+ */
+export function spawnFloat(pool, text, nowMs) {
+  const list = [...(pool ?? [])];
+  const index = (list.length > 0 ? list[list.length - 1].index : 0) + 1;
+  list.push({ text: String(text), bornAt: Number(nowMs) || 0, index });
+  const max = Math.max(1, Math.trunc(CONFIG.HUD_CONFIG.floatMax));
+  return list.length > max ? list.slice(list.length - max) : list;
+}
+
+/** 丢弃已过期的飘字（存活 `floatLifeMs`）。 */
+export function advanceFloats(pool, nowMs) {
+  const life = CONFIG.HUD_CONFIG.floatLifeMs;
+  const now = Number(nowMs) || 0;
+  return (pool ?? []).filter((float) => now - float.bornAt < life);
+}
+
+/** 单条飘字的生命进度（0 → 1）。 */
+export function floatProgress(float, nowMs) {
+  const life = CONFIG.HUD_CONFIG.floatLifeMs;
+  return Math.min(1, Math.max(0, (Number(nowMs) - float.bornAt) / life));
+}
+
+/** 单条飘字的相对位移：横向按序号取模错开（确定性，**不引入第四份 PRNG**），纵向按进度上升。 */
+export function floatOffset(float, nowMs, side) {
+  const progress = floatProgress(float, nowMs);
+  const dx = ((Math.trunc(float.index) % 3) - 1) * side * 0.06;
+  const dy = -side * CONFIG.HUD_CONFIG.floatRiseRatio * progress;
+  return { progress, dx, dy };
+}
+
+/** 画分数飘字（棋盘区上方，逐条 2 次调用：描边 + 填充）。返回画了几条（供巡检断言）。 */
+export function drawFloats(ctx, field, pool, nowMs) {
+  if (!ctx || !field || !Array.isArray(pool) || pool.length === 0) return 0;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 ${Math.round(field.side * 0.062)}px ${FONT_STACK}`;
+  ctx.lineWidth = Math.max(2, field.side * 0.008);
+  ctx.strokeStyle = FLOAT_OUTLINE;
+  ctx.fillStyle = FLOAT_COLOR;
+  let drawn = 0;
+  for (const item of pool) {
+    const { progress, dx, dy } = floatOffset(item, nowMs, field.side);
+    const alpha = progress < 0.15 ? progress / 0.15 : 1 - Math.max(0, (progress - 0.55) / 0.45);
+    ctx.globalAlpha = Math.min(1, Math.max(0, alpha));
+    const x = field.x + field.side / 2 + dx;
+    const y = field.y + field.side * 0.42 + dy;
+    ctx.strokeText(item.text, x, y);
+    ctx.fillText(item.text, x, y);
+    drawn += 1;
+  }
+  ctx.globalAlpha = 1;
+  return drawn;
 }
 
 /**
@@ -81,35 +247,14 @@ export function drawHud(ctx, { sizePx, hudHeight, hud }) {
  * 只接收场景数据，不认识棋盘状态 —— 与 hud.js 的边界一致（2.3）。
  */
 function goalLines(hud) {
-  const goal = hud.goal ?? null;
-  if (!goal) return [{ text: '—', done: false }];
-  const collected = hud.collected ?? {};
-  const entries = [];
-
-  if (goal.type === 'score') entries.push(progress(`${hud.score}`, `${goal.target}`, hud.score >= goal.target));
-  if (goal.type === 'clearIce') entries.push(progress(`冰 ${hud.clearedIce ?? 0}`, `${goal.target}`, (hud.clearedIce ?? 0) >= goal.target));
-  // 3.6（v1.18）：水果关/金豆荚关的进度就是「已收到几个」
-  if (goal.type === 'fruit') entries.push(progress(`水果 ${hud.collectedFruit ?? 0}`, `${goal.target}`, (hud.collectedFruit ?? 0) >= goal.target));
-  if (goal.type === 'pod') entries.push(progress(`豆荚 ${hud.collectedPod ?? 0}`, `${goal.target}`, (hud.collectedPod ?? 0) >= goal.target));
-  if (goal.type === 'collect' || goal.type === 'mixed') {
-    const targets = goal.type === 'collect' ? goal.targets : goal.collect;
-    for (const [name, need] of Object.entries(targets ?? {})) {
-      entries.push(progress(`${name} ${collected[name] ?? 0}`, `${need}`, (collected[name] ?? 0) >= need));
-    }
-  }
-  if (goal.type === 'mixed') {
-    if (goal.score !== undefined) entries.push(progress(`${hud.score}`, `${goal.score}`, hud.score >= goal.score));
-    if (goal.clearIce !== undefined) entries.push(progress(`冰 ${hud.clearedIce ?? 0}`, `${goal.clearIce}`, (hud.clearedIce ?? 0) >= goal.clearIce));
-  }
+  const entries = goalEntries(hud);
   if (entries.length === 0) return [{ text: '—', done: false }];
-
-  const ordered = [...entries.filter((e) => !e.done), ...entries.filter((e) => e.done)];
-  const shown = ordered.slice(0, 2);
+  // 混合目标先显示未完成的分项（更有用），超出两行的部分以 `+N` 提示（v1.14 的 5.5 口径）
+  const ordered = [...entries.filter((entry) => !entry.done), ...entries.filter((entry) => entry.done)];
+  const shown = ordered.slice(0, 2).map((entry) => ({ text: entry.text, done: entry.done }));
   if (ordered.length > shown.length) shown[shown.length - 1].text += ` +${ordered.length - shown.length}`;
   return shown;
 }
-
-const progress = (current, target, done) => ({ text: `${current}/${target}`, done });
 
 /**
  * 结束面板（5.5：页面内 UI，禁止 alert）。返回「再来一局」按钮在画布内的命中区域，

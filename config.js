@@ -122,6 +122,23 @@ export const CONFIG = {
     reducedMotion: false     // 对应 prefers-reduced-motion，见 REFERENCES.md §2.1 Step 5
   },
 
+  // 对局 HUD 的「果汁感」参数（Step 21.1，AGENTS.md 2.3 / 5.5 / 15；口径见 D048）。
+  // **纯信息层观感**：不参与任何规则与计分，只影响 HUD 的绘制与动效。
+  // 红线（15 节 / D043 / D044）：每帧仍然只有 drawImage 与文本绘制，**零阴影模糊类 API（`shadow*` 系列）、零每帧渐变**；
+  // 卡片的材质（圆角 / 内嵌高光 / 投影）由 render.js 在**布局期**烘焙进静态图层 —— cardRadius 与
+  // cardHighlight 只在那时用到，运行期不再重画。
+  HUD_CONFIG: {
+    cardRadius: 0.22,     // HUD 卡片圆角（相对单元格高）
+    cardHighlight: 0.34,  // 卡片顶部内嵌高光的高度比例（烘焙进静态图层）
+    lowStepsPulseMs: 900, // 剩余步数 ≤5（或时间 ≤10s）时的心跳周期（ms）
+    lowStepsScale: 1.14,  // 心跳的最大缩放倍率（1 = 不缩放）
+    progressBarH: 0.09,   // 目标进度条高度（相对 HUD 带高）
+    progressFlashMs: 700, // 目标达成后的闪烁周期（ms）
+    floatLifeMs: 900,     // 分数飘字存活时长（ms）
+    floatRiseRatio: 0.1,  // 飘字上升距离（相对棋盘边长）
+    floatMax: 6           // 同时存在的飘字上限（池满丢最旧的一条）
+  },
+
   // 粒子动画（Step 17，AGENTS.md 2.2 / 2.3 / 15，v1.27）。**纯观感**：不参与任何规则与计分。
   // 数值口径：
   //   · capacity = 池上限（颗）；maxPerFrame = 每帧贴图上限 —— 宪法 15 节「单帧绘制调用 ≤ 200」，

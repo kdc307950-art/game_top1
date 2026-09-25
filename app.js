@@ -22,7 +22,7 @@ import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js'
 // Step 17（v1.27）：粒子系统的纯逻辑（池/生命周期/确定性生成）；本文件只负责在时间线上生成与推进
 import { activeParticles, clearParticles, createParticleSystem, spawnBurst, update as updateParticles } from './particles.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
-import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
+import { advanceFloats, comboText, describeGoal, hudScoreAt, spawnFloat } from './hud.js'; // v1.16 信息层文案与回放插值；21.1 飘字池与连击文案
 import { DEMO_LEVEL_IDS, HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS, getLevelConfig, isLevelUnlocked, isTianbianOpen, isTimeLevel, unlockStarsFor } from './level.js';
 import { centerMapOn, MAP_NAV_STEP_RATIO, mapSnapshot, panMap, relayoutMap, renderMap } from './vine-map.js'; // Step 19.5：藤蔓关卡地图（画布外的 SVG 层 + 视口内纵向平移）
 import { createStorage, getTotalStars } from './storage.js';
@@ -46,6 +46,16 @@ const timeline = createTimeline({
     if (phase.phase === 'clear' && phase.levelIndex !== view.lastClearLevel) {
       view.lastClearLevel = phase.levelIndex;
       feedback('clear', phase.levelIndex);
+      // Step 21.1（D048）：本层得分飘字 + 连击文案。reduced-motion 下**不生成**飘字
+      // （与粒子的口径一致：不是生成了再隐身）；连击文案走既有的 drawBanner 通道。
+      const gained = view.playback?.levelScores?.[phase.levelIndex]?.gained ?? 0;
+      if (gained > 0 && !view.systemReducedMotion && !view.settling) {
+        view.floats = spawnFloat(view.floats, `+${gained}`, nowMs());
+        startFloatTicker();
+      }
+      view.comboBanner = view.settling ? null : comboText(phase.levelIndex);
+    } else if (phase.phase !== 'clear') {
+      view.comboBanner = null;
     }
     drawFrame(phase, progress);
   },
@@ -76,6 +86,10 @@ const view = {
   endReason: 'steps', // 结束原因：'steps'（步数用尽）/ 'stuck'（死局重排超限，3.8 约束 4）
   playback: null, // 本轮回放的数据（逐层分数、是否待结束）；timeline.running 决定是否锁输入
   hudScore: null, // 播放期间按层累加的分数；null 表示直接读 GameState
+  floats: [], // 21.1（D048）：分数飘字池（hud.js 的纯函数维护；有界、按时间回收）
+  floatRaf: 0, // 飘字自己的 rAF（时间线在跑时不重复绘制）
+  comboBanner: null, // 21.1：连击文案（第 3 层起），只在该 clear 相位显示
+  settling: false, // 21.1：结算演出进行中（此时不生成飘字/连击，保证结算定格帧画面干净）
   restartRect: null,
   systemReducedMotion: false,
   frameRequest: 0,
@@ -194,6 +208,12 @@ function startNewGame() {
   view.firstGroups = [];
   view.playback = null;
   view.hudScore = null;
+  // 21.1（D048）：重开一局清空飘字与连击文案（并停掉飘字自己的 rAF）
+  if (view.floatRaf) window.cancelAnimationFrame(view.floatRaf);
+  view.floatRaf = 0;
+  view.floats = [];
+  view.comboBanner = null;
+  view.settling = false;
   view.restartRect = null;
   view.hammerArmed = false; // 3.9：重开一局时退出「小木锤待选格」
   view.lastClearLevel = -1;
@@ -426,6 +446,10 @@ function attemptSwap(a, b) {
   // Step 20（v1.25，3.6 第 7 条）：本局结束时的**结算阶段**。它排在这一手之后、星级结算之前，
   // 因此日志顺序与时间线的阶段顺序一致（转化定格 → 连锁引爆 → 结束面板）。
   if (result.resolve.settlement) {
+    // Step 21.1（D048）：**结算演出期间不叠加任何果汁层**（飘字与连击横幅都不生成）——
+    // 结算的「转化定格」帧要靠**画面静止**来取证（config.js 的 settleHold 注释、Step 20 的像素巡检
+    // 都依赖这一点），飘字/横幅会盖住它本该展示的那批特殊糖果。正常消除不受影响。
+    view.settling = true;
     log('info', `结算阶段（3.6 第 7 条 / Step 20）：${settlementText(result.resolve.settlement)}`);
   }
 
@@ -478,6 +502,10 @@ function finishTimeline() {
   view.playback = null;
   view.hudScore = null;
   view.firstGroups = [];
+  // 21.1（D048）：回放结束后清掉连击文案 —— 否则最后一层恰好是 clear 时，
+  // 那枚横幅会**一直留在画面上**（本轮探针抓到的真缺陷：1.5s 后仍扫到 1096 个横幅像素）。
+  view.comboBanner = null;
+  view.settling = false;
   resetParticles(); // Step 17：回放结束后清空粒子，避免它们停在新画面上
   drawFrame();
   if (pendingGameOver) finishGame();
@@ -495,6 +523,21 @@ function finishTimeline() {
 // ---------------------------------------------------------------------------
 
 /** 每帧：先推进粒子，再在相位切换时生成这一批。 */
+/**
+ * 分数飘字自己走完生命周期（21.1 / D048）：每帧回收一次并重画。
+ * 时间线在跑时不重复绘制（它本来就在逐帧画）；飘完即自动停下 —— 空闲时不占 rAF。
+ */
+function startFloatTicker() {
+  if (view.floatRaf || typeof window.requestAnimationFrame !== 'function') return;
+  const step = () => {
+    view.floatRaf = 0;
+    view.floats = advanceFloats(view.floats, nowMs());
+    if (!timeline.running) drawFrame();
+    if (view.floats.length > 0) view.floatRaf = window.requestAnimationFrame(step);
+  };
+  view.floatRaf = window.requestAnimationFrame(step);
+}
+
 function stepParticles(phase) {
   const system = view.particles;
   if (!system) return;
@@ -979,9 +1022,12 @@ function drawFrame(entry = null, progress = 1) {
     clearing: entry && entry.phase === 'clear' ? { keys: entry.keys, progress } : null,
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
-    banner: entry?.banner ?? null, // 5.5：重排前给出明确提示（结算阶段刻意不叠加任何横幅，见 timeline.js）
+    banner: entry?.banner ?? view.comboBanner ?? null, // 5.5 重排提示 / 21.1 连击文案（结算阶段刻意不叠加横幅，见 timeline.js）
     // Step 17（v1.27）：本帧的粒子快照（particles.js 的只读叶子字段，已按 maxPerFrame 截断）
     particles: view.particles ? activeParticles(view.particles) : [],
+    // Step 21.1（v1.31）：分数飘字（hud.js 的池）与本帧时间（心跳/飘字/闪烁都只由它驱动）
+    floats: view.floats,
+    nowMs: nowMs(),
     // Step 19.2：选关界面已改为画布外的藤蔓地图层（`#map`），canvas 场景里不再有选关网格
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,

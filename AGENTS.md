@@ -1,9 +1,23 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.30
+> 版本：v1.31
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.30 → v1.31 关键变更）
+
+本次修订按**用户批准的完整方案**开工 **Step 21：对局 UI 视觉升级（糖果质感 / 果汁感）**，本版落地 **21.1 HUD 果汁化**（21.2 道具栏与设置、21.3 棋子拟人化待开工）。**玩法零改动**：计分、步数、目标、星级、关卡表、存档、逻辑模块一律不动，只改信息层与外观；口径记入 `DECISIONS.md` **D048**。
+
+1. **HUD 留在 canvas（方案的第 2 条被工程性修正）**：用户方案建议「HUD 增加目标进度条 **DOM 元素**、步数加 `.warning` 类」，但 2.3 的分工是「**HUD 与棋盘画 canvas，道具条与地图是 DOM**」，且 HUD 是 `render.js` 静态图层的一部分。因此**进度条 / 心跳 / 飘字 / 卡片全部在 canvas 画**；只有 21.2 的道具栏与设置齿轮在 DOM。
+2. **15 节红线不变，质感靠烘焙**：方案里「给棋子加 `box-shadow` / Canvas 投影」按字面做会踩「**零 `shadowBlur`、零每帧渐变**」（D043/D044）。本步的卡片材质（圆角 / 顶部内嵌高光 / 投影）**只在 `render.js` 的布局期烘焙一次**，运行期依旧只有 `drawImage` 与文本绘制 —— 探针实测**单帧 85 次绘制调用、每帧 0 新建渐变**（预算 200）。
+3. **新增 `HUD_CONFIG` 9 键（附录 B）**：`cardRadius` / `cardHighlight` / `lowStepsPulseMs` / `lowStepsScale` / `progressBarH` / `progressFlashMs` / `floatLifeMs` / `floatRiseRatio` / `floatMax`。**纯观感**：不参与任何规则与计分；动效只由传入的 `nowMs` 与这些周期键决定（**不使用运行时随机**）。
+4. **`hud.js` 新增四条纯函数**（可在 Node 里测）：`goalEntries`（目标分项，文本与 v1.14 的 5.5 逐字一致）、`goalProgress`（**优先未完成的分项**，供进度条）、`heartbeatScale`（步数 ≤5 / 时间 ≤10s 的心跳缩放）、`flashFactor`（达标闪烁）、`comboText`（第 3/4/5+ 层的连击文案）。**飘字池**（`spawnFloat` / `advanceFloats` / `floatOffset` / `floatProgress` / `drawFloats`）与 particles.js 同一条思路：**有界（`floatMax` 6）、按生命期回收、偏移由序号取模派生**（**不引入第四份 PRNG**）。
+5. **`render.js` / `app.js` 的接法**：`render.js` 的 `draw()` 追加「连击文案（复用既有 `drawBanner` 通道）→ 飘字 → HUD」，并把 `scene.nowMs` 传给 `drawHUD`；`buildChrome()` 里的 HUD 卡片改成「投影 + 卡片渐变 + 顶部高光」。`app.js` 在**每层消除**时生成一条飘字（`+得分`）并起一个**只在有飘字时存在**的 rAF ticker（时间线在跑时不重复绘制、飘完自动停）；`finishTimeline()` 里清掉连击文案。
+6. **本步抓到的真缺陷**：连击横幅在「最后一层恰好是 clear」时会**一直留在画面上**（探针：1.5s 后仍扫到 1096 个横幅像素）—— 已在 `finishTimeline()` 里清掉，并在探针里加了「1 秒后消失 + 画面稳定」两组断言。
+7. **验证**：新增 `tests/hud.test.js`（8 例：目标推导 / 进度优先级 / 心跳 / 闪烁 / 连击文案 / 飘字池有界与回收 / 位移确定性 / `drawFloats` 的调用次数）→ `node tests/run-all.js` **13 文件 / 271 用例 / 3402 断言 / 0 失败**；新增 `_build/shot-hud-21.mjs`（**16 项 PASS** + 两张截图：静态首屏与消除瞬间）；`python _build/consistency_check.py` 与本次同步把「ROADMAP/prompts 覆盖 Step 0-20」的断言扩到 **0-21**。**如实说明**：本机没有视觉模型，Agent 看不到截图，观感请以 `_build/step21-hud-*.png` 为准。
 
 ---
 
@@ -509,7 +523,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   audio.js         # 音效合成与震动反馈：Web Audio 合成、震动模式（唯一允许创建 AudioContext 的模块，v1.22）
   render.js        # 棋盘层绘制与几何：画布尺寸/DPR、棋盘布局、静态图层烘焙、每帧贴图
   candy.js         # 糖果外观与精灵烘焙：形状路径、配色、内嵌图案、条纹 / 包装 / 魔力鸟特效（D020 / D023）
-  hud.js           # 信息层绘制：HUD（分数/步数/最高分）、结束面板、重排提示
+  hud.js           # 信息层绘制：HUD 四格（含目标进度条 / 步数心跳）+ 卡片材质 + 分数飘字 + 连击文案、结束面板、重排提示（v1.31）
   input.js         # 触摸/鼠标手势识别与视口守卫：只产出手势，不碰游戏状态
   timeline.js      # 动画时间线调度与 rAF 回放：只接收阶段列表与回调
   tests/
@@ -527,6 +541,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
     vine-map.test.js
     settlement.test.js
     particles.test.js
+    hud.test.js
   AGENTS.md
   ROADMAP.md
   PROGRESS.md
@@ -557,9 +572,9 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托与手势编排**（点节点进关 / 拖拽平移 / 惯性 / `▲`·`▼` 导航 / 「回到当前关」/ 键盘 ↑↓·Home，19.2 v1.24 / **19.5 v1.30**）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
-- `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
+- `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量与卡片材质（`hudCardStyle()`）、`candy.js` 取糖果精灵。**v1.31（D048）**：HUD 卡片（投影 / 卡片渐变 / 顶部高光）在 `buildChrome()` 里**布局期烘焙一次**，运行期仍只有 `drawImage` 与文本绘制；`draw()` 追加「连击文案（复用 `drawBanner` 通道）→ 分数飘字」两道，并把 `scene.nowMs` 透传给 `drawHud`（探针实测单帧 85 次绘制调用、每帧 0 新建渐变）。
 - `candy.js`：糖果外观与精灵烘焙（形状路径、配色、内嵌图案、条纹特效及其方向箭头、包装糖果光晕与四角白结、魔力鸟彩虹环）。只接收坐标、颜色与形状参数，不认识棋盘状态、不读游戏状态、不绑定事件、不碰存档；依赖方向为 `render.js → candy.js` 单向，不得反向依赖。
-- `hud.js`：信息层绘制（HUD 四个信息格、结束面板、重排提示；选关网格自 v1.23 起移出到 `vine-map.js`）。只接收场景数据，不读游戏状态、不绑定事件、不碰存档。
+- `hud.js`：信息层绘制（HUD 四个信息格、**目标进度条 / 步数心跳 / 分数飘字 / 连击文案**、结束面板、重排提示；选关网格自 v1.23 起移出到 `vine-map.js`）。只接收场景数据（外加一个 `nowMs` 只用于驱动动效），不读游戏状态、不绑定事件、不碰存档。**纯函数与绘制分离**（v1.31 / D048）：`goalEntries` / `goalProgress`（进度条取「第一个未完成的分项」）/ `heartbeatScale` / `flashFactor` / `comboText` 与飘字池（`spawnFloat` / `advanceFloats` / `floatOffset` / `floatProgress` / `drawFloats`）都能在 Node 里测；卡片材质参数经 `hudCardStyle()` 交给 `render.js` 在**布局期**烘焙（运行期零 shadowBlur、零渐变）。
 - `input.js`：触摸与鼠标手势识别（滑动阈值、主轴锁定、视口守卫），只产出 `{ kind, x0, y0, x1, y1 }` 手势事件；不认识棋盘、不碰游戏状态与存档。
 - `timeline.js`：动画时间线调度（阶段划分、时长计算、rAF 回放）。只接收阶段列表与每帧/结束回调；不读游戏状态、不碰存档、不实现游戏规则。
 - `index.html`：只放结构（canvas + 画布外控件区 + `#map` 地图容器）、viewport、引入脚本与样式。
@@ -1562,6 +1577,15 @@ const LEVEL_3 = {
 | `STORAGE_KEYS.BEST_SCORE`          | 最高分存储键       | `xxl_best_score`     | 3.5 / ROADMAP Step 4 |
 | `STORAGE_KEYS.LEVEL_STARS`         | 每关星级存档键     | `xxl_level_stars`    | 3.7 / ROADMAP Step 12.2 |
 | `STORAGE_KEYS.MUTED`               | 静音开关存储键     | `xxl_muted`          | ROADMAP Step 16 |
+| `HUD_CONFIG.cardRadius`            | HUD 卡片圆角（相对单元格高） | 0.22         | 2.3 v1.31 |
+| `HUD_CONFIG.cardHighlight`         | 卡片顶部内嵌高光的高度比例（**布局期烘焙**） | 0.34 | 2.3 v1.31 |
+| `HUD_CONFIG.lowStepsPulseMs`       | 步数 ≤5（或时间 ≤10s）时的心跳周期（ms） | 900  | 5.5 v1.31 |
+| `HUD_CONFIG.lowStepsScale`         | 心跳的最大缩放倍率（1 = 不缩放） | 1.14        | 5.5 v1.31 |
+| `HUD_CONFIG.progressBarH`          | 目标进度条高度（相对 HUD 带高） | 0.09          | 5.5 v1.31 |
+| `HUD_CONFIG.progressFlashMs`       | 目标达成后的闪烁周期（ms） | 700             | 5.5 v1.31 |
+| `HUD_CONFIG.floatLifeMs`           | 分数飘字存活时长（ms） | 900                 | 5.5 v1.31 |
+| `HUD_CONFIG.floatRiseRatio`        | 飘字上升距离（相对棋盘边长） | 0.1              | 5.5 v1.31 |
+| `HUD_CONFIG.floatMax`              | 同时存在的飘字上限（池满丢最旧） | 6             | 5.5 v1.31 |
 | `PARTICLE_CONFIG.enabled`          | 粒子总开关（关掉即不生成） | true         | 15 v1.27 |
 | `PARTICLE_CONFIG.capacity`         | 粒子池上限（颗）   | 192                  | 15 v1.27 |
 | `PARTICLE_CONFIG.maxPerFrame`      | 每帧贴图上限（次 `drawImage`，计入「≤ 200」总预算） | 96 | 15 v1.27 |

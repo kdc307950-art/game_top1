@@ -436,6 +436,33 @@
 
 ---
 
+## Step 21：对局 UI 视觉升级（HUD 果汁化 / 道具栏 / 棋子拟人化）
+
+```text
+任务：实现 ROADMAP.md §4.3 的 Step 21「对局界面果汁感升级」（用户方案，见 DECISIONS D048）
+开始前：
+1. 阅读 AGENTS.md（2.3 的 DOM/Canvas 分工、5.1 禁滚动、15 节的绘制预算与「零 shadowBlur / 零每帧渐变」、
+   附录 B）、ROADMAP.md §4.3、DECISIONS.md D048、PROGRESS.md 的 19.5 收口记录。
+2. 口径：**玩法零改动**（计分 / 步数 / 目标 / 星级 / 关卡表一律不动），只改信息层与外观；
+   用户已批准三步全做：21.1 HUD 果汁化 → 21.2 道具栏与设置 → 21.3 棋子拟人化。
+范围：
+- 21.1：config.js 加 HUD_CONFIG；hud.js 加目标进度条（含达标闪烁）、步数 ≤5 心跳缩放、分数飘字池（纯函数 +
+  绘制）、连击文字走既有 drawBanner 通道；render.js 在**静态图层**里烘焙 HUD 卡片（圆角 / 内嵌高光 / 阴影）
+  并绘制飘字；app.js 把 nowMs 与飘字池接进帧循环。
+- 21.2：index.html + styles.css 的道具栏（右上角红色圆形计数徽章、图标、糖果质感 3D 描边）与「音效/震动」
+  收成设置齿轮弹层；**必须保住 --booster-bar-h 契约**（render.js 从可用高度里扣它、它决定 computeBoardSize）。
+- 21.3：candy.js 重烘焙 6 色 × 5 状态 = 30 张精灵（高光 / 厚投影 / 小眼睛与腮红），**仍布局期一次性烘焙**。
+验收：node tests/run-all.js 与 python _build/consistency_check.py 全绿；浏览器里进度条 / 心跳 / 飘字可见且飘完回收；
+      每帧绘制调用 ≤ 200（15 节）；**每个子步先出截图交用户确认再继续**；21.3 之后复跑像素哈希套件
+      （verify-step17 / verify-step20）与 Gate 0.1 第十七轮。
+禁止：改玩法数值或规则；引入素材或依赖（D009 零素材，全部程序化画）；**每帧** shadowBlur / 渐变（只能烘焙）；
+      把 HUD 或棋盘挪到 DOM / 把道具条挪到 canvas；破坏 --booster-bar-h 契约。
+前置依赖：Step 19.5 收口（tag step19.5-done / gate-0.1-step19.5-pass）。
+参考：用户提交的「对局核心界面 UI 优化方案」；DECISIONS.md D048。
+```
+
+---
+
 ## 待补充的提示词模式（随实战积累）
 
 - 报错排查类：`先把完整的报错栈贴出来` + 复现步骤 + 预期行为 三段式。

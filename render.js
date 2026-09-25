@@ -13,7 +13,7 @@
 
 import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
 import { buildCollectibleAtlas, buildObstacleAtlas, buildParticleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
-import { HUD_RATIO, drawBanner, drawGameOver, drawHud, hudCellBackground, hudCells } from './hud.js';
+import { HUD_RATIO, drawBanner, drawFloats, drawGameOver, drawHud, hudCardStyle, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
 const MAX_DPR = 3; // 后备缓冲上限：高 DPR 机型不做无意义的 4× 过度绘制
@@ -111,13 +111,18 @@ export function createRenderer() {
     drawObstacles(ctx, cache, scene, field); // 5.4：冰块覆层要盖在糖果之上
     drawParticles(ctx, cache, scene, field); // Step 17：粒子在障碍之上、环与 HUD 之下
     drawRings(ctx, scene, field);
-    if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的明确提示
-    drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud });
+    if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的提示 / 21.1 的连击文案
+    if (scene.floats?.length) drawFloats(ctx, field, scene.floats, scene.nowMs ?? 0); // 21.1：分数飘字
+    drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud, nowMs: scene.nowMs ?? 0 });
     return { ...empty, ...(scene.overlay ? drawGameOver(ctx, field, scene.overlay) : null) };
   }
 
   return { prepare, draw };
 }
+
+// 21.1（D048）：HUD 卡片的烘焙材质。纯观感常量按 D013 就地，不进规则层。
+const CARD_SHADOW_COLOR = 'rgba(6, 4, 14, 0.45)';
+const CARD_HIGHLIGHT_COLOR = 'rgba(255, 255, 255, 0.1)';
 
 /** 静态图层：背景 + HUD 底 + 棋盘区底。一帧内不变，烘焙后每帧只 drawImage 一次（红线 2）。 */
 function buildChrome(sizePx, dpr, layout) {
@@ -130,9 +135,22 @@ function buildChrome(sizePx, dpr, layout) {
   roundRectPath(ctx, 0, 0, sizePx, sizePx, sizePx * BACKDROP_RADIUS_RATIO);
   ctx.fillStyle = BACKDROP_COLOR;
   ctx.fill();
+  // 21.1（D048）：HUD **卡片化** —— 投影 + 卡片渐变 + 顶部内嵌高光。
+  // 全部只在**布局期**烘焙一次；运行期依旧零阴影模糊类 API（`shadow*` 系列）、零渐变（15 节红线 / D043 / D044）。
+  const card = hudCardStyle();
   for (const box of hudCells(sizePx, layout.hudHeight)) {
-    roundRectPath(ctx, box.x, box.y, box.w, box.h, box.h * 0.22);
-    ctx.fillStyle = hudCellBackground();
+    const radius = box.h * card.radiusRatio;
+    roundRectPath(ctx, box.x, box.y + box.h * 0.06, box.w, box.h, radius);
+    ctx.fillStyle = CARD_SHADOW_COLOR;
+    ctx.fill();
+    roundRectPath(ctx, box.x, box.y, box.w, box.h, radius);
+    const gradient = ctx.createLinearGradient(0, box.y, 0, box.y + box.h);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.12)');
+    gradient.addColorStop(1, hudCellBackground());
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    roundRectPath(ctx, box.x + box.w * 0.12, box.y + box.h * 0.06, box.w * 0.76, Math.max(1, box.h * card.highlightRatio * 0.5), box.h * 0.06);
+    ctx.fillStyle = CARD_HIGHLIGHT_COLOR;
     ctx.fill();
   }
   const { x, y, side } = layout.field;
