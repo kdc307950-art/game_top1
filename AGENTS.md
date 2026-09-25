@@ -1,9 +1,23 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.28
+> 版本：v1.29
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.28 → v1.29 关键变更）
+
+本次修订按**用户口径**落地 **Step 19.4：藤蔓地图「从下往上」+ 画风增强（参考其他消消乐源码）**。**玩法零改动**（解锁规则、门槛、隐藏关、关卡表一律不动），只改地图层的**朝向**与**观感**；口径记入 `DECISIONS.md` **D046**。
+
+1. **从下往上（`VINE_MAP_CONFIG.climbDirection = 'up'`）**：每页**最下方是页内第 1 个节点**，关号越大越靠上（第 1 页：第 1 关在最下方 → 第 10 关在最上方）。节点 y 公式改为 `1 − (nodeMarginY + row × spanY) ± nodeStaggerY`。
+2. **路径锚点方向随之翻转**：入口贴在**页内底部**（y = 0.95）、出口探到**页外上方**（y = −0.05），跨屏衔接条件由「出口 y − 1 ≈ 入口 y」变为「**入口 y − 1 ≈ 出口 y**」（0.95 − 1 = −0.05）。**坐标三件套**（`LEVELS.md` §9 ↔ `LEVEL_MAP_POS` ↔ `_build/check-vine-map.mjs`）同步，巡检新增**页内朝向断言**（第 1 关在第 10 关下方）。
+3. **画风增强（零素材、全程序化，延续 D009）**：① **分层背景** —— 天空 `linearGradient`（自下而上的暖→冷）+ 两层远山剪影 + 地面色带；② **双层藤蔓** —— 深色垫层（13px）+ 亮色芯（8px）共用同一条 `d`，叠出「有厚度的藤」；③ 节点加**内嵌高光**；④ 锁定节点加**锁形图标**（纯 path）；⑤ **当前关指针** —— 节点上方一枚指向它的箭头（轻微上下浮动），对应参考专利里「指向玩家最高关卡的指针」，也让「从下往上」时一眼找到自己位置；⑥ 云层多层错峰漂移；⑦ 进度条改渐变填充 + 描边。
+4. **参考来源（用户要求「参考其他消消乐源码」）**：King 的 Candy Crush 地图专利（[WO2014041202A1](https://patentimages.storage.googleapis.com/b0/d7/f4/8acdc16c379140/WO2014041202A1.pdf) / [US9592444](https://patentimages.storage.googleapis.com/ea/6e/91/ad8bc13791d759/US9592444.pdf)）——「地图是玩家**向上攀爬**的虚拟风景，当前关卡有一枚**指向它的指针**」；`REFERENCES.md` 已登记的 [jooyouss/candy-crush](https://github.com/jooyouss/candy-crush)、[k8scat/kaixinxiaoxiaole](https://github.com/k8scat/kaixinxiaoxiaole)（结构与观感语言）与 [AlexKutepov/Match3-algorithm-TS-Cocos-creator](https://github.com/AlexKutepov/Match3-algorithm-TS-Cocos-creator)（节点/棋盘表示）。**只借思路，不复制素材、不引入依赖**。
+5. **观感常量归属**：几何/时长（`climbDirection` / `arrowSize` / `arrowOffsetY` / `cloudDriftMs`）进附录 B；纯造型比例（内圈高光半径、锁形尺寸、云团偏移）按 D013 留在 `vine-map.js` 的本地常量，不进规则层。
+6. **reduced-motion 的选择器特异性修正**：动画挂在 `.vine-node[data-state='attainable'] .vine-node-ring` 这类复合选择器上，媒体查询里的单类写法**权重不够、压不住动画**（探针实测 `animation-name` 仍是 `pulse`/`sway`）。媒体查询改用同权重或更高的选择器（`.vine-node[data-state] .vine-node-ring` / `.vine-leaf .vine-leaf-blade` 等），reduced-motion 下**动画真的停止**。
+7. **验证**：`tests/vine-map.test.js` 的 y 公式与锚点方向断言按朝向改写并新增「第 1 关在第 10 关下方」；新增浏览器套件 `_build/verify-step19-4.mjs`（朝向 + 画风层结构证据 + reduced-motion 三组断言）；`_build/verify-step19-2.mjs` 增加 2 项朝向/画风断言。
 
 ---
 
@@ -525,7 +539,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**归一化 0–1**，v1.24）。
 - `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
 - `particles.js`：**粒子动画的纯逻辑**（v1.27）：固定容量环形池（`capacity`）、按 `dt` 的积分与回收、按事件种类（`PARTICLE_KIND`）的**生成计划**（`planBurst`）、确定性 PRNG（`mulberry32` + 事件键）以及给渲染层的**只读快照**（`activeParticles`，最多 `maxPerFrame` 项）。它**不认识棋盘 / `GameState` / DOM / Canvas / 存档**，也不实现任何游戏规则 —— 生成与推进由 `app.js` 在动画时间线上调用，贴图只在 `render.js`；因此池有界、生命周期、确定性与 `dt` 边界都能在 Node 里逐项测。**不使用运行时随机**：种子 = `PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类")`（同输入同粒子，像素巡检可复现）。坐标以**棋盘格**为单位（1.0 = 一格），渲染时乘 `cellPx`。
-- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀、**天边云层**）。只接收「坐标表 + 星级表 + 当前关 + 总星数 + **解锁表**（`unlocked`/`required`，由调用方算好）+ **天边状态**（`tianbian`）+ ⭐ 分母（`starTotal`）」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**。节点状态机由 v1.24 的两态扩为**三态**（v1.28）：`visited`/`attainable`/**`locked`** —— `nodeState(earned, unlocked)` 仍是纯函数，**地图层不认识解锁规则**（`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 算好后传入）。共 **6 页**：前 5 页各 10 个主线节点，第 6 页是天边（3 个隐藏关；云层未散去时隐藏关**不渲染**、只画云层与「还差 N ⭐」）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24 / v1.28，见 D040 / D045）。
+- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀、**天边云层**、**双层藤蔓与分层背景**）。只接收「坐标表 + 星级表 + 当前关 + 总星数 + **解锁表**（`unlocked`/`required`，由调用方算好）+ **天边状态**（`tianbian`）+ ⭐ 分母（`starTotal`）」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**。**攀爬方向（v1.29）**由 `VINE_MAP_CONFIG.climbDirection` 决定：默认 `'up'` = 每页**最下方是页内第 1 个节点**、关号越大越靠上，锚点入口在页内底部（y≈0.95）、出口探出页顶（y≈−0.05），跨屏衔接条件是 `入口 y − 1 ≈ 出口 y`。节点状态机由 v1.24 的两态扩为**三态**（v1.28）：`visited`/`attainable`/**`locked`** —— `nodeState(earned, unlocked)` 仍是纯函数，**地图层不认识解锁规则**（`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 算好后传入）。共 **6 页**：前 5 页各 10 个主线节点，第 6 页是天边（3 个隐藏关；云层未散去时隐藏关**不渲染**、只画云层与「还差 N ⭐」）。**观感（v1.29）**：分层背景（天空渐变 + 两层远山 + 地面）、双层藤蔓（深色垫层 + 亮色芯，共用一条 `d`）、节点内嵌高光、锁定节点的锁形图标、**当前关指针**（节点上方箭头）、云层错峰漂移 —— 全部零素材程序化，纯造型比例按 D013 留在模块内的本地常量。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24 / v1.28 / v1.29，见 D040 / D045 / D046）。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
@@ -1201,6 +1215,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.29 | 2026-09-25 | Agent（用户口径：从下往上 + 画风增强） | **Step 19.4 藤蔓地图朝向与画风**（玩法零改动）：新增 `VINE_MAP_CONFIG.climbDirection`（默认 `'up'`）—— 页内**自下而上**（最下方是第 1 个节点），节点 y 改为 `1 − (nodeMarginY + row × spanY) ± nodeStaggerY`；路径锚点翻转为「入口在页内底部 y≈0.95、出口探出页顶 y≈−0.05」，跨屏衔接条件改为 `入口 y − 1 ≈ 出口 y`（巡检与 `tests/vine-map.test.js` 同步，新增页内朝向断言）；画风增强（零素材）：分层背景（天空渐变 + 两层远山 + 地面）、双层藤蔓（垫层 13px + 亮芯 8px 同一 `d`）、节点内嵌高光、锁定节点锁形图标、**当前关指针**（`arrowSize` / `arrowOffsetY`）、云层漂移（`cloudDriftMs`）、进度条渐变；附录 B 新增 4 键；新增浏览器套件 `_build/verify-step19-4.mjs`；修正 reduced-motion 媒体查询的**选择器特异性**（原先压不住 `pulse` / `sway` 动画） | 2.3、附录 B、11、`config.js`、`vine-map.js`、`vine-map.css`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/vine-map.test.js` |
 | v1.28 | 2026-09-25 | Agent（用户拍板三条口径） | **Step 19.3 解锁门槛 / 天边云层 / 隐藏关**（规则变更）：3.6 新增「只按累计星数解锁」——门槛 = `round((n−1) × UNLOCK_CONFIG.starsPerLevel)`（1.20，第 50 关 59 星）、第 1 关恒 0、**反锁保护**（已通关的关卡永远可玩）；**天边云层**（累计 120 星）散去后露出隐藏关 51–53（Step 14 的三个演示关，**不计入** `⭐ n/150`）；解锁状态是**派生量、不进存档**（存档仍是 v2，`storage.js` 未动）；新增纯函数 `level.unlockStarsFor` / `isLevelUnlocked` / `isTianbianOpen` 与 `HIDDEN_LEVEL_IDS`；`LEVEL_MAP_POS` 由 50 项扩到 53 项（6 页，前 5 页各 10 关 + 第 6 页天边）；`vine-map.js` 的节点状态机由两态扩为**三态**（新增 `locked`）并新增天边云层，`renderMap` 新增 `unlocked` / `required` / `revealed` / `tianbian` / `starTotal` 入参；`app.js` 的 `pickLevel` 拒绝锁定关卡并在画布外弹提示；`LEVELS.md` 新增 §10；附录 B 新增 `UNLOCK_CONFIG` 3 键 | 3.6、2.2、2.3、附录 B、11、`config.js`、`level.js`、`vine-map.js`、`vine-map.css`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
 | v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | **Step 17 粒子动画与视觉打磨**：新增模块 `particles.js`（固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照，2.2/2.3 登记）；粒子一律**确定性**（`mulberry32` + 事件键 `关卡id:级联层:cell.id:种类`，不用 `Math.random`/不读时间）；坐标以棋盘格为单位、渲染时乘 `cellPx`；15 节新增粒子每帧贴图上限（`maxPerFrame` = 96）、池上限（`capacity` = 192）与「reduced-motion 不生成」三条；三类强度由**颗数递增**表达（普通 3 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14），方向按事件区分（扇形 / 双向直线 / 环形 / 全色相）；附录 B 新增 `PARTICLE_CONFIG` 20 键、附录 B-2 新增 `PARTICLE_KIND`；新增 `tests/particles.test.js`（7 例） | 2.2、2.3、15、附录 B、附录 B-2、11、`config.js`、`particles.js`、`candy.js`、`render.js`、`app.js`、`ROADMAP.md` |
 | v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | **彩星字段预留 + 存档迁移**：`STORAGE_CONFIG.schemaVersion` 1 → 2（`levels` 的值由数字改为 `{ stars, rainbow }`），v0/v1 **就地迁移**逐关补 `rainbow: false`（老存档不丢、幂等、更高版本仍只读不写）；新增 `readLevelRecords` / `writeLevelRecords` / `getTotalRainbows`，而 `readLevelStars` / `getTotalStars` / `recordLevelStars` 的对外形状**不变**（后者加可选 `options.rainbow`，缺省沿用既有标志）；口径为**彩星不计入总星数**；本步只做字段与迁移、**不做彩星规则**；附录 B 的 `schemaVersion` 默认值 1 → 2；`ROADMAP.md` 标 20.4 完成并同步 v1.26 | 2.3、附录 B、11、`config.js`、`storage.js`、`ROADMAP.md`、`tests/integration.test.js` |
@@ -1548,6 +1563,10 @@ const LEVEL_3 = {
 | `UNLOCK_CONFIG.starsPerLevel`      | 每关递增的星数门槛（解锁曲线的唯一旋钮） | 1.2 | 3.6 v1.28 |
 | `UNLOCK_CONFIG.tianbianStars`      | 天边云层的解锁门槛（累计星数） | 120 | 3.6 v1.28 |
 | `UNLOCK_CONFIG.hiddenLevelIds`     | 天边云层后露出的隐藏关 id 列表（不计入 ⭐ 分母） | `[51, 52, 53]` | 3.6 v1.28 |
+| `VINE_MAP_CONFIG.climbDirection`    | 页内攀爬方向（`up` = 最下方是页内第 1 个节点） | `'up'` | 2.3 v1.29 |
+| `VINE_MAP_CONFIG.arrowSize`         | 当前关指针（箭头）的边长（px） | 13 | 2.3 v1.29 |
+| `VINE_MAP_CONFIG.arrowOffsetY`      | 指针相对节点圆心的垂直偏移（px） | 26 | 2.3 v1.29 |
+| `VINE_MAP_CONFIG.cloudDriftMs`      | 云层横向漂移周期（ms；reduced-motion 时关闭） | 9000 | 2.3 v1.29 |
 | `STORAGE_KEYS.BOOSTERS`            | 道具数量存储键     | `xxl_boosters`       | ROADMAP Step 15 |
 
 新增或修改配置项时，必须同步更新本表与第 3 节相关条款。第 1 条（`COLOR_NAMES`）的映射顺序即 `cell.color` 索引语义，调整顺序等于改动所有关卡目标，属破坏性变更。

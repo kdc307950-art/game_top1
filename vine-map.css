@@ -59,6 +59,27 @@
   overflow: visible;
 }
 
+/* 19.4 画风：分层背景（天空渐变 + 两层远山 + 地面色带）—— 只是观感层，不参与命中 */
+.vine-backdrop .vine-sky {
+  opacity: 1;
+}
+
+.vine-hill {
+  stroke: none;
+}
+
+.vine-hill--far {
+  fill: #1f3b34;
+}
+
+.vine-hill--near {
+  fill: #1a322d;
+}
+
+.vine-ground {
+  fill: #14261f;
+}
+
 /* 藤蔓本体：有机曲线（单条平滑贝塞尔）；`stroke-dasharray/offset` 只做一次「生长」观感 */
 .vine-path {
   fill: none;
@@ -73,6 +94,15 @@
 
 .vine-path.grown {
   stroke-dashoffset: 0;
+}
+
+/* 19.4：藤蔓的**深色垫层**（更粗、无生长动画），与上层亮色芯叠出「有厚度的藤」 */
+.vine-path-under {
+  fill: none;
+  stroke: #12281f;
+  stroke-width: 13;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* 叶子与卷须：沿路径切线方向摆放，做轻微摇曳（尊重 prefers-reduced-motion） */
@@ -117,6 +147,38 @@
   stroke-opacity: 0.45;
 }
 
+/* 19.4：节点左上内嵌高光（立体感；不参与状态判定） */
+.vine-node-gloss {
+  fill: rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+}
+
+/* 19.4：当前关卡的**指针**（指向当前节点），轻微上下浮动（reduced-motion 时静止） */
+.vine-node-arrow {
+  fill: var(--vine-gold);
+  stroke: #2b2410;
+  stroke-width: 1.2;
+  animation: vine-arrow-bob 1400ms ease-in-out infinite;
+}
+
+@keyframes vine-arrow-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+/* 19.4：锁定节点的小锁形图标（纯 path，无素材） */
+.vine-node-lock-shackle {
+  stroke: var(--vine-locked-text);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.vine-node-lock-body {
+  fill: var(--vine-locked-text);
+  stroke: #2a2a3a;
+  stroke-width: 1;
+}
+
 .vine-node[data-state='attainable'] .vine-node-ring {
   stroke: var(--vine-attainable);
   animation: pulse calc(var(--vine-pulse-ms) * 1.6) ease-in-out infinite;
@@ -157,6 +219,22 @@
   fill-opacity: 0.92;
   stroke: #8f9bd0;
   stroke-width: 1.5;
+  animation: vine-cloud-drift var(--vine-cloud-ms, 9000ms) ease-in-out infinite;
+}
+
+/* 多层云团的错峰漂移：观感上像缓慢流动的云（reduced-motion 时全部静止） */
+.vine-cloud-puff:nth-child(2n) {
+  animation-duration: calc(var(--vine-cloud-ms, 9000ms) * 1.35);
+  fill-opacity: 0.86;
+}
+
+.vine-cloud-puff:nth-child(3n) {
+  animation-duration: calc(var(--vine-cloud-ms, 9000ms) * 0.8);
+}
+
+@keyframes vine-cloud-drift {
+  0%, 100% { transform: translateX(-7px); }
+  50% { transform: translateX(7px); }
 }
 
 .vine-cloud-text {
@@ -243,12 +321,19 @@
 
 .vine-node-star--on {
   fill: var(--vine-gold);
-  stroke: var(--vine-gold);
+  stroke: #7a5a00; /* 19.4：点亮星加暗金描边，弱背景上也读得出 */
+  stroke-width: 1;
 }
 
 .vine-node:focus-visible .vine-node-body {
   stroke: var(--vine-gold);
   stroke-width: 3.5;
+}
+
+/* 19.4：当前关卡整体再抬一档（指针 + 呼吸环 + 轻微金晕），一眼能找到自己 */
+.vine-node--current .vine-node-body {
+  stroke: var(--vine-gold);
+  stroke-width: 3;
 }
 
 /* 总星数进度条（`⭐ 12/150`；只读展示，不写存档） */
@@ -260,20 +345,23 @@
   gap: 4px;
   color: #ffffff;
   font: 600 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); /* 19.4：背景分层后文字更易读 */
 }
 
 .vine-progress-bar {
   width: 100%;
-  height: 6px;
-  border-radius: 3px;
+  height: 8px;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   overflow: hidden;
 }
 
 .vine-progress-fill {
   height: 100%;
-  border-radius: 3px;
-  background: var(--vine-gold);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f0a500 0%, var(--vine-gold) 55%, #ffe9a8 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
   transition: width var(--vine-slide-ms) ease-out;
 }
 
@@ -318,9 +406,15 @@
     stroke-dashoffset: 0;
   }
 
-  .vine-node-ring,
-  .vine-node-halo,
-  .vine-leaf-blade {
+  /* 注意**选择器特异性**：动画是挂在 `.vine-node[data-state='attainable'] .vine-node-ring` 这类
+     复合选择器上的，媒体查询里的单类选择器权重更低、压不住它 —— 所以这里必须用同权重或更高的写法
+     （19.4 的探针就是这么抓到的：`animation-name` 仍是 `pulse`）。 */
+  .vine-node[data-state] .vine-node-ring,
+  .vine-node.vine-node--current .vine-node-halo,
+  .vine-node .vine-node-arrow,
+  .vine-cloud .vine-cloud-puff,
+  .vine-node .vine-leaf-blade,
+  .vine-leaf .vine-leaf-blade {
     animation: none;
   }
 }

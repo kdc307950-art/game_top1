@@ -12,6 +12,33 @@
 
 ---
 
+---
+
+## D046：Step 19.4 —— 藤蔓地图「从下往上」+ 画风增强（参考其他消消乐源码）
+
+- 日期：2026-09-25
+- 状态：**已落地**（**玩法零改动**：解锁规则、门槛、隐藏关、50 关表一律不动，只改地图层的朝向与观感）
+- 背景：用户口径「藤蔓关卡从下往上，ui 画风增强，参考其他消消乐游戏源码」。19.2 v2 交付的地图是**自上而下**的（页内第 1 关在最上方），而开心消消乐一类游戏的地图是**向上攀爬**的；观感也还停留在「一条藤 + 圆节点」的程度。
+- 参考（用户要求的「参考其他消消乐源码」）：
+  - King 的 Candy Crush 地图专利 [WO2014041202A1](https://patentimages.storage.googleapis.com/b0/d7/f4/8acdc16c379140/WO2014041202A1.pdf) / [US9592444](https://patentimages.storage.googleapis.com/ea/6e/91/ad8bc13791d759/US9592444.pdf)：地图是玩家**向上攀爬**的虚拟风景，**当前关卡有一枚指向它的指针**。→ 本步据此把地图改成自下而上，并加「当前关指针」。
+  - 项目 `REFERENCES.md` 已登记的 [jooyouss/candy-crush](https://github.com/jooyouss/candy-crush)（`js/animations.js`：粒子与动效的组织方式）、[k8scat/kaixinxiaoxiaole](https://github.com/k8scat/kaixinxiaoxiaole)（多端验收维度）、[AlexKutepov/Match3-algorithm-TS-Cocos-creator](https://github.com/AlexKutepov/Match3-algorithm-TS-Cocos-creator)（棋盘/节点表示）。**只借思路，不复制素材、不引入依赖**（延续 D009 零素材）。
+- 决定：
+  1. **朝向由配置决定**：新增 `VINE_MAP_CONFIG.climbDirection`（默认 `'up'`）。`'up'` 时节点 y = `1 − (nodeMarginY + row × spanY) ± nodeStaggerY`（**页内自下而上**，最下方是页内第 1 个节点）；`'down'` 保留 19.2/19.3 的旧行为。生成器、巡检、渲染三处共用这一个旋钮。
+  2. **路径锚点方向翻转**：入口在**页内底部**（y = 0.95）、出口探到**页外上方**（y = −0.05）。跨屏衔接条件由 `出口 y − 1 ≈ 入口 y` 变为 **`入口 y − 1 ≈ 出口 y`**（0.95 − 1 = −0.05）—— 直观理解：本页从底部往上爬，爬到页顶后从**上一页的底部**继续。巡检与 `tests/vine-map.test.js` 的对应断言同步翻转，并新增「同一页里第 1 关在第 10 关下方」的朝向硬指标。
+  3. **画风增强（零素材、全程序化）**：① 分层背景（天空 `linearGradient`（自下而上暖→冷）+ 两层远山剪影 + 地面色带）；② 双层藤蔓（深色垫层 13px + 亮色芯 8px，**共用同一条 `d`**）；③ 节点内嵌高光；④ 锁定节点的**锁形图标**；⑤ **当前关指针**（节点上方箭头 + 轻微上下浮动）；⑥ 云层多层错峰漂移；⑦ 进度条渐变 + 描边 + 文字投影。
+  4. **常量归属**：几何/时长（`climbDirection` / `arrowSize` / `arrowOffsetY` / `cloudDriftMs`）进附录 B；纯造型比例（内圈高光半径、锁体尺寸、云团偏移、背景山形）按 D013 留在 `vine-map.js` 的本地常量，不进规则层。
+  5. **reduced-motion 的选择器特异性修正（本步抓到的一个真缺陷）**：动画挂在 `.vine-node[data-state='attainable'] .vine-node-ring` 这类复合选择器上，而媒体查询里写的是单类选择器（`.vine-node-ring`）—— **权重更低、压不住动画**，于是「减少动效」下呼吸环/叶子仍在动。改用同权重或更高的选择器（`.vine-node[data-state] .vine-node-ring`、`.vine-leaf .vine-leaf-blade` 等）。这条是探针用 `getComputedStyle().animationName` 实测出来的，不是靠肉眼看。
+  6. **不做**：不给地图加音效/粒子（属其他 Step）；不引入任何素材或依赖；不动 `computeBoardSize`（地图仍是画布外的绝对定位层，5.1 的禁滚动/缩放依旧成立）。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **12 文件 / 260 用例 / 3253 断言 / 0 失败 / exit 0**（`tests/vine-map.test.js` 的 y 公式与锚点方向断言按朝向改写 + 新增朝向断言）。
+  - **L0**：`python _build/consistency_check.py` 全部通过；`node _build/check-vine-map.mjs` → **PASS 20/20**（53 项坐标 + 6 页结构 + **页内朝向** + 锚点方向与跨屏衔接）。
+  - **L2/L3**：新增 `_build/verify-step19-4.mjs` **18 项全绿**（朝向三连 + 画风层结构证据 7 项 + reduced-motion 3 项 + 健壮性）；`verify-step19-2.mjs` 增加 2 项朝向/画风断言后仍全绿；`verify-step19-3.mjs` / `verify-step12b.mjs` 复跑全绿。
+  - **截图（人工核对用）**：`_build/step194-map-p1-stars6.png`、`_build/step194-map-p6-stars150.png`（`_build/shot-map-194.mjs` 生成）。**如实说明**：本机没有配置视觉模型，Agent **无法自己看图**，画风只能给出结构性证据（元素/计算样式/几何断言）；观感请以这两张截图为准。
+  - 门禁：Gate 0.1 第十五轮（24 套件 + 8 次复跑）见 `PROGRESS.md` 与 `_build/g15-summary.txt`。
+- 影响：`config.js`（`VINE_MAP_CONFIG` +4 键、anchors 翻转）、`_build/gen-vine-map.mjs`、`_build/check-vine-map.mjs`、`level.js`（`LEVEL_MAP_POS` 重新生成）、`LEVELS.md`（§9 说明与坐标）、`vine-map.js`、`vine-map.css`、`tests/vine-map.test.js`、`AGENTS.md` v1.29、`ROADMAP.md` v1.29、`prompts.md`。
+- 替代方案：① 直接把 `LEVEL_MAP_POS` 手改成倒序（否决：坐标的真相源是生成器 + 文档，手改立刻与巡检不一致）；② 只在渲染时 `transform: scaleY(-1)` 翻转整页（否决：会让**文字与叶子**一起上下颠倒，且跨屏衔接的语义没变）；③ 只加装饰不加指针（否决：从下往上后「我在哪」更难找，指针正是参考专利里解决这件事的做法）；④ 引入图片素材做背景（否决：违反 D009 零素材策略，也会让 `verify-step19-2` 的「无外部素材」断言失效）；⑤ 让地图自己读存档决定哪些节点点亮（否决：违反 2.3 的边界，地图层只该接收数据）。
+- 未验证（如实）：① **观感的人工核对**（本机无视觉模型，Agent 未看图；截图已附，请人工确认）；② 真机上的背景层次与云层漂移的观感/性能；③ 极窄视口下 `arrowOffsetY` 与节点间距是否仍够（只按比例缩放，未单独取证）。
+
 ## D045：Step 19.3 —— 解锁门槛（只按累计星数）/ 天边云层 / 隐藏关（规则变更）
 
 - 日期：2026-09-25

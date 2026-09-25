@@ -153,10 +153,39 @@ function buildNode(position, stars, current, unlocked, required) {
   node.appendChild(el('circle', { class: 'vine-node-halo', cx, cy, r: MAP.nodeRadius + 6 }));
   node.appendChild(el('circle', { class: 'vine-node-ring', cx, cy, r: MAP.nodeRadius + 3 }));
   node.appendChild(el('circle', { class: 'vine-node-body', cx, cy, r: MAP.nodeRadius }));
+  // 19.4 画风：左上内嵌高光（一颗半透明白点，做「鼓起来」的立体感；不参与任何状态判定）
+  node.appendChild(el('circle', { class: 'vine-node-gloss', cx: round1(cx - MAP.nodeRadius * 0.32), cy: round1(cy - MAP.nodeRadius * 0.34), r: round1(MAP.nodeRadius * 0.3) }));
   node.appendChild(el('text', { class: 'vine-node-label', x: cx, y: cy + 5, 'text-anchor': 'middle' }, String(position.id)));
-  // 19.3：锁定的节点在正下方显示「需要 N 星」（与星星一起给出解锁目标）
+  // 19.3：锁定的节点在正下方显示「需要 N 星」；19.4 再补一个小锁形图标（纯 SVG path，无素材）
   if (locked) {
     node.appendChild(el('text', { class: 'vine-node-required', x: cx, y: round1(cy + MAP.nodeRadius + 20) }, `${need}⭐`));
+    const lockR = MAP.nodeRadius * 0.34;
+    const lockY = round1(cy - MAP.nodeRadius * 0.16);
+    const lock = el('g', { class: 'vine-node-lock' });
+    lock.appendChild(el('path', {
+      class: 'vine-node-lock-shackle',
+      d: `M ${round1(cx - lockR)} ${lockY} v ${round1(-lockR * 0.9)} a ${round1(lockR)} ${round1(lockR)} 0 0 1 ${round1(lockR * 2)} 0 v ${round1(lockR * 0.9)}`,
+      fill: 'none'
+    }));
+    lock.appendChild(el('rect', {
+      class: 'vine-node-lock-body',
+      x: round1(cx - lockR * 1.25),
+      y: lockY,
+      width: round1(lockR * 2.5),
+      height: round1(lockR * 1.9),
+      rx: round1(lockR * 0.35)
+    }));
+    node.appendChild(lock);
+  }
+  // 19.4：当前关卡上方加一枚**指向它的指针**（对应参考专利里「指向玩家最高关卡的指针」，
+  // 也解决「从下往上」时不易一眼找到自己位置的问题）；纯 SVG path + CSS 轻微上下浮动。
+  if (position.id === current) {
+    const tip = round1(cy - MAP.nodeRadius - MAP.arrowOffsetY);
+    const half = MAP.arrowSize / 2;
+    node.appendChild(el('path', {
+      class: 'vine-node-arrow',
+      d: `M ${cx} ${round1(tip + MAP.arrowSize)} L ${round1(cx - half)} ${tip} L ${round1(cx + half)} ${tip} Z`
+    }));
   }
   // 星星：从节点正下方**移出**到右侧（不再压在藤蔓上），尺寸 = starSize × starScale（比原来大 40%），间距 starGap
   const size = MAP.starSize * MAP.starScale;
@@ -204,7 +233,43 @@ function decorateLeaves(pathEl, svg) {
   return count;
 }
 
-/** 一页：`<div data-page><svg role=list><path>叶子…节点…云层…</svg></div>`（当前页的路径带 `#vine-path` 供取证）。 */
+/**
+ * 19.4 画风增强之一：**分层背景**（零素材，全部程序化）——
+ * 天空渐变（`<linearGradient>`，id 带页码避免跨页冲突）→ 两层远山剪影 → 地面色带。
+ * 只是观感层：不参与命中、不改变任何节点/路径坐标，也不引入 `<image>`/`<use>`/`<foreignObject>`。
+ */
+function buildBackdrop(page) {
+  const svgNS = SVG_NS;
+  const group = el('g', { class: 'vine-backdrop', 'aria-hidden': 'true' });
+  const defs = document.createElementNS(svgNS, 'defs');
+  const gradient = document.createElementNS(svgNS, 'linearGradient');
+  gradient.setAttribute('id', `vine-sky-${page}`);
+  gradient.setAttribute('x1', '0');
+  gradient.setAttribute('y1', '1'); // 自下而上的天空：底部偏暖、顶部偏冷
+  gradient.setAttribute('x2', '0');
+  gradient.setAttribute('y2', '0');
+  for (const [offset, color] of [['0%', '#25423a'], ['55%', '#1d3330'], ['100%', '#16262a']]) {
+    const stop = document.createElementNS(svgNS, 'stop');
+    stop.setAttribute('offset', offset);
+    stop.setAttribute('stop-color', color);
+    gradient.appendChild(stop);
+  }
+  defs.appendChild(gradient);
+  group.appendChild(defs);
+  group.appendChild(el('rect', { class: 'vine-sky', x: 0, y: 0, width: MAP.width, height: MAP.height, fill: `url(#vine-sky-${page})` }));
+  group.appendChild(el('path', {
+    class: 'vine-hill vine-hill--far',
+    d: `M 0 ${round1(MAP.height * 0.34)} Q ${round1(MAP.width * 0.28)} ${round1(MAP.height * 0.22)} ${round1(MAP.width * 0.55)} ${round1(MAP.height * 0.33)} T ${MAP.width} ${round1(MAP.height * 0.26)} V ${MAP.height} H 0 Z`
+  }));
+  group.appendChild(el('path', {
+    class: 'vine-hill vine-hill--near',
+    d: `M 0 ${round1(MAP.height * 0.58)} Q ${round1(MAP.width * 0.32)} ${round1(MAP.height * 0.42)} ${round1(MAP.width * 0.62)} ${round1(MAP.height * 0.56)} T ${MAP.width} ${round1(MAP.height * 0.48)} V ${MAP.height} H 0 Z`
+  }));
+  group.appendChild(el('rect', { class: 'vine-ground', x: 0, y: round1(MAP.height * 0.93), width: MAP.width, height: round1(MAP.height * 0.07) }));
+  return group;
+}
+
+/** 一页：`<div data-page><svg role=list><背景><路径（双层）>叶子…节点…云层…</svg></div>`（当前页的路径带 `#vine-path` 供取证）。 */
 function buildPage(page, stars, activePage, current, options) {
   const wrap = el('div', { class: `vine-page${page === activePage ? ' vine-page--active' : ''}`, 'data-page': String(page) });
   const svg = el('svg', {
@@ -213,10 +278,14 @@ function buildPage(page, stars, activePage, current, options) {
     role: 'list',
     'aria-label': `第 ${page} 页关卡`
   });
+  svg.appendChild(buildBackdrop(page));
+  const d = buildVinePath(page);
+  // 19.4：藤蔓画**两层**（深色描边 + 亮色核心）—— 同一份 `d`、更粗更「藤」的观感；仍然是确定性路径
+  svg.appendChild(el('path', { class: 'vine-path-under', d }));
   const path = el('path', {
     class: 'vine-path',
     id: page === activePage ? 'vine-path' : null,
-    d: buildVinePath(page)
+    d
   });
   svg.appendChild(path);
   wrap.dataset.leaves = String(decorateLeaves(path, svg));
@@ -327,6 +396,7 @@ export function renderMap(host, {
   host.style.setProperty('--vine-pulse-ms', `${MAP.pulseMs}ms`);
   host.style.setProperty('--vine-leaf-ms', `${MAP.leafSwayMs}ms`);
   host.style.setProperty('--vine-slide-ms', `${MAP.pageSlideMs}ms`);
+  host.style.setProperty('--vine-cloud-ms', `${MAP.cloudDriftMs}ms`); // 19.4：云层的缓慢横向漂移周期
 
   const viewport = el('div', { class: 'vine-viewport' });
   const track = el('div', { class: 'vine-track', 'data-active-page': String(active) });

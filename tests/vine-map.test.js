@@ -76,14 +76,25 @@ test('LEVEL_MAP_POS：主线 50 + 天边 3、关号连续、坐标是归一化�
     const columns = new Set(positionsOnPage(page).map((pos) => pos.x));
     assertTrue(columns.size >= 3, `第 ${page} 页也有 ≥3 个不同 X 水平位置`);
   }
-  // 页内是 5 行 × 2 个：Y 由公式给出，行内两个节点一高一低（±nodeStaggerY）形成错落
+  // 页内是 5 行 × 2 个：Y 由公式给出，行内两个节点一高一低（±nodeStaggerY）形成错落。
+  // 19.4（用户口径「从下往上」）：climbDirection = 'up' 时页内**自下而上** —— y = 1 − 自上而下的位置。
   const spanY = (1 - MAP.nodeMarginY * 2) / (MAP.nodeRows - 1);
+  const climbUp = MAP.climbDirection !== 'down';
   const yExact = LEVEL_MAP_POS.every((pos) => {
     const index = (pos.id - 1) % MAP.pageSize;
-    const expected = round3(MAP.nodeMarginY + Math.floor(index / 2) * spanY + (index % 2 === 0 ? -MAP.nodeStaggerY : MAP.nodeStaggerY));
+    const descent = MAP.nodeMarginY + Math.floor(index / 2) * spanY + (index % 2 === 0 ? -MAP.nodeStaggerY : MAP.nodeStaggerY);
+    const expected = round3(climbUp ? 1 - descent : descent);
     return pos.y === expected;
   });
-  assertTrue(yExact, 'y 与「每页 5 行 + ±错落」的公式一致');
+  assertTrue(yExact, 'y 与「每页 5 行 + ±错落」的公式一致（含攀爬方向）');
+  // 朝向硬指标：同一页里「关号越大越靠上」（y 越小）
+  const pageOne = LEVEL_MAP_POS.filter((pos) => pos.page === 1);
+  if (climbUp) {
+    assertTrue(pageOne[0].y > pageOne[1].y, `第 1 关在第 2 关下方（${pageOne[0].y} > ${pageOne[1].y}）`);
+    assertTrue(pageOne[0].y > pageOne[pageOne.length - 1].y, `第 1 关在第 10 关下方（${pageOne[0].y} > ${pageOne[pageOne.length - 1].y}）`);
+  } else {
+    assertTrue(pageOne[0].y < pageOne[1].y, '自上而下时第 1 关在上方');
+  }
   assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.page},${pos.x},${pos.y}`)).size, total, '没有两个节点落在同一页的同一坐标');
 });
 
@@ -107,10 +118,20 @@ test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × viewBo
     '锚点 = config 的归一化锚点 × viewBox 宽高'
   );
   assertTrue(anchors.length >= 4, '锚点至少 4 个');
-  assertTrue(anchors[0].y < MAP.height, '入口在页内（y < 1）');
-  assertTrue(anchors[anchors.length - 1].y > MAP.height, '出口略超出页底（y > 1，跨屏接口）');
-  // 跨屏衔接：上一屏出口 y − 1 屏高 = 下一屏入口 y
-  assertTrue(Math.abs(MAP.anchors[MAP.anchors.length - 1].y - 1 - MAP.anchors[0].y) < 1e-9, '出口与下一页入口在 Y 轴上衔接');
+  // 19.4「从下往上」：入口贴在**页内底部**、出口探到**页外上方**；自上而下时相反（方向由 config 决定）
+  const climbUp = MAP.climbDirection !== 'down';
+  if (climbUp) {
+    assertTrue(anchors[0].y < MAP.height && anchors[0].y > MAP.height * 0.5, '入口在页内底部（0.5 < y < 1）');
+    assertTrue(anchors[anchors.length - 1].y < 0, '出口探出页顶（y < 0，跨屏接口）');
+  } else {
+    assertTrue(anchors[0].y < MAP.height, '入口在页内（y < 1）');
+    assertTrue(anchors[anchors.length - 1].y > MAP.height, '出口略超出页底（y > 1，跨屏接口）');
+  }
+  // 跨屏衔接：入口 y − 1 屏高 = 出口 y（自下而上）；自上而下时是 出口 y − 1 屏高 = 入口 y
+  const seam = climbUp
+    ? Math.abs(MAP.anchors[0].y - 1 - MAP.anchors[MAP.anchors.length - 1].y)
+    : Math.abs(MAP.anchors[MAP.anchors.length - 1].y - 1 - MAP.anchors[0].y);
+  assertTrue(seam < 1e-9, '跨屏（上下页）在 Y 轴上衔接');
   const nodePoints = positionsOnPage(1).map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(pos.y * MAP.height) }));
   assertTrue(
     anchors.every((anchor) => !nodePoints.some((point) => point.x === anchor.x && point.y === anchor.y)),
