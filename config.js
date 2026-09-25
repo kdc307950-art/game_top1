@@ -159,6 +159,17 @@ export const CONFIG = {
     choc: { maxLayers: 1 }
   },
 
+  // 关卡解锁门槛（Step 19.3，AGENTS.md 3.6 / 附录 B，v1.28）。口径由用户拍板：
+  //   · **只按累计星数**解锁：第 n 关的门槛 = round((n − 1) × starsPerLevel)，第 1 关恒为 0；
+  //   · **反锁保护**：已通关（≥ 1 星）的关卡永远可玩 —— 门槛只拦「还没玩过的关卡」（见 level.isLevelUnlocked）；
+  //   · **天边云层**：累计星数 ≥ tianbianStars 时云层散去，露出隐藏关 hiddenLevelIds（**不计入** ⭐ n/150）。
+  // 解锁状态是**派生量**（由星级表 + 本配置算出），因此存档格式不变（沿用 v2）。
+  UNLOCK_CONFIG: {
+    starsPerLevel: 1.2,           // 每关递增的星数门槛（唯一旋钮：1.20 → 第 50 关需 59 星）
+    tianbianStars: 120,           // 天边云层的解锁门槛（累计星数）
+    hiddenLevelIds: [51, 52, 53]  // 云层后露出的隐藏关（水果 / 时间 / 金豆荚演示关，见 level.js 的 HIDDEN_LEVEL_IDS）
+  },
+
   // 可掉落的收集物（AGENTS.md 3.6 / 4.1，v1.18）。
   // 水果「整列直落」= 单次下落格数不小于列高；金豆荚是分阶段节奏，每次消除只下落 1 格。
   COLLECTIBLE_CONFIG: {

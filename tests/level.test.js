@@ -21,7 +21,11 @@ import {
   getLevelConfig,
   grantSteps,
   grantTime,
-  isTimeLevel
+  HIDDEN_LEVEL_IDS,
+  isLevelUnlocked,
+  isTianbianOpen,
+  isTimeLevel,
+  unlockStarsFor
 } from '../level.js';
 import { estimateSettlementScore, settlementStepsScore, stepScoreRatio } from '../settlement.js';
 
@@ -456,6 +460,58 @@ test('BOOSTER_CONFIG（v1.20）：四个键都取自 config.js（逻辑层不写
   assertEqual(CONFIG.BOOSTER_CONFIG.extraSeconds, 10, '时间关的秒数');
   assertEqual(CONFIG.BOOSTER_CONFIG.hammerCells, 1, '小木锤的格数');
   assertDeepEqual(Object.values(BOOSTER_KIND).sort(), ['addSteps', 'hammer', 'refresh'], '道具类型常量');
+});
+
+// ---------------------------------------------------------------------------
+// Step 19.3（v1.28）：解锁门槛（3.6 的解锁规则）—— 只按累计星数、第 1 关恒解锁、反锁保护
+// ---------------------------------------------------------------------------
+
+test('解锁门槛：第 1 关恒为 0、按 starsPerLevel 单调递增、隐藏关在天边云层之后', () => {
+  const cfg = CONFIG.UNLOCK_CONFIG;
+  assertTrue(cfg.starsPerLevel > 0, '门槛斜率是正数（否则门槛失去意义）');
+  assertEqual(unlockStarsFor(1), 0, '第 1 关恒解锁');
+  assertEqual(unlockStarsFor(0), 0, '非法关号按第 1 关处理');
+  assertEqual(unlockStarsFor(-5), 0, '负数关号也夹到 0');
+
+  let previous = -1;
+  for (let id = 1; id <= LEVEL_COUNT; id += 1) {
+    const need = unlockStarsFor(id);
+    assertTrue(need >= previous, `门槛单调不减（L${id} = ${need} ≥ ${previous}）`);
+    assertEqual(need, Math.round((id - 1) * cfg.starsPerLevel), `L${id} 的门槛 = round((id−1) × starsPerLevel)`);
+    previous = need;
+  }
+  assertEqual(unlockStarsFor(50), 59, '第 50 关需 59 星（1.20 × 49 = 58.8 → 59）');
+  assertTrue(LEVEL_COUNT * 3 >= unlockStarsFor(LEVEL_COUNT), '门槛不超过总星数上限（否则主线永远打不完）');
+
+  for (const id of HIDDEN_LEVEL_IDS) {
+    assertEqual(unlockStarsFor(id), cfg.tianbianStars, `隐藏关 L${id} 的门槛 = 天边门槛 ${cfg.tianbianStars}`);
+  }
+  assertDeepEqual(HIDDEN_LEVEL_IDS, [DEMO_LEVEL_IDS.fruit, DEMO_LEVEL_IDS.time, DEMO_LEVEL_IDS.pod], '隐藏关就是三个演示关');
+});
+
+test('解锁判定：门槛边界（差 1 星 / 刚好达标）与「已通关的关卡永远可玩」的反锁保护', () => {
+  const need = unlockStarsFor(21);
+  assertFalse(isLevelUnlocked(21, { totalStars: need - 1 }), `差 1 星 → 锁住（${need - 1} < ${need}）`);
+  assertTrue(isLevelUnlocked(21, { totalStars: need }), '刚好达标 → 解锁');
+
+  // 反锁保护：只要这一关拿过星（earned ≥ 1），门槛再高也放行 —— 老存档不会被新规则锁回去
+  assertTrue(isLevelUnlocked(50, { earned: 1, totalStars: 0 }), '已通关的第 50 关在 0 星存档下仍可玩');
+  assertTrue(isLevelUnlocked(50, { earned: 3, totalStars: 10 }), '3 星同理');
+  assertFalse(isLevelUnlocked(50, { earned: 0, totalStars: unlockStarsFor(50) - 1 }), '没通关过 + 星数不够 → 仍然锁住');
+
+  // 脏数据：非数字/负数都不放行，也不抛错
+  assertFalse(isLevelUnlocked(30, { totalStars: 'x' }), '脏星数按 0 处理');
+  assertFalse(isLevelUnlocked(30, {}), '缺省参数 = 0 星 0 通关记录');
+});
+
+test('天边云层：门槛来自 UNLOCK_CONFIG.tianbianStars，且隐藏关不计入总星数上限', () => {
+  const cfg = CONFIG.UNLOCK_CONFIG;
+  assertEqual(cfg.tianbianStars, 120, '天边门槛 120 星');
+  assertFalse(isTianbianOpen(cfg.tianbianStars - 1), '差 1 星时云层仍在');
+  assertTrue(isTianbianOpen(cfg.tianbianStars), '达标即散去');
+  assertTrue(cfg.tianbianStars <= LEVEL_COUNT * 3, '天边门槛不超过主线满星数');
+  assertTrue(HIDDEN_LEVEL_IDS.every((id) => id > LEVEL_COUNT), '隐藏关在主线圈之外');
+  assertEqual(LEVEL_COUNT, 50, '主线仍是 50 关（总星数分母 150 不变）');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

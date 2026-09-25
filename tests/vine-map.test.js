@@ -8,7 +8,7 @@
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, summarize } from './assert.js';
 import { CONFIG } from '../config.js';
-import { LEVEL_COUNT, LEVEL_MAP_POS } from '../level.js';
+import { HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS } from '../level.js';
 import {
   MAP_PAGE_SIZE,
   buildVineAnchors,
@@ -28,33 +28,44 @@ const MAP = CONFIG.VINE_MAP_CONFIG;
 const round3 = (value) => Math.round(value * 1000) / 1000;
 const round1 = (value) => Math.round(value * 10) / 10;
 
-test('分页：每页 pageSize 关、共 5 页，页号 = ⌈关号 / 每页关数⌉', () => {
+test('分页：每页 pageSize 关、共 6 页（5 页主线 + 1 页天边），页号 = ⌈关号 / 每页关数⌉', () => {
   assertEqual(MAP_PAGE_SIZE, MAP.pageSize, '导出的每页关数与配置一致');
-  assertEqual(pageCount(), Math.ceil(LEVEL_COUNT / MAP.pageSize), '页数');
-  assertEqual(pageCount(), 5, '50 关 / 每页 10 关 = 5 页');
+  assertEqual(pageCount(), Math.ceil(LEVEL_MAP_POS.length / MAP.pageSize), '页数');
+  assertEqual(pageCount(), 6, '50 关主线 + 3 关天边 = 53 个节点 / 每页 10 = 6 页');
   assertEqual(pageOf(1), 1, '第 1 关在第 1 页');
   assertEqual(pageOf(10), 1, '第 10 关在第 1 页');
   assertEqual(pageOf(11), 2, '第 11 关在第 2 页');
   assertEqual(pageOf(50), 5, '第 50 关在第 5 页');
+  assertEqual(pageOf(51), 6, '第 51 关（天边第一关）在第 6 页');
   assertEqual(pageOf(0), 1, '非法关号夹到第 1 页');
-  assertEqual(pageOf(999), 5, '越界关号夹到最后一页');
+  assertEqual(pageOf(999), 6, '越界关号夹到最后一页');
 });
 
-test('positionsOnPage：每页恰好 10 关且关号连续；越界页被夹住', () => {
-  for (let page = 1; page <= pageCount(); page += 1) {
+test('positionsOnPage：前 5 页各 10 关、第 6 页是天边 3 关；越界页被夹住', () => {
+  const mainPages = Math.ceil(LEVEL_COUNT / MAP.pageSize);
+  for (let page = 1; page <= mainPages; page += 1) {
     const positions = positionsOnPage(page);
     assertEqual(positions.length, MAP.pageSize, `第 ${page} 页的关数`);
     const ids = positions.map((pos) => pos.id);
     assertDeepEqual(ids, Array.from({ length: MAP.pageSize }, (_, i) => (page - 1) * MAP.pageSize + i + 1), `第 ${page} 页的关号`);
     assertTrue(positions.every((pos) => pos.page === page), `第 ${page} 页的 page 字段`);
   }
+  const tianbian = positionsOnPage(6);
+  assertDeepEqual(tianbian.map((pos) => pos.id), HIDDEN_LEVEL_IDS, '第 6 页只放隐藏关');
+  assertTrue(tianbian.every((pos) => pos.page === 6), '隐藏关都属于第 6 页');
   assertEqual(positionsOnPage(0)[0].id, 1, '第 0 页夹到第 1 页');
-  assertEqual(positionsOnPage(99)[0].id, 41, '第 99 页夹到第 5 页');
+  assertEqual(positionsOnPage(99)[0].id, HIDDEN_LEVEL_IDS[0], '第 99 页夹到最后一页（天边）');
 });
 
-test('LEVEL_MAP_POS：50 项、关号连续、坐标是归一化值、X 轴 ≥3 个水平位置且打破两列对齐', () => {
-  assertEqual(LEVEL_MAP_POS.length, LEVEL_COUNT, '坐标条数 = 关卡数');
-  assertDeepEqual(LEVEL_MAP_POS.map((pos) => pos.id), Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1), '关号 1..50 连续');
+test('LEVEL_MAP_POS：主线 50 + 天边 3、关号连续、坐标是归一化值、X 轴 ≥3 个水平位置', () => {
+  const total = LEVEL_COUNT + HIDDEN_LEVEL_IDS.length;
+  assertEqual(LEVEL_MAP_POS.length, total, '坐标条数 = 主线 + 隐藏关');
+  assertDeepEqual(
+    LEVEL_MAP_POS.filter((pos) => pos.id <= LEVEL_COUNT).map((pos) => pos.id),
+    Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1),
+    '主线关号 1..50 连续'
+  );
+  assertDeepEqual(LEVEL_MAP_POS.filter((pos) => pos.id > LEVEL_COUNT).map((pos) => pos.id), HIDDEN_LEVEL_IDS, '天边关号 = HIDDEN_LEVEL_IDS');
   assertTrue(LEVEL_MAP_POS.every((pos) => pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1), '坐标都是 0–1 的归一化值');
   assertTrue(
     LEVEL_MAP_POS.every((pos) => MAP.nodeColumns.includes(pos.x)),
@@ -73,7 +84,7 @@ test('LEVEL_MAP_POS：50 项、关号连续、坐标是归一化值、X 轴 ≥3
     return pos.y === expected;
   });
   assertTrue(yExact, 'y 与「每页 5 行 + ±错落」的公式一致');
-  assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.page},${pos.x},${pos.y}`)).size, LEVEL_COUNT, '没有两关落在同一页的同一坐标');
+  assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.page},${pos.x},${pos.y}`)).size, total, '没有两个节点落在同一页的同一坐标');
 });
 
 test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRNG，不用于玩法）', () => {
@@ -135,14 +146,15 @@ test('buildVinePath：同页永远同一条 d（设计期派生）、是曲线�
   assertTrue(Math.max(...deviations) > 5, '曲线确实弯曲（最大偏离 > 5px）');
 });
 
-test('nodeState：只有 visited / attainable 两态，任何星级都不会得到 locked（19.2 只画不拦）', () => {
-  assertEqual(nodeState(0), 'attainable', '0 星 → attainable');
-  assertEqual(nodeState(1), 'visited', '1 星 → visited');
-  assertEqual(nodeState(3), 'visited', '3 星 → visited');
-  assertEqual(nodeState(-1), 'attainable', '脏值 −1 → attainable');
-  assertEqual(nodeState(undefined), 'attainable', '缺省 → attainable');
-  const states = [-1, 0, 0.5, 1, 2, 3, 9, 'x', null, undefined].map((value) => nodeState(value));
-  assertTrue(states.every((state) => state === 'attainable' || state === 'visited'), `任何输入都不产生 locked：${JSON.stringify(states)}`);
+test('nodeState：19.3 起是三态 —— visited / attainable / locked（locked 只由「未解锁」决定）', () => {
+  assertEqual(nodeState(0, true), 'attainable', '0 星 + 已解锁 → attainable');
+  assertEqual(nodeState(0, false), 'locked', '0 星 + 未解锁 → locked');
+  assertEqual(nodeState(1, true), 'visited', '1 星 → visited');
+  assertEqual(nodeState(3, false), 'visited', '3 星即使门槛没到也是 visited（**反锁保护**：已通关的关卡永远可玩）');
+  assertEqual(nodeState(-1, false), 'locked', '脏值 −1 按 0 星处理 → locked');
+  assertEqual(nodeState(undefined, false), 'locked', '缺省 → locked');
+  const states = new Set([-1, 0, 0.5, 1, 2, 3, 9, 'x', null, undefined].flatMap((value) => [nodeState(value, true), nodeState(value, false)]));
+  assertDeepEqual([...states].sort(), ['attainable', 'locked', 'visited'], '任何输入都只会得到这三态');
 });
 
 test('starPath：五角星是 10 个顶点的闭合路径；尺寸 = starSize × starScale（比第一版大 40%）', () => {

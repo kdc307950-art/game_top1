@@ -46,11 +46,14 @@ export function clampStars(value) {
 }
 
 /**
- * 节点状态机：只有 `visited`（已通关）与 `attainable`（可玩未通关）两态。
- * **19.2 阶段不允许出现 `locked`** —— 只画不拦，点哪关进哪关（D039 第 5 条 / D040）。
+ * 节点状态机：`visited`（已通关）/ `attainable`（可玩未通关）/ **`locked`（星数不够，19.3 新增）**。
+ * `unlocked` 由调用方（`app.js`）用 `level.isLevelUnlocked()` 算好后传入 —— **地图层不认识规则**，
+ * 它只回答「这一关现在能不能玩」。注意：`visited` 与 `unlocked` 同时成立时取 `visited`（已通关的关卡
+ * 永远可玩，这是 19.3 的反锁保护）。
  */
-export function nodeState(earned) {
-  return clampStars(earned) > 0 ? 'visited' : 'attainable';
+export function nodeState(earned, unlocked = true) {
+  if (clampStars(earned) > 0) return 'visited';
+  return unlocked ? 'attainable' : 'locked';
 }
 
 /** mulberry32：小而确定的 PRNG —— 只用于「同种子同路径」，不用于玩法。 */
@@ -122,9 +125,11 @@ export function starPath(cx, cy, size) {
 }
 
 /** 单个节点（`<g data-level data-stars data-state role=listitem tabindex=0 aria-label>`，无内联样式）。 */
-function buildNode(position, stars, current) {
+function buildNode(position, stars, current, unlocked, required) {
   const earned = clampStars(stars?.[position.id] ?? stars?.[String(position.id)] ?? 0);
-  const state = nodeState(earned);
+  const locked = !(unlocked?.[position.id] ?? unlocked?.[String(position.id)] ?? true);
+  const state = nodeState(earned, !locked);
+  const need = Math.max(0, Math.trunc(Number(required?.[position.id] ?? required?.[String(position.id)] ?? 0)));
   const cx = round1(position.x * MAP.width);
   const cy = round1(position.y * MAP.height);
   const classes = ['vine-node', `vine-node--${state}`];
@@ -135,15 +140,24 @@ function buildNode(position, stars, current) {
     'data-level': String(position.id),
     'data-stars': String(earned),
     'data-state': state,
+    'data-locked': locked ? 'true' : null,
+    'data-required': String(need),
     'data-current': position.id === current ? 'true' : null,
     role: 'listitem',
-    tabindex: '0',
-    'aria-label': `第 ${position.id} 关，${earned} 星`
+    tabindex: locked ? '-1' : '0',
+    'aria-disabled': locked ? 'true' : null,
+    'aria-label': locked
+      ? `第 ${position.id} 关，未解锁，需要 ${need} 星`
+      : `第 ${position.id} 关，${earned} 星`
   });
   node.appendChild(el('circle', { class: 'vine-node-halo', cx, cy, r: MAP.nodeRadius + 6 }));
   node.appendChild(el('circle', { class: 'vine-node-ring', cx, cy, r: MAP.nodeRadius + 3 }));
   node.appendChild(el('circle', { class: 'vine-node-body', cx, cy, r: MAP.nodeRadius }));
   node.appendChild(el('text', { class: 'vine-node-label', x: cx, y: cy + 5, 'text-anchor': 'middle' }, String(position.id)));
+  // 19.3：锁定的节点在正下方显示「需要 N 星」（与星星一起给出解锁目标）
+  if (locked) {
+    node.appendChild(el('text', { class: 'vine-node-required', x: cx, y: round1(cy + MAP.nodeRadius + 20) }, `${need}⭐`));
+  }
   // 星星：从节点正下方**移出**到右侧（不再压在藤蔓上），尺寸 = starSize × starScale（比原来大 40%），间距 starGap
   const size = MAP.starSize * MAP.starScale;
   const firstX = cx + MAP.nodeRadius + MAP.starGap + size / 2;
@@ -190,8 +204,8 @@ function decorateLeaves(pathEl, svg) {
   return count;
 }
 
-/** 一页：`<div data-page><svg role=list><path>叶子…节点…</svg></div>`（当前页的路径带 `#vine-path` 供取证）。 */
-function buildPage(page, stars, activePage, current) {
+/** 一页：`<div data-page><svg role=list><path>叶子…节点…云层…</svg></div>`（当前页的路径带 `#vine-path` 供取证）。 */
+function buildPage(page, stars, activePage, current, options) {
   const wrap = el('div', { class: `vine-page${page === activePage ? ' vine-page--active' : ''}`, 'data-page': String(page) });
   const svg = el('svg', {
     class: 'vine-page-svg',
@@ -206,9 +220,57 @@ function buildPage(page, stars, activePage, current) {
   });
   svg.appendChild(path);
   wrap.dataset.leaves = String(decorateLeaves(path, svg));
-  for (const position of positionsOnPage(page)) svg.appendChild(buildNode(position, stars, current));
+  let hidden = 0;
+  for (const position of positionsOnPage(page)) {
+    // 天边云层未散去时，隐藏关**不渲染**（19.3：云层代替节点，而不是把节点画暗）
+    if (options.revealed?.[position.id] === false || options.revealed?.[String(position.id)] === false) {
+      hidden += 1;
+      continue;
+    }
+    svg.appendChild(buildNode(position, stars, current, options.unlocked, options.required));
+  }
+  if (hidden > 0 && options.tianbian) svg.appendChild(buildCloud(options.tianbian));
+  wrap.dataset.hiddenNodes = String(hidden);
   wrap.appendChild(svg);
   return wrap;
+}
+
+// 云层的观感常量（只影响画面，不参与规则；与 buildNode 的 +6 / +3 / +5 同类，见 D013）
+const CLOUD_PUFFS = [
+  [-0.31, 0, 0.24],
+  [0, -0.09, 0.3],
+  [0.33, 0.02, 0.23],
+  [-0.1, 0.08, 0.2],
+  [0.18, 0.09, 0.19]
+];
+
+/** 天边云层（19.3）：隐藏关未揭示时占据这一页，附「还差 N ⭐」提示（纯 SVG，无内联样式）。 */
+function buildCloud(tianbian) {
+  const required = Math.max(0, Math.trunc(Number(tianbian?.required) || 0));
+  const stars = Math.max(0, Math.trunc(Number(tianbian?.stars) || 0));
+  const missing = Math.max(0, required - stars);
+  const cx = MAP.width / 2;
+  const cy = MAP.height / 2;
+  const base = MAP.width * 0.0016 + MAP.nodeRadius;
+  const group = el('g', {
+    class: 'vine-cloud',
+    'data-cloud': 'closed',
+    'data-required': String(required),
+    'data-missing': String(missing)
+  });
+  for (const [dx, dy, r] of CLOUD_PUFFS) {
+    group.appendChild(
+      el('circle', {
+        class: 'vine-cloud-puff',
+        cx: round1(cx + dx * MAP.width),
+        cy: round1(cy + dy * MAP.height),
+        r: round1(r * base)
+      })
+    );
+  }
+  group.appendChild(el('text', { class: 'vine-cloud-text', x: cx, y: round1(cy + 6), 'text-anchor': 'middle' }, `还差 ${missing} ⭐`));
+  group.appendChild(el('text', { class: 'vine-cloud-hint', x: cx, y: round1(cy + 40), 'text-anchor': 'middle' }, `累计 ${required} 星解锁天边关卡`));
+  return group;
 }
 
 /** 总星数进度条（`⭐ 12/150`；总星数是**派生量**，由调用方从 `storage.js` 读或 `getTotalStars()` 算）。 */
@@ -243,7 +305,19 @@ function buildPager(page, total) {
  * `totalStars` 是**已获得的总星数**（由调用方用 `storage.getTotalStars()` 派生，地图层不碰存档）。
  * 返回 `{ page, total }`；事件（点节点 / 点分页箭头）由调用方在宿主上做委托 —— 本函数不绑事件。
  */
-export function renderMap(host, { page = 1, fromPage = null, stars = {}, current = null, totalStars = 0, levelCount = LEVEL_MAP_POS.length } = {}) {
+export function renderMap(host, {
+  page = 1,
+  fromPage = null,
+  stars = {},
+  current = null,
+  totalStars = 0,
+  levelCount = LEVEL_MAP_POS.length,
+  unlocked = null, // 19.3：{ 关卡id: 是否可玩 }（由 app.js 用 level.isLevelUnlocked 算好；地图层不认识规则）
+  required = null, // 19.3：{ 关卡id: 需要多少星 }（节点上显示，供提示与巡检）
+  revealed = null, // 19.3：{ 关卡id: false } = 天边云层未散去、不渲染该节点
+  tianbian = null, // 19.3：{ open, stars, required } —— 云层状态（云层代替未揭示的节点）
+  starTotal = null // 19.3：⭐ n/X 的分母（**主线**满星数，隐藏关不计入）；缺省按节点数 × 3
+} = {}) {
   if (!host) return { page: 1, total: 1 };
   const total = pageCount(levelCount);
   const active = clampPage(page, total);
@@ -258,11 +332,13 @@ export function renderMap(host, { page = 1, fromPage = null, stars = {}, current
   const track = el('div', { class: 'vine-track', 'data-active-page': String(active) });
   track.style.setProperty('--vine-pages', String(total)); // 页数来自 config，位移比例仍由 CSS 计算
   track.style.transform = `translateX(${pageShift(from, total)}%)`;
-  for (let p = 1; p <= total; p += 1) track.appendChild(buildPage(p, stars, active, current));
+  const options = { unlocked, required, revealed, tianbian };
+  for (let p = 1; p <= total; p += 1) track.appendChild(buildPage(p, stars, active, current, options));
   viewport.appendChild(track);
   host.appendChild(viewport);
   // 总星数由调用方用 `storage.getTotalStars()` 派生后传入（地图层不碰存档，也不重复实现派生口径）
-  host.appendChild(buildProgress(totalStars, levelCount * 3));
+  // 19.3：分母是**主线**满星数（隐藏关不计入）—— 由调用方给 `starTotal`，缺省按节点数 × 3
+  host.appendChild(buildProgress(totalStars, Number.isFinite(starTotal) ? starTotal : levelCount * 3));
   host.appendChild(buildPager(active, total));
 
   if (from !== active) {

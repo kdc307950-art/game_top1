@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.27
+> 版本：v1.28
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -947,7 +947,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 |---|---|---|
 | **19.1** | 存档版本化 + 就地迁移 + 可注入 backend + `totalStars` 改派生函数 | **已完成**（宪法 v1.21） |
 | **19.2** | 藤蔓地图（只读视觉层：SVG 藤蔓 + 关卡节点 + 星级，只画不加门槛）；坐标三件套（**归一化 0–1**）+ 确定性路径（**单条平滑贝塞尔**，锚点进 config）；改写 `verify-step12b` | **已完成**（宪法 v1.23 首版 / **v1.24 按用户修订方案重做**：归一化坐标、有机曲线、节点状态机、星星 +40%、呼吸光效、翻页箭头 + 总星数进度条、叶子点缀；`_build/verify-step19-2.mjs` 全绿，`verify-step12b` 仍绿，`check-vine-map.mjs` PASS —— 见 DECISIONS D040） |
-| **19.3** | 解锁门槛（`unlockStars`）与「天边关卡」云层 | **挂起 —— 需先批准规则**（宪法 3.6 目前没有「解锁」概念） |
+| **19.3** | 解锁门槛（`unlockStars`）与「天边关卡」云层 + 隐藏关 | **已完成**（宪法 v1.28 / D045）：只按**累计星数**解锁（`round((n−1) × 1.2)`，第 50 关 59 星，第 1 关恒解锁，**已通关的关卡永远可玩**）；**天边云层**（120 星）散去后露出隐藏关 51–53（水果/时间/金豆荚演示关，**不计入** ⭐ n/150）；地图扩到 6 页、节点状态机三态（新增 `locked`）、点锁定关卡被拒并弹提示；**解锁状态是派生量，存档格式不变** |
 | **软件化** | 软件化（Tauri 还是保留 Capacitor；工具链、前端零改动加载、存档双写） | 挂起 —— 需改 2.1/0.3 与 Step 18，属用户拍板项（**阶段项，不占 Step 号**；Step 20 已被结算阶段占用，见 §4.2） |
 
 **19.2 的范围**：`vine-map.js`（新模块）+ 坐标数据（落 `level.js` 的表或独立数据文件，二者只能有一个真相源）+ 样式 + `index.html` 的 SVG 容器；`hud.js` 的 `drawLevelSelect`/`render.js`/`app.js` 的 canvas 命中链路换成 DOM 事件；`_build/check-vine-map.mjs` 巡检文档与代码表一致。**路径必须确定性**（固定种子 PRNG 或直接写控制点），符合「设计期派生：同一配置永远同一结果」。
@@ -1043,7 +1043,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [x] Step 16：音效与震动反馈（**零素材**：Web Audio 合成 + `navigator.vibrate`；音高按连击层数/星级派生（同输入同声音）；音效与震动各自可开关且偏好持久化；桌面无 `vibrate` 静默降级；顺带根治 P3-13（`test()` 现在 await 异步用例）；见 DECISIONS D038）
 - [x] Step 17：粒子动画与视觉打磨（**已完成**：`particles.js` + 确定性粒子 + 三类强度 + 帧预算，见 §4.2 与 DECISIONS D044）
 - [ ] Step 18：Capacitor 打包
-- [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；**19.2 藤蔓地图已完成**（滚动口径 (a)：5 页 × 每页 10 关，只画不拦）；19.3 解锁与软件化挂起 —— 见 DECISIONS D037 / D039）
+- [x] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；**19.2 藤蔓地图已完成**（滚动口径 (a)：5 页 × 每页 10 关，只画不拦）；**19.3 解锁门槛 / 天边云层 / 隐藏关已完成**，见 §4.1、DECISIONS D037 / D039 / D045）
 - [x] **Step 20**：结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）+ 星级统一动态调整 + 彩星字段预留（20.1–20.4 **全部完成**，见 §4.2 与 DECISIONS D041 / D042）
 
 ---
@@ -1065,6 +1065,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |
+| v1.28 | 2026-09-25 | Agent（用户拍板三条口径） | 与宪法 v1.28 同步：**Step 19.3 解锁门槛 / 天边云层 / 隐藏关完成**（只按累计星数解锁、`round((n−1) × 1.2)`、反锁保护、120 星天边云层、隐藏关 51–53 不计入 ⭐ n/150、地图 6 页与三态节点、点锁定关卡被拒）；`LEVELS.md` 新增 §10 解锁曲线；附录 B 新增 `UNLOCK_CONFIG` 3 键 | §4.1、§5、第 6 节 |
 | v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | 与宪法 v1.27 同步：**Step 17 粒子动画与视觉打磨完成** —— 新增 `particles.js`（确定性粒子：环形池 + 生成计划 + 只读快照）、`candy.js` 的 `buildParticleAtlas`、`render.js` 的 `drawParticles`、`app.js` 的时间线挂载；15 节新增粒子每帧贴图上限（96）/ 池上限（192）/ reduced-motion 不生成三条；附录 B 新增 `PARTICLE_CONFIG` 20 键、B-2 新增 `PARTICLE_KIND`；`tests/particles.test.js` 7 例 | 第 6 节、Step 17、附录 B、附录 B-2 |
 | v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | 与宪法 v1.26 同步：**20.4 彩星字段预留 + 存档迁移**（`STORAGE_CONFIG.schemaVersion` 1 → 2，`levels` 的值改为 `{ stars, rainbow }`，v0/v1 就地迁移且老存档不丢；新增 `readLevelRecords`/`writeLevelRecords`/`getTotalRainbows`，对外形状 `readLevelStars`/`getTotalStars`/`recordLevelStars` 不变；彩星不计入总星数）；Step 20 的 20.1–20.4 全部完成 | §4.2、§5、第 6 节 |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | 与宪法 v1.25 同步：新增 §4.2 Step 20（结算阶段 + 星级统一动态调整，20.1–20.3 已完成 / 20.4 彩星待批准）；§4.1 表里的软件化行去掉「20」这个编号以免与 Step 20 冲突；新增 `settlement.js`、`LEVELS.md` 阈值列改公式输出（`sync-levels-stars.mjs` / `measure-step20.mjs`） | §4.1、§4.2、§5、第 6 节 |

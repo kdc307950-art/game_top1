@@ -10,6 +10,31 @@
 
 ---
 
+---
+
+## D045：Step 19.3 —— 解锁门槛（只按累计星数）/ 天边云层 / 隐藏关（规则变更）
+
+- 日期：2026-09-25
+- 状态：**已落地**（这是**规则变更**：v1.27 之前 3.6 没有「解锁」概念，50 关全部可选；19.2 的验收核心恰恰是「只画不拦、零 `locked`」）
+- 背景：19.3 自 D037 起连续三轮（D037 / D039 / D040）被登记为「属规则变更，未获批准前不得动工」，因为它要动 3.6、`LEVELS.md`、选关 UI 与关卡状态机，并需先定义「隐藏关算不算 50 关、解锁条件是什么」。本轮用户拍板三条口径：**Q1 自解锁模式 = 只按累计星数**、**Q2 门槛强度 = 1.20 星/关**、**Q3 天边内容 = 云层达标后露出已有演示关 51–53**。
+- 决定：
+  1. **解锁只看累计星数**：`unlockStarsFor(n) = round((n − 1) × UNLOCK_CONFIG.starsPerLevel)`（1.20），第 1 关恒为 0，第 50 关需 **59 星**（上限 150）。系数用 `_build/measure-step20.mjs` 的**实测星级分布**标定：greedy 平均 ≈ **1.20 星/关**，因此 1.20 是「认真打就能走完、偶尔需重玩 1–2 关」的平衡点（1.00 则永不卡关、星数失去意义；1.35 需主动刷星）。
+  2. **反锁保护（本步最容易踩的坑）**：`isLevelUnlocked(id, { earned, totalStars })` 在「已经拿到过星（≥ 1★）」时**恒为 true** —— 否则一个一路 1★ 推进的老玩家会被新门槛锁回自己**已经通关过**的关卡。门槛只拦「还没玩过的关卡」。
+  3. **解锁状态是派生量，不进存档**：由「每关星级表 + 曲线」算出，因此**存档格式零改动**（仍是 20.4 定的 v2），`storage.js` 一行未动。关掉门槛只需把旋钮调回 0。
+  4. **天边云层与隐藏关**：累计星数 ≥ `UNLOCK_CONFIG.tianbianStars`（**120**）时，地图第 6 页的云层散去，露出 `hiddenLevelIds`（51 / 52 / 53）。隐藏关直接复用 Step 14 的**演示关配置**（`DEMO_LEVEL_IDS` → `level.js` 的 `HIDDEN_LEVEL_IDS`），因此**零新关卡设计**；它们**不计入** `⭐ n/150`（分母仍是主线 50 × 3，由 `app.js` 给 `renderMap` 传 `starTotal`）。
+  5. **地图从 5 页扩到 6 页、`LEVEL_MAP_POS` 从 50 项扩到 53 项**：坐标仍由 `_build/gen-vine-map.mjs` 生成（同一套页面/行列公式，隐藏关落在第 6 页）、`_build/check-vine-map.mjs` 反向巡检（新增「前 5 页各 10 关」「第 6 页恰好隐藏关个数」「主线关号 1..50 连续 + 隐藏关号 = `hiddenLevelIds`」）。
+  6. **节点状态机两态 → 三态**：`nodeState(earned, unlocked)` 返回 `visited` / `attainable` / **`locked`**（仍是纯函数）。**地图层不认识规则** —— `unlocked`（`{ 关卡id: boolean }`）与 `required`（`{ 关卡id: 星数 }`）由 `app.js` 用 `level` 的纯函数算好后传入 `renderMap`；锁定节点带 `data-locked` / `aria-disabled` / `tabindex="-1"` / `data-required`，样式全部由 CSS 驱动（暗灰虚线圈 + 「N⭐」）。
+  7. **点锁定的关卡不放行**：`app.js` 的 `pickLevel` 直接拒绝（不进入关卡、不写存档），并在地图内弹一条一次性提示（画布外 DOM 的 `.vine-toast`：「第 N 关还没解锁：还差 X ⭐」），日志记「未解锁…已拒绝进入」。
+  8. **`verify-step19-2` 的「零 `locked`」断言按规则变更改写**（那是 19.2「只画不拦」阶段的验收核心）：0 星档案下改为断言「第 1 关 attainable、第 2 关起 locked（49 个）、第 6 页只有云层、共 6 页」，并在「点节点进关」前注入足够星数。**改写动作明写在此**，不悄悄改。
+  9. **新增 `_build/verify-step19-3.mjs`（星级注入矩阵）**：0 星 / 差 1 星 / 刚好达标 / 满星四档，逐档核对节点态、`data-required`、云层出现与散去、隐藏关渲染、点锁定被拒（地图不收起 + 提示 + 日志）、点已解锁照常进入、页面不可滚动与解锁不写存档。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **12 文件 / 260 用例 / 3251 断言 / 0 失败 / exit 0**（`level.test.js` 新增 3 例、`vine-map.test.js` 改写 3 例）。
+  - **L0**：`python _build/consistency_check.py` 全部通过；`node _build/check-vine-map.mjs` → **PASS 19/19**（53 项坐标 + 6 页结构）；`check-level-table.mjs` / `lint-levels.mjs` PASS。
+  - **L2/L3**：`_build/verify-step19-3.mjs` **28 项全绿**；改写后的 `_build/verify-step19-2.mjs` 全绿；`_build/verify-step12b.mjs`（地图链路）按「6 页」更新一行断言后全绿。日志 `_build/step193-*.log`、`_build/g14-summary.txt`（Gate 0.1 第十四轮）。
+- 影响：`config.js`（`UNLOCK_CONFIG` 3 键）、`level.js`（`HIDDEN_LEVEL_IDS` / `unlockStarsFor` / `isLevelUnlocked` / `isTianbianOpen` + `LEVEL_MAP_POS` 53 项）、`vine-map.js`（三态 + 云层 + 新入参）、`vine-map.css`（locked / 云层 / 提示条）、`app.js`（解锁表 + 云层 + `pickLevel` 拦截 + `starTotal`）、`LEVELS.md`（§10 + §9 53 行）、`tests/level.test.js`、`tests/vine-map.test.js`、`AGENTS.md` v1.28、`ROADMAP.md` v1.28、`prompts.md`。
+- 替代方案：① 只按「上一关通关」线性解锁（否决：星数就没有意义了，也与 `⭐ n/150` 的进度语言脱节）；② 线性 + 星数双门槛（否决：最硬核，也最容易把玩家卡在前一段反复刷星）；③ 新增隐藏关（否决/推迟：需要新的关卡设计与 `LEVELS.md` 扩表，属另一步的工作量；先用已有的三个演示关，零新内容、零新风险）；④ 把解锁状态写进存档（否决：它是纯派生量，写进去就会引入「星级与解锁不一致」的第二真相源，还要再动一次存档格式）；⑤ 让 `vine-map.js` 自己读存档算解锁（否决：违反 2.3 的边界 —— 地图层只该回答「怎么画」）；⑥ 云层未散去时把隐藏关画暗（否决：语义上是「还没露出」，不渲染更诚实，也让巡检的节点数断言有确定含义）。
+- 未验证（如实）：① **真机触控热区**（锁定节点的 `tabindex="-1"` 与点击拦截只在桌面 headless + 窄屏模拟下取证）；② **门槛曲线的长期手感**（1.20 是按实测星级分布标定的**推算值**，真机玩家分布可能不同 —— 改旋钮不需要改存档，属可调项）；③ 隐藏关 51–53 的**进度展示**（它们不进 ⭐ n/150，地图上只显示节点与星级）。
+
 ## D044：Step 17 —— 粒子动画与视觉打磨（外观方案 A：预烘焙精灵 + 三类强度）
 
 - 日期：2026-09-25

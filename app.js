@@ -23,8 +23,8 @@ import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js'
 import { activeParticles, clearParticles, createParticleSystem, spawnBurst, update as updateParticles } from './particles.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
-import { DEMO_LEVEL_IDS, LEVEL_COUNT, getLevelConfig, isTimeLevel } from './level.js';
-import { pageOf, renderMap } from './vine-map.js'; // Step 19.2：藤蔓关卡地图（画布外的 SVG 层）
+import { DEMO_LEVEL_IDS, HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS, getLevelConfig, isLevelUnlocked, isTianbianOpen, isTimeLevel, unlockStarsFor } from './level.js';
+import { pageCount, pageOf, renderMap } from './vine-map.js'; // Step 19.2：藤蔓关卡地图（画布外的 SVG 层）
 import { createStorage, getTotalStars } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
@@ -33,6 +33,8 @@ const LOG_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
 const storage = createStorage((level, message) => log(level, message));
 const MIN_LOG_RANK = LOG_RANK.info;
 const MAX_DPR = 3; // 后备缓冲上限（与 render.js 的绘制预算一致）
+// 19.3：地图上的最大关卡 id（主线 50 + 天边隐藏关 51–53）—— 选关与「下一关」都用它做上界
+const MAX_MAP_LEVEL_ID = Math.max(LEVEL_COUNT, ...HIDDEN_LEVEL_IDS);
 const CLOCK_INTERVAL_MS = 250; // 时间关倒计时的刷新间隔（3.6 第 8 条：时间只按真实时间流逝）
 
 const renderer = createRenderer();
@@ -91,7 +93,11 @@ const view = {
   // Step 17（v1.27）：粒子系统 + 相位跟踪（生成只在相位切换时发生）+ 上一帧时间（算 dt）
   particles: null,
   particlePhase: null,
-  particleAt: 0
+  particleAt: 0,
+  // Step 19.3（v1.28）：地图的解锁快照（每次 drawMap 重算，只读；不进存档）+ 提示条定时器
+  mapLocked: null,
+  mapRequired: null,
+  toastTimer: 0
 };
 
 init();
@@ -310,7 +316,7 @@ function onTap({ x1, y1 }) {
   if (view.screen === 'select') return;
   if (view.game.gameOver) {
     if (hitTest(view.canvas, x1, y1, view.nextRect)) {
-      view.levelId = Math.min(view.levelId + 1, LEVEL_COUNT); // 通关后的「下一关」
+      view.levelId = Math.min(view.levelId + 1, MAX_MAP_LEVEL_ID); // 通关后的「下一关」（含天边隐藏关）
       startNewGame();
       return;
     }
@@ -679,11 +685,11 @@ function showMap() {
   if (!host) return;
   view.screen = 'select';
   view.selected = null;
-  view.mapPage = Math.min(Math.max(view.mapPage, 1), pageOf(LEVEL_COUNT));
+  view.mapPage = Math.min(Math.max(view.mapPage, 1), pageCount());
   host.hidden = false;
   if (view.canvas) view.canvas.hidden = true;
   drawMap();
-  log('info', `进入选关地图：第 ${view.mapPage} 页（共 ${pageOf(LEVEL_COUNT)} 页，每页 10 关）`);
+  log('info', `进入选关地图：第 ${view.mapPage} 页（共 ${pageCount()} 页：5 页主线 + 1 页天边）`);
 }
 
 function hideMap() {
@@ -693,37 +699,93 @@ function hideMap() {
 }
 
 /**
- * 翻页（19.2 v2 的分页箭头 `[◀] 第 N / 5 页 [▶]`）：夹到 [1, 页数]，从 `from` 滑到新页。
+ * 翻页（19.2 v2 的分页箭头；19.3 起共 6 页：5 页主线 + 1 页天边云层）：夹到 [1, 页数]，从 `from` 滑到新页。
  * 分页是**按钮**而不是滚动容器 —— 5.1 的「禁滚动/缩放」不受影响；触摸手势仍归 input.js。
  */
 function turnMapPage(step) {
   const from = view.mapPage;
-  const total = pageOf(LEVEL_COUNT);
+  const total = pageCount();
   view.mapPage = Math.min(Math.max(from + step, 1), total);
   if (view.mapPage === from) return;
   drawMap(from);
   log('info', `地图翻页：第 ${from} 页 → 第 ${view.mapPage} 页（共 ${total} 页）`);
 }
 
-/** 重画地图（翻页或从对局回来时调用）；星级与总星数从存档读，地图层自己不碰存储。 */
+/**
+ * 重画地图（翻页或从对局回来时调用）；星级与总星数从存档读，地图层自己不碰存储。
+ * 19.3：解锁状态是**派生量** —— 这里用 `level.isLevelUnlocked` 逐关算好（含反锁保护），
+ * 把 `unlocked` / `required` 两张表与天边云层状态一起交给地图层；地图层只负责画。
+ */
 function drawMap(fromPage = view.mapPage) {
   const host = document.getElementById('map');
   if (!host) return;
+  const totalStars = getTotalStars(view.levelStars); // 总星数是派生量（v1.21 口径），只读不写
+  const unlocked = {};
+  const required = {};
+  const revealed = {};
+  for (const position of LEVEL_MAP_POS) {
+    const earned = view.levelStars?.[position.id] ?? 0;
+    required[position.id] = unlockStarsFor(position.id);
+    unlocked[position.id] = isLevelUnlocked(position.id, { earned, totalStars });
+    revealed[position.id] = true;
+  }
+  const tianbianOpen = isTianbianOpen(totalStars);
+  const tianbianStars = unlockStarsFor(HIDDEN_LEVEL_IDS[0]);
+  if (!tianbianOpen) {
+    // 云层未散去：隐藏关**不渲染**（地图层用 revealed=false 跳过它们，并画出云层）
+    for (const id of HIDDEN_LEVEL_IDS) revealed[id] = false;
+  }
   renderMap(host, {
     page: view.mapPage,
     fromPage,
     stars: view.levelStars,
     current: view.levelId,
-    totalStars: getTotalStars(view.levelStars) // 总星数是派生量（v1.21 口径），只读不写
+    totalStars,
+    unlocked,
+    required,
+    revealed,
+    tianbian: { open: tianbianOpen, stars: totalStars, required: tianbianStars },
+    starTotal: LEVEL_COUNT * 3 // 19.3：⭐ n/150 的分母只数主线关（隐藏关不计入）
   });
+  view.mapLocked = unlocked; // 供 pickLevel 判定；只读快照，不进存档
+  view.mapRequired = required;
 }
 
-/** 点某一关：只做「切关卡 + 开新局」，不写任何存档（19.2 不碰存储）。 */
+/** 点某一关：19.3 起**锁定的关卡不放行**，只弹一条提示；进入关卡时不写任何存档。 */
 function pickLevel(levelId) {
   if (!Number.isFinite(levelId)) return;
-  view.levelId = Math.min(Math.max(Math.round(levelId), 1), LEVEL_COUNT);
+  const id = Math.min(Math.max(Math.round(levelId), 1), MAX_MAP_LEVEL_ID);
+  const earned = view.levelStars?.[id] ?? 0;
+  const unlocked = view.mapLocked?.[id] ?? isLevelUnlocked(id, { earned, totalStars: getTotalStars(view.levelStars) });
+  if (!unlocked) {
+    const need = view.mapRequired?.[id] ?? unlockStarsFor(id);
+    const missing = Math.max(0, need - getTotalStars(view.levelStars));
+    showMapToast(`第 ${id} 关还没解锁：还差 ${missing} ⭐（需要 ${need} ⭐）`);
+    log('info', `地图：第 ${id} 关未解锁（需要 ${need} 星，当前 ${getTotalStars(view.levelStars)} 星），已拒绝进入`);
+    return;
+  }
+  view.levelId = id;
   startNewGame(); // 内部会 hideMap() 并把 screen 切回 playing
   log('info', `已从地图选择第 ${view.levelId} 关`);
+}
+
+/** 地图内的一次性提示条（画布外的 DOM；`vine-map.css` 的 `.vine-toast`），2 秒后自动淡出。 */
+function showMapToast(text) {
+  const host = document.getElementById('map');
+  if (!host) return;
+  let toast = host.querySelector('.vine-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'vine-toast';
+    toast.setAttribute('role', 'status');
+    host.appendChild(toast);
+  }
+  toast.textContent = text;
+  toast.dataset.visible = 'true';
+  if (view.toastTimer) clearTimeout(view.toastTimer);
+  view.toastTimer = setTimeout(() => {
+    toast.dataset.visible = 'false';
+  }, 2000);
 }
 
 // ---------------------------------------------------------------------------

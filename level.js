@@ -148,6 +148,42 @@ export const DEMO_LEVEL_IDS = Object.freeze({
   pod: 53
 });
 
+/**
+ * 19.3（v1.28）：天边云层之后的**隐藏关**。直接引用演示关的 id —— 三个关卡的配置早已存在
+ * （Step 14 的水果 / 时间 / 金豆荚），因此「天边奖励」零新关卡设计；它们**不计入** `⭐ n/150`
+ * （分母只数 1..LEVEL_COUNT 的主线关卡）。
+ */
+export const HIDDEN_LEVEL_IDS = Object.freeze([DEMO_LEVEL_IDS.fruit, DEMO_LEVEL_IDS.time, DEMO_LEVEL_IDS.pod]);
+
+/**
+ * 19.3（v1.28）：第 `levelId` 关的**解锁星数门槛**（3.6 的解锁规则，系数在 `UNLOCK_CONFIG`）。
+ *   · 第 1 关恒为 0（任何人开局都能玩）；
+ *   · 隐藏关都在**天边云层**之后，门槛 = `UNLOCK_CONFIG.tianbianStars`；
+ *   · 其余关卡 = `round((id − 1) × starsPerLevel)` —— 设计期派生（同配置同结果，无随机）。
+ */
+export function unlockStarsFor(levelId) {
+  const id = Math.trunc(Number(levelId));
+  if (!Number.isFinite(id) || id <= 1) return 0;
+  if (HIDDEN_LEVEL_IDS.includes(id)) return CONFIG.UNLOCK_CONFIG.tianbianStars;
+  return Math.max(0, Math.round((id - 1) * CONFIG.UNLOCK_CONFIG.starsPerLevel));
+}
+
+/**
+ * 19.3（v1.28）：该关当前是否可玩。
+ * **反锁保护**（本步最容易踩的坑）：只要这一关已经拿到过星（`earned ≥ 1`），就永远可玩 ——
+ * 否则一个「一路 1★ 推进」的老玩家会被新门槛锁回自己**已经通关过**的关卡。
+ * 门槛因此只拦「还没玩过的关卡」：`unlocked = earned ≥ 1 || totalStars ≥ unlockStarsFor(id)`。
+ */
+export function isLevelUnlocked(levelId, { earned = 0, totalStars = 0 } = {}) {
+  if (Math.trunc(Number(earned)) >= 1) return true;
+  return Math.trunc(Number(totalStars)) >= unlockStarsFor(levelId);
+}
+
+/** 19.3：天边云层是否已散去（累计星数 ≥ `UNLOCK_CONFIG.tianbianStars`）。 */
+export function isTianbianOpen(totalStars = 0) {
+  return Math.trunc(Number(totalStars)) >= CONFIG.UNLOCK_CONFIG.tianbianStars;
+}
+
 /** 演示关配置工厂：命中演示关 id 时返回配置，否则返回 null（交回 50 关表）。 */
 function demoLevelConfig(id) {
   if (id === DEMO_LEVEL_IDS.obstacles) return obstacleDemoConfig();
@@ -535,5 +571,8 @@ export const LEVEL_MAP_POS = Object.freeze([
   Object.freeze({ id: 48, page: 5, x: 0.48, y: 0.725 }),
   Object.freeze({ id: 49, page: 5, x: 0.76, y: 0.905 }),
   Object.freeze({ id: 50, page: 5, x: 0.2, y: 0.935 }),
+  Object.freeze({ id: 51, page: 6, x: 0.2, y: 0.065 }),
+  Object.freeze({ id: 52, page: 6, x: 0.48, y: 0.095 }),
+  Object.freeze({ id: 53, page: 6, x: 0.76, y: 0.275 }),
 ]);
 // ==== /LEVEL_MAP_POS ====

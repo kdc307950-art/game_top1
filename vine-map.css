@@ -12,6 +12,8 @@
   --vine-gold: #fbc531;   /* 品牌亮金（当前关卡呼吸光效 / 三星环 / 点亮星星） */
   --vine-attainable: #2d6a4f; /* attainable 状态的绿色描边 */
   --vine-star-off: #555;  /* 未点亮星星的描边 */
+  --vine-locked: #6b6b82; /* 19.3：locked 节点（星数不够）的环色 */
+  --vine-locked-text: #cfcfe0; /* 19.3：locked 节点上「需要 N 星」的文字色 */
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -108,7 +110,7 @@
   cursor: pointer;
 }
 
-/* 状态环：attainable = 绿色描边 + 轻微脉冲；visited = 亮金边框。19.2 只画不拦 → 没有 locked 样式 */
+/* 状态环：attainable = 绿色描边 + 轻微脉冲；visited = 亮金边框；locked = 暗灰 + 锁形（19.3 起才有） */
 .vine-node-ring {
   fill: none;
   stroke-width: 2;
@@ -123,6 +125,72 @@
 .vine-node[data-state='visited'] .vine-node-ring {
   stroke: var(--vine-gold);
   stroke-opacity: 1;
+}
+
+/* 19.3：星数不够 → 节点变暗、不可点（光标与焦点也一起改），并显示「需要 N 星」 */
+.vine-node[data-state='locked'] {
+  cursor: not-allowed;
+}
+
+.vine-node[data-state='locked'] .vine-node-ring {
+  stroke: var(--vine-locked);
+  stroke-dasharray: 4 4;
+  stroke-opacity: 0.7;
+}
+
+.vine-node[data-state='locked'] .vine-node-body,
+.vine-node[data-state='locked'] .vine-node-label,
+.vine-node[data-state='locked'] .vine-node-star {
+  opacity: 0.45;
+}
+
+.vine-node[data-state='locked'] .vine-node-required {
+  fill: var(--vine-locked-text);
+  font-size: 15px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+/* 天边云层（19.3，第 6 页）：隐藏关未揭示时占据这一页，附「还差 N ⭐」 */
+.vine-cloud-puff {
+  fill: #cdd6f4;
+  fill-opacity: 0.92;
+  stroke: #8f9bd0;
+  stroke-width: 1.5;
+}
+
+.vine-cloud-text {
+  fill: #3b3a5c;
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.vine-cloud-hint {
+  fill: #4b4a70;
+  font-size: 15px;
+}
+
+/* 点锁定节点时的一次性提示条（画布外 DOM，19.3；由 app.js 显示、自动淡出） */
+.vine-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--booster-bar-h, 0px) + 86px);
+  transform: translateX(-50%);
+  max-width: 86%;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(27, 24, 48, 0.94);
+  color: #ffe9a8;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.vine-toast[data-visible='true'] {
+  opacity: 1;
 }
 
 /* 当前关卡：呼吸光效脉冲（旧的「粉色底 + 黄色大边框」已删除） */

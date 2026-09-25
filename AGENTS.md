@@ -1,9 +1,24 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.27
+> 版本：v1.28
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.27 → v1.28 关键变更）
+
+本次修订按**用户拍板的三条口径**落地 **Step 19.3：解锁门槛 / 天边云层 / 隐藏关**。这是**规则变更**（v1.27 之前 3.6 没有「解锁」概念，50 关全部可选；19.2 的验收核心就是「只画不拦、零 `locked`」），口径记入 `DECISIONS.md` **D045**。
+
+1. **3.6 新增解锁规则（只按累计星数）**：第 n 关的解锁门槛 = `round((n − 1) × UNLOCK_CONFIG.starsPerLevel)`（默认 **1.20**），第 1 关恒为 0，第 50 关需 **59 星**；**反锁保护**：只要某关已经拿到过星（≥ 1★），它就**永远可玩** —— 门槛只拦「还没玩过的关卡」（`level.isLevelUnlocked`）。解锁状态是**派生量**（星级表 + 曲线），**不进存档**，因此存档格式仍是 v2（20.4 刚定的），本步**不动** `storage.js`。
+2. **天边云层与隐藏关**：累计星数 ≥ `UNLOCK_CONFIG.tianbianStars`（默认 **120**）时，地图第 6 页的云层散去，露出 `UNLOCK_CONFIG.hiddenLevelIds`（默认 **51 / 52 / 53** = Step 14 的水果 / 时间 / 金豆荚演示关，登记在 `level.js` 的 `HIDDEN_LEVEL_IDS`）。隐藏关**不计入** `⭐ n/150` —— 分母仍是主线 50 关 × 3，由调用方给 `renderMap` 的 `starTotal` 显式传入。
+3. **地图是 6 页**：前 5 页各 10 个主线节点，第 6 页是天边（3 个隐藏关 + 云层）。`LEVEL_MAP_POS` 由 50 项扩到 **53 项**（`_build/gen-vine-map.mjs` 生成、`_build/check-vine-map.mjs` 反向巡检，新增「前 5 页各 10 关 / 第 6 页恰好隐藏关个数」两类断言）。
+4. **节点状态机由两态扩到三态**（2.3）：`visited`（已通关）/ `attainable`（可玩未通关）/ **`locked`（星数不够）**。`nodeState(earned, unlocked)` 仍是**纯函数**；`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 逐关算好后传给地图层 —— **地图层不认识规则**，它只回答「这一关现在能不能玩」。锁定节点带 `data-locked` / `aria-disabled` / `tabindex="-1"` 与 `data-required`（需要多少星），样式全部由 CSS 驱动（暗灰虚线圈 + 「N⭐」）。
+5. **点锁定的关卡不放行**：`app.js` 的 `pickLevel` 直接拒绝、不进入关卡、不写存档，并在地图内弹一条一次性提示（画布外 DOM 的 `.vine-toast`：「第 N 关还没解锁：还差 X ⭐」）；日志记一行「未解锁…已拒绝进入」。
+6. **`getLevelConfig` 与「下一关」的口径不变**：隐藏关 51–53 走**已有的**演示关配置（`demoLevelConfig`），因此本步**零新关卡设计**；`app.js` 的关卡上界由 `LEVEL_COUNT` 改为 `MAX_MAP_LEVEL_ID`（= 主线 50 与隐藏关 id 的最大值）。
+7. **文档**：`LEVELS.md` 新增 **§10 解锁规则与天边关卡**（曲线公式、反锁保护、隐藏关表、巡检口径）；附录 B 新增 `UNLOCK_CONFIG` 3 键。
+8. **验证**：新增 `tests/level.test.js` 的三例（门槛单调/边界/反锁保护/天边）与 `tests/vine-map.test.js` 的三态与 53 节点分页；新增浏览器套件 `_build/verify-step19-3.mjs`（星级注入矩阵），并按规则变更**改写** `_build/verify-step19-2.mjs` 的「零 `locked`」等断言。
 
 ---
 
@@ -510,7 +525,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**归一化 0–1**，v1.24）。
 - `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
 - `particles.js`：**粒子动画的纯逻辑**（v1.27）：固定容量环形池（`capacity`）、按 `dt` 的积分与回收、按事件种类（`PARTICLE_KIND`）的**生成计划**（`planBurst`）、确定性 PRNG（`mulberry32` + 事件键）以及给渲染层的**只读快照**（`activeParticles`，最多 `maxPerFrame` 项）。它**不认识棋盘 / `GameState` / DOM / Canvas / 存档**，也不实现任何游戏规则 —— 生成与推进由 `app.js` 在动画时间线上调用，贴图只在 `render.js`；因此池有界、生命周期、确定性与 `dt` 边界都能在 Node 里逐项测。**不使用运行时随机**：种子 = `PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类")`（同输入同粒子，像素巡检可复现）。坐标以**棋盘格**为单位（1.0 = 一格），渲染时乘 `cellPx`。
-- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀）。只接收「坐标表 + 星级表 + 当前关 + 总星数」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**，节点状态只有 `visited`/`attainable` 两态（**没有 `locked`**）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24，见 D040）。
+- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀、**天边云层**）。只接收「坐标表 + 星级表 + 当前关 + 总星数 + **解锁表**（`unlocked`/`required`，由调用方算好）+ **天边状态**（`tianbian`）+ ⭐ 分母（`starTotal`）」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**。节点状态机由 v1.24 的两态扩为**三态**（v1.28）：`visited`/`attainable`/**`locked`** —— `nodeState(earned, unlocked)` 仍是纯函数，**地图层不认识解锁规则**（`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 算好后传入）。共 **6 页**：前 5 页各 10 个主线节点，第 6 页是天边（3 个隐藏关；云层未散去时隐藏关**不渲染**、只画云层与「还差 N ⭐」）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24 / v1.28，见 D040 / D045）。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
@@ -619,6 +634,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - **收集水果（水果关，v1.18）**：收集 N 个掉落到棋盘底部出口的水果。
 - **收集金豆荚（金豆荚关，v1.18）**：收集 N 个掉落到棋盘底部出口的金豆荚（每次消除只下落 1 格）。它与水果关的区别只在**掉落节奏**与**三星阈值更高**（后者取 `STAR_CONFIG.podFactor`，v1.19）。
 - **时间关（v1.18）**：在限定时间内达成上述任一目标；时间归零未达成即失败。
+
+**解锁规则（v1.28 / Step 19.3，用户拍板）**：选关**只按累计星数**解锁 —— 第 n 关的门槛 = `round((n − 1) × UNLOCK_CONFIG.starsPerLevel)`（默认 **1.20**；第 50 关需 **59 星**），第 1 关恒为 0；**反锁保护**：已通关（≥ 1★）的关卡**永远可玩**，门槛只拦「还没玩过的关卡」。**天边云层**：累计星数 ≥ `UNLOCK_CONFIG.tianbianStars`（**120**）时地图第 6 页的云层散去，露出隐藏关 `hiddenLevelIds`（51 / 52 / 53，即三种关卡类型的演示关，**不计入** `⭐ n/150`）。解锁状态是**派生量**、**不进存档**；判定是纯函数：`level.unlockStarsFor` / `level.isLevelUnlocked` / `level.isTianbianOpen`（设计期派生，同配置同结果）。
 
 **关卡设计约束（硬指标，v1.13；50 关表的落点见 `LEVELS.md`）**：以下五条对每个关卡都成立，违反任一条即视为设计缺陷。
 
@@ -1184,6 +1201,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.28 | 2026-09-25 | Agent（用户拍板三条口径） | **Step 19.3 解锁门槛 / 天边云层 / 隐藏关**（规则变更）：3.6 新增「只按累计星数解锁」——门槛 = `round((n−1) × UNLOCK_CONFIG.starsPerLevel)`（1.20，第 50 关 59 星）、第 1 关恒 0、**反锁保护**（已通关的关卡永远可玩）；**天边云层**（累计 120 星）散去后露出隐藏关 51–53（Step 14 的三个演示关，**不计入** `⭐ n/150`）；解锁状态是**派生量、不进存档**（存档仍是 v2，`storage.js` 未动）；新增纯函数 `level.unlockStarsFor` / `isLevelUnlocked` / `isTianbianOpen` 与 `HIDDEN_LEVEL_IDS`；`LEVEL_MAP_POS` 由 50 项扩到 53 项（6 页，前 5 页各 10 关 + 第 6 页天边）；`vine-map.js` 的节点状态机由两态扩为**三态**（新增 `locked`）并新增天边云层，`renderMap` 新增 `unlocked` / `required` / `revealed` / `tianbian` / `starTotal` 入参；`app.js` 的 `pickLevel` 拒绝锁定关卡并在画布外弹提示；`LEVELS.md` 新增 §10；附录 B 新增 `UNLOCK_CONFIG` 3 键 | 3.6、2.2、2.3、附录 B、11、`config.js`、`level.js`、`vine-map.js`、`vine-map.css`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
 | v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | **Step 17 粒子动画与视觉打磨**：新增模块 `particles.js`（固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照，2.2/2.3 登记）；粒子一律**确定性**（`mulberry32` + 事件键 `关卡id:级联层:cell.id:种类`，不用 `Math.random`/不读时间）；坐标以棋盘格为单位、渲染时乘 `cellPx`；15 节新增粒子每帧贴图上限（`maxPerFrame` = 96）、池上限（`capacity` = 192）与「reduced-motion 不生成」三条；三类强度由**颗数递增**表达（普通 3 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14），方向按事件区分（扇形 / 双向直线 / 环形 / 全色相）；附录 B 新增 `PARTICLE_CONFIG` 20 键、附录 B-2 新增 `PARTICLE_KIND`；新增 `tests/particles.test.js`（7 例） | 2.2、2.3、15、附录 B、附录 B-2、11、`config.js`、`particles.js`、`candy.js`、`render.js`、`app.js`、`ROADMAP.md` |
 | v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | **彩星字段预留 + 存档迁移**：`STORAGE_CONFIG.schemaVersion` 1 → 2（`levels` 的值由数字改为 `{ stars, rainbow }`），v0/v1 **就地迁移**逐关补 `rainbow: false`（老存档不丢、幂等、更高版本仍只读不写）；新增 `readLevelRecords` / `writeLevelRecords` / `getTotalRainbows`，而 `readLevelStars` / `getTotalStars` / `recordLevelStars` 的对外形状**不变**（后者加可选 `options.rainbow`，缺省沿用既有标志）；口径为**彩星不计入总星数**；本步只做字段与迁移、**不做彩星规则**；附录 B 的 `schemaVersion` 默认值 1 → 2；`ROADMAP.md` 标 20.4 完成并同步 v1.26 | 2.3、附录 B、11、`config.js`、`storage.js`、`ROADMAP.md`、`tests/integration.test.js` |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | **结算阶段 + 星级统一动态调整**：3.6 第 7 条改写为「余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部逐颗连锁引爆」（受控伪随机 `mulberry32(seed + 关卡id)`、只落朴素动物格、`resolveBoard({final:true})` 跳过重排）；3.5 删除「每剩余一步 30 分」（`SCORE_CONFIG.stepBonus` / `getRemainingStepBonus`），避免与结算阶段重复计分；3.7 新增统一动态派生 `level.computeStarThresholds`（`2★/3★ = 倍率 × 基准分 + 结算期望分 × settlementCoverage`，`typicalRemainingRatio` 由 300 局实测标定为 0.20）；新增模块 `settlement.js`（2.2/2.3 登记）；`ResolveResult` 追加 `settlement`、`resolveBoard` 追加 `options.final`；附录 B 新增 `SETTLEMENT_CONFIG` 5 键 + `STAR_CONFIG.settlementCoverage` + `ANIMATION_CONFIG.settleBanner`，删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 阈值列改为公式输出（新增 `sync-levels-stars.mjs` / `measure-step20.mjs`）；`ROADMAP.md` 新增 Step 20（用户方案的「19.3.x」落此，19.3 解锁名额保留） | 2.2、2.3、3.5、3.6、3.7、4.2、15、附录 B、11、`config.js`、`level.js`、`game.js`、`settlement.js`、`timeline.js`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
@@ -1527,6 +1545,9 @@ const LEVEL_3 = {
 | `PARTICLE_CONFIG.specialSizeBoost` | 特效类（非普通消除）的尺寸放大倍率 | 1.15 | 15 v1.27 |
 | `PARTICLE_CONFIG.spread`           | 普通消除扇形锥角比例（1 = 整圆） | 0.9 | 15 v1.27 |
 | `PARTICLE_CONFIG.seed`             | 粒子确定性的种子基数（与事件键混合） | 20260925 | 15 v1.27 |
+| `UNLOCK_CONFIG.starsPerLevel`      | 每关递增的星数门槛（解锁曲线的唯一旋钮） | 1.2 | 3.6 v1.28 |
+| `UNLOCK_CONFIG.tianbianStars`      | 天边云层的解锁门槛（累计星数） | 120 | 3.6 v1.28 |
+| `UNLOCK_CONFIG.hiddenLevelIds`     | 天边云层后露出的隐藏关 id 列表（不计入 ⭐ 分母） | `[51, 52, 53]` | 3.6 v1.28 |
 | `STORAGE_KEYS.BOOSTERS`            | 道具数量存储键     | `xxl_boosters`       | ROADMAP Step 15 |
 
 新增或修改配置项时，必须同步更新本表与第 3 节相关条款。第 1 条（`COLOR_NAMES`）的映射顺序即 `cell.color` 索引语义，调整顺序等于改动所有关卡目标，属破坏性变更。
