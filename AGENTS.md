@@ -1,9 +1,24 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.37
+> 版本：v1.38
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.37 → v1.38 关键变更）
+
+本版落地 **Step 24：彩星（rainbow）分数线与展示**。用户口径：「开始彩星分数线」；规则形式与系数由用户拍板 —— **分数制，彩星线 = 三星阈值 × 1.15**。**玩法零改动**：计分、步数、目标、星级、关卡表、逻辑模块的**既有语义**一律不动，只**新增**一条荣誉线；口径与标定过程记入 `DECISIONS.md` **D052**。
+
+1. **规则来源（对齐参考游戏）**：《开心消消乐》官方公告（2020-02-28）原文 —— 「每关在**达到 3 星分数之后**会出现彩星分数，达到彩星分数之后关卡花变成漂亮的彩星关卡花」，且「**彩星不加入总星星数计算**」（当年 4 星关全部改成了彩星）。这正是 20.4 预留 `rainbow` 字段时参照的语义：**彩星是三星之上的第二道荣誉线，不是第四颗星**。
+2. **彩星线（分数制，纯派生）**：新增 `level.computeRainbowThreshold(star3) = round500(star3 × STAR_CONFIG.rainbowFactor)`，`rainbowFactor` 默认 **1.15**（新键，已登记附录 B）。因此彩星线**不手写**：它跟着 3★ 阈值走，50 关与全部演示关共用一条公式。四处关卡/演示关配置统一经 `withStars()` 挂上 `rainbowThreshold`（4.4 的 `LevelConfig` 追加该**必填**字段）。
+3. **获得条件是「通关 + 达标」**：新增 `level.isRainbowEarned(level)` —— `completed === true` 且 `currentScore ≥ rainbowThreshold`（未通关 / 没有彩星线的配置一律 `false`）。`game.getState()` 的 `GameSnapshot` 追加 **`rainbow: boolean`**（4.2 纯追加；与 `stars` 同一处计算，`app.js` 不需要绕过快照去读 `state.level`）。
+4. **落盘复用 20.4 已就位的字段**：`storage.js` **不改存档格式**（v2 的 `{ stars, rainbow }` 早已就绪），只新增派生量 `getLevelRainbows(records)` / `storage.readLevelRainbows()` → `{ 关卡id: true }`，供地图层画彩星标记；写入仍是 `recordLevelStars(..., { rainbow })`，**缺省沿用该关既有标志**，因此「这一局没拿到彩星」不会把之前拿到的彩星抹掉。
+5. **展示（两处，零素材、零滤镜）**：① **结束面板**（`hud.js`）：通关且达标时，在星星行右侧画一枚**彩虹五角星** +「彩星」小字 —— `drawRainbowStar()` 按**五个角**分色（5 次几何填充），**不用渐变、不用阴影模糊**（D043/D044 对结束面板同样适用）；② **藤蔓地图**（`vine-map.js` / `vine-map.css`）：节点追加 `data-rainbow="true"` 与紧随点亮星之后的一颗彩虹星，填充用 `<defs>` 里的**静态** `linearGradient#vine-rainbow`（SVG 静态渐变 ≠ canvas 每帧渐变；**刻意不用 `drop-shadow`/`feGaussianBlur`**，D049 第 2 条禁用视觉滤镜）。无障碍：节点的 `aria-label` 增加「，已达成彩星」。
+6. **彩星不计入总星数（口径不变）**：`⭐ n/150` 的分母与分子都只数星级（`getTotalStars` / `starTotal`），彩星只由 `getTotalRainbows()` / 节点标记表达 —— 与 20.4 及用户方案 §2.2 一致。
+7. **标定（先测后定，新增 `_build/measure-rainbow.mjs`）**：300 局真实对局（50 关 × 贪心/随机两档 × 3 种子，与 `measure-step20.mjs` 同一玩家模型）。结果：通关 187（62.3%）、通关余步比例中位 20.8% / p75 39.1%、最终分 ÷ 三星阈值中位 0.48 / **max 1.38**。⇒ ×1.10–1.30 都有**可达实例**；而弱玩家通关局在 ×1.15 上的命中率只有 ~1%（**下界**，人类会明显更高）。用户在候选里选定 **1.15**。
+8. **验证**：`tests/level.test.js` / `tests/game.test.js` 新增彩星用例（阈值公式与取整、彩星线严格高于 3★、未通关不给、刚好达标给、缺字段不给、快照字段）；`tests/integration.test.js` 覆盖「彩星落盘往返 + 不计入总星数」；新增浏览器套件 `_build/verify-step24.mjs`（阈值/快照/落盘/地图标记/结束面板彩星像素/⭐ 计数不受影响）；`consistency_check.py` 的覆盖断言扩到 **Step 0-24**。**如实说明**：本机没有视觉模型，彩星观感请以 `_build/step24-*.png` 为准；彩星的人类实际获得率**无法在本机标定**（自动玩家太弱），需要真机或你实际打几局。
 
 ---
 
@@ -802,6 +817,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - **结算期望分** = 「典型余步（`步数预算 × SETTLEMENT_CONFIG.typicalRemainingRatio`）× 该步的递增奖励分」之和，用来抵消
   3.6 第 7 条的结算阶段带来的分数膨胀；它是**设计期派生**（纯函数、无随机），因此星阈值仍可复现、可巡检。
 - 「**统一**」= 一条公式作用于 50 关与全部演示关；「**动态**」= 输入是每关自己的 `star1` 与派生步数。
+
+**彩星线（v1.38，Step 24 / D052）**：在 3★ 之上再加一条**彩星线** `level.computeRainbowThreshold(star3) = round500(star3 × STAR_CONFIG.rainbowFactor)`（默认 1.15）。**通关**且**最终分 ≥ 彩星线**即获得彩星（`level.isRainbowEarned`），快照里体现为 `GameSnapshot.rainbow`。口径与参考游戏一致（《开心消消乐》官方公告：「达到 3 星分数之后会出现彩星分数」），且**彩星不计入总星数**（`⭐ n/150` 只数星级）—— 它是「三星之上的额外荣誉」，不是第四颗星。
 - 标定依据是**实测数据**而非手感：`_build/measure-step20.mjs` 用真实模块跑 300 局，通关余步中位数为步数预算的 19–22%（故取 0.20）、
   结算分占最终分的 30–36%（故 `settlementCoverage` 取 0.6）。改这两个系数必须重跑该脚本并同步 `LEVELS.md` 的阈值列与 `DECISIONS.md`。
 
@@ -948,6 +965,7 @@ GameSnapshot = {
   collectedFruit: number,               // v1.18：本局已收集的水果数
   collectedPod: number,                 // v1.18：本局已收集的金豆荚数
   stars: 0 | 1 | 2 | 3,                 // v1.14：按 3.7 由最终分数算出
+  rainbow: boolean,                     // v1.38：本局是否达成彩星（通关 + 最终分 ≥ 彩星线；不计入总星数）
   won: boolean,                         // v1.14：是否已达成通关目标（与 gameOver 的「失败」区分）
   board: Board
 }
@@ -1042,6 +1060,7 @@ LevelConfig = {
   timeLimit?: number,          // v1.19：秒；> 0 即时间关（倒计时替代步数，见 3.6 第 8 条）
   goal: GoalSpec,
   starThresholds: [number, number, number],
+  rainbowThreshold: number,           // v1.38：彩星线 = round500(3★ × STAR_CONFIG.rainbowFactor)，由公式派生
   obstacles: ObstacleSpec[],
   collectibles?: CollectibleSpec[]  // v1.19：棋盘顶部的收集物落点（水果关/金豆荚关，见 3.6）
 }
@@ -1610,6 +1629,7 @@ const LEVEL_3 = {
 | `STAR_CONFIG.secondFactor`         | 二星阈值倍率（× 1★ 基准分） | 1.7         | 3.7 v1.19 |
 | `STAR_CONFIG.thirdFactor`          | 三星阈值倍率（× 1★ 基准分） | 2.5         | 3.7 v1.19 |
 | `STAR_CONFIG.podFactor`            | 金豆荚关 2★/3★ 的额外倍率 | 1.2          | 3.6 / 3.7 v1.19 |
+| `STAR_CONFIG.rainbowFactor`        | 彩星线倍率（× 三星阈值，取整到 500） | 1.15 | 3.7 v1.38 |
 | `TIME_CONFIG.initialSeconds`       | 时间关时长公式的基准秒数 | 60            | 3.6 v1.19 |
 | `TIME_CONFIG.secondsPerWorkload`   | 每单位目标工作量折算的秒数 | 12           | 3.6 v1.19 |
 | `TIME_CONFIG.secondsPerFriction`   | 每点障碍摩擦扣减的秒数 | 3             | 3.6 v1.19 |

@@ -321,9 +321,12 @@ export function navLabelText(levelId, mainCount = LEVEL_COUNT) {
 // 渲染
 // ---------------------------------------------------------------------------
 
-/** 单个节点（`<g data-level data-stars data-state role=listitem tabindex=0 aria-label>`，无内联样式）。 */
-function buildNode(position, stars, current, unlocked, required) {
+/** 单个节点（`<g data-level data-stars data-rainbow data-state role=listitem tabindex=0 aria-label>`，无内联样式）。 */
+function buildNode(position, stars, current, unlocked, required, rainbows) {
   const earned = clampStars(stars?.[position.id] ?? stars?.[String(position.id)] ?? 0);
+  // Step 24（v1.38 / D052）：彩星是**三星之上的额外荣誉**，只影响这颗节点的显示，
+  // **不计入** ⭐ n/150（分母仍由调用方给 `starTotal`）。
+  const hasRainbow = rainbows?.[position.id] === true || rainbows?.[String(position.id)] === true;
   const locked = !(unlocked?.[position.id] ?? unlocked?.[String(position.id)] ?? true);
   const state = nodeState(earned, !locked);
   const need = Math.max(0, Math.trunc(Number(required?.[position.id] ?? required?.[String(position.id)] ?? 0)));
@@ -336,6 +339,7 @@ function buildNode(position, stars, current, unlocked, required) {
     class: classes.join(' '),
     'data-level': String(position.id),
     'data-stars': String(earned),
+    'data-rainbow': hasRainbow ? 'true' : null,
     'data-state': state,
     'data-locked': locked ? 'true' : null,
     'data-required': String(need),
@@ -344,7 +348,7 @@ function buildNode(position, stars, current, unlocked, required) {
     role: 'listitem',
     tabindex: locked ? '-1' : '0',
     'aria-disabled': locked ? 'true' : null,
-    'aria-label': locked ? `第 ${position.id} 关，未解锁，需要 ${need} 星` : `第 ${position.id} 关，${earned} 星`
+    'aria-label': locked ? `第 ${position.id} 关，未解锁，需要 ${need} 星` : `第 ${position.id} 关，${earned} 星${hasRainbow ? '，已达成彩星' : ''}`
   });
   node.appendChild(el('circle', { class: 'vine-node-halo', cx, cy, r: MAP.nodeRadius + 6 }));
   node.appendChild(el('circle', { class: 'vine-node-ring', cx, cy, r: MAP.nodeRadius + 3 }));
@@ -395,6 +399,18 @@ function buildNode(position, stars, current, unlocked, required) {
       })
     );
   }
+  // Step 24：彩星标记 —— 紧跟在「已点亮的星」之后，用 SVG 静态渐变（`#vine-rainbow`）填成彩虹星。
+  // 只改这一颗节点的外观，不改任何规则；CSS 负责描边与光晕（节点样式一律由 CSS 驱动，无内联样式）。
+  if (hasRainbow) {
+    const sx = firstX + earned * (size + MAP.starGap);
+    node.appendChild(
+      el('path', {
+        class: 'vine-node-star vine-node-star--rainbow',
+        d: starPath(sx, cy, size),
+        'data-star': 'rainbow'
+      })
+    );
+  }
   return node;
 }
 
@@ -434,6 +450,12 @@ function buildSky() {
     gradient.appendChild(el('stop', { offset, 'stop-color': color }));
   }
   defs.appendChild(gradient);
+  // Step 24：彩星的静态彩虹渐变（6 段色带）。SVG 静态渐变 ≠ canvas 每帧渐变，D043/D044 的红线不受影响。
+  const rainbow = el('linearGradient', { id: 'vine-rainbow', x1: 0, y1: 0, x2: 1, y2: 1 });
+  for (const [offset, color] of [['0%', '#ff5f6d'], ['20%', '#ffb340'], ['40%', '#ffe14d'], ['60%', '#4ecb71'], ['80%', '#38b6ff'], ['100%', '#a06bff']]) {
+    rainbow.appendChild(el('stop', { offset, 'stop-color': color }));
+  }
+  defs.appendChild(rainbow);
   return [
     defs,
     el('rect', {
@@ -572,6 +594,7 @@ function buildRecenter(levelId) {
  */
 export function renderMap(host, {
   stars = {},
+  rainbows = {}, // Step 24：{ 关卡id: true } = 已达成彩星（派生量，**不计入** totalStars/starTotal）
   current = null,
   totalStars = 0,
   unlocked = null, // 19.3：{ 关卡id: 是否可玩 }（由 app.js 用 level.isLevelUnlocked 算好；地图层不认识规则）
@@ -605,7 +628,7 @@ export function renderMap(host, {
 
   // ---------- ② 量出视口尺寸 → 世界几何 ----------
   const geometry = mapGeometry(viewport.clientWidth, viewport.clientHeight);
-  const options = { unlocked, required, revealed, tianbian };
+  const options = { unlocked, required, revealed, tianbian, rainbows };
 
   // ---------- ③ 世界：单张 SVG（viewBox = 世界总高，1 单位 = 1px），视差用两个 `<g>` 图层 ----------
   const world = el('div', { class: 'vine-world', 'data-vine-world': 'true' });
@@ -652,7 +675,7 @@ export function renderMap(host, {
       hidden += 1;
       continue;
     }
-    vines.appendChild(buildNode(position, stars, current, options.unlocked, options.required));
+    vines.appendChild(buildNode(position, stars, current, options.unlocked, options.required, options.rainbows));
   }
   svg.appendChild(vines);
   if (hidden > 0 && options.tianbian) svg.appendChild(buildCloudBand(options.tianbian));

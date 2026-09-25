@@ -31,7 +31,7 @@ import {
   calcFinalScore,
   calcSpecialMultiplier
 } from './score.js';
-import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, grantSteps, grantTime, isTimeLevel } from './level.js';
+import { calcStars, checkGoal, consumeStep, consumeTime, createLevel, grantSteps, grantTime, isRainbowEarned, isTimeLevel } from './level.js';
 // Step 20（v1.25）：结算阶段（剩余步数 → 奖励分 + 随机特殊糖果 → 连锁引爆）的纯函数都在 settlement.js
 import {
   conversionPlan,
@@ -419,6 +419,7 @@ export function getState(state) {
     timeLimit: isTimeLevel(state.level) ? state.level.timeLimit : null,
     remainingTime: state.level.remainingTime ?? 0,
     stars: starsOf(state.level),
+    rainbow: isRainbowEarned(state.level), // Step 24（v1.38 / D052）：彩星（通关且最终分 ≥ 彩星线）
     won: state.level.completed,
     board: Object.freeze(board)
   });

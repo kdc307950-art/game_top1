@@ -532,6 +532,38 @@
 
 ---
 
+## Step 24：彩星（rainbow）分数线与展示（分数制 ×1.15，不计入总星数）
+
+```text
+任务：实现 Step 24 彩星（rainbow）分数线与展示（用户口径「开始彩星分数线」）
+开始前：读 AGENTS.md（3.7 / 4.2 / 4.4 / 附录 B）、ROADMAP.md §4.6、DECISIONS.md D042（20.4 的字段预留）与 D052（本步）、PROGRESS.md 的 20.4 记录
+背景：20.4 只把 `rainbow` 字段与 v2 存档迁移做好了，分数线与颁发规则一直空着。参考《开心消消乐》官方公告
+      （2020-02-28）：「每关在达到 3 星分数之后会出现彩星分数，达到彩星分数之后关卡花变成漂亮的彩星关卡花」，
+      且「彩星不加入总星星数计算」—— 彩星是三星之上的第二道荣誉线，不是第四颗星。
+标定（先测后定）：新增 _build/measure-rainbow.mjs，300 局真实对局（50 关 × 贪心/随机两档 × 3 种子）：
+      通关 187（62.3%）、通关余步比例中位 20.8% / p75 39.1%、最终分 ÷ 三星阈值中位 0.48 / max 1.38
+      ⇒ ×1.10–1.30 都有可达实例；弱玩家通关局在 ×1.15 上约 1%（下界）。用户选定「分数制 ×1.15」。
+落地：
+- config.js：STAR_CONFIG.rainbowFactor = 1.15（新键，登记附录 B）。
+- level.js：computeRainbowThreshold(star3) = round500(star3 × factor)；isRainbowEarned(level)（通关 + 达标）；
+  withStars() 给四处关卡/演示关配置挂 rainbowThreshold（4.4 的 LevelConfig 追加该必填字段）。
+- game.js：GameSnapshot 追加 rainbow（与 stars 同一处算，app.js 不必绕过快照）。
+- storage.js：新增派生量 getLevelRainbows / storage.readLevelRainbows（{ 关卡id: true }）；存档格式不变。
+- app.js：载入 view.levelRainbows、落盘时传 { rainbow: snapshot.rainbow }（缺省沿用既有标志）、传给 renderMap。
+- hud.js：结束面板在星星行右侧画「彩虹五角星 + 彩星小字」（按五个角分色，5 次几何填充，零渐变零模糊）。
+- vine-map.js / vine-map.css：节点 data-rainbow + 紧随点亮星的一颗彩虹星（<defs> 静态 linearGradient#vine-rainbow；
+  刻意不用 drop-shadow / feGaussianBlur）；aria-label 增加「已达成彩星」。
+验收：node tests/run-all.js 全绿（彩星线公式与取整 / 严格高于三星线 / 只在通关且达标时给 / 缺字段不给）；
+      python _build/consistency_check.py 全绿（附录 B 登记 + 覆盖断言扩到 Step 0-24）；
+      _build/verify-step24.mjs PASS（阈值一致性 / 快照字段 / 落盘往返 / 地图 data-rainbow 与彩虹星 / 面板彩虹像素 / ⭐ 不受影响）；出截图交用户确认。
+禁止：把彩星做成第四颗星或计入 ⭐ n/150；手写彩星线（必须公式派生）；给失败局发彩星；引入素材或依赖（D009）；
+      canvas 每帧渐变或 shadowBlur（D043/D044）；SVG 视觉滤镜（D049 第 2 条）；改存档格式。
+前置依赖：Step 20.4（v2 存档的 rainbow 字段与 recordLevelStars({ rainbow }) 已就位）、用户选定「分数制 ×1.15」。
+参考：《开心消消乐》官方公告「【功能优化】余步分数调整，彩星功能上线」（TapTap 2020-02-28）；DECISIONS.md D042 / D052。
+```
+
+---
+
 ## 待补充的提示词模式（随实战积累）
 
 - 报错排查类：`先把完整的报错栈贴出来` + 复现步骤 + 预期行为 三段式。

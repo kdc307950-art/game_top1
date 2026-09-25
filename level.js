@@ -16,6 +16,17 @@ import { estimateSettlementScore } from './settlement.js';
 
 const GOAL_TYPES = new Set(Object.values(GOAL_TYPE));
 
+/** Step 24：星级/彩星阈值一律取整到 500（3.7 的口径，两处公式共用同一份实现）。 */
+const round500 = (value) => Math.round(value / 500) * 500;
+
+/**
+ * Step 24：把「三星阈值 + 彩星线」一次算齐挂到关卡配置上 —— 四处关卡/演示关配置共用，
+ * 避免每处各写一遍「彩星线怎么来」。彩星线只依赖 3★ 阈值（`computeRainbowThreshold`）。
+ */
+function withStars(config, starThresholds) {
+  return { ...config, starThresholds, rainbowThreshold: computeRainbowThreshold(starThresholds[2]) };
+}
+
 /**
  * Step 11：当前可玩关卡的配置（4.4 的 LevelConfig）。
  * 为什么放在 level.js 而不是 app.js：2.3 规定本模块的职责就是「关卡配置、目标追踪、步数消耗、三星判定」；
@@ -126,7 +137,7 @@ export function getLevelConfig(id) {
   };
   // 3.7（v1.25）：星阈值不再是手写值 —— 先派生步数，再由「基准分 + 步数」统一推出三个阈值
   const steps = computeStepBudget(config);
-  return { ...config, steps, starThresholds: computeStarThresholds(spec.star1, steps) };
+  return withStars({ ...config, steps }, computeStarThresholds(spec.star1, steps));
 }
 
 /**
@@ -210,7 +221,7 @@ function obstacleDemoConfig() {
     collectibles: []
   };
   const steps = computeStepBudget(config);
-  return { ...config, steps, starThresholds: computeStarThresholds(4000, steps) };
+  return withStars({ ...config, steps }, computeStarThresholds(4000, steps));
 }
 
 /** 水果关/金豆荚演示关：只在目标与掉落节奏上有别（3.6 v1.18）。 */
@@ -226,7 +237,7 @@ function collectibleDemoConfig(id, type, target) {
   };
   const steps = computeStepBudget(config);
   // 金豆荚关的三星阈值更高（3.6 v1.18 → `STAR_CONFIG.podFactor`）
-  return { ...config, steps, starThresholds: computeStarThresholds(3000, steps, { pod: type === GOAL_TYPE.POD }) };
+  return withStars({ ...config, steps }, computeStarThresholds(3000, steps, { pod: type === GOAL_TYPE.POD }));
 }
 
 /** 时间关演示关（3.6 第 8 条）：`steps: 0` + 派生出的 `timeLimit`，由 `game.tickTime` 推进倒计时。 */
@@ -241,7 +252,7 @@ function timeDemoConfig(id) {
     collectibles: []
   };
   // 时间关没有步数 ⇒ 结算阶段不转化、也没有奖励分，故结算期望分为 0（阈值不受修正影响）
-  return { ...config, steps: 0, timeLimit: computeTimeBudget(config), starThresholds: computeStarThresholds(3000, 0) };
+  return withStars({ ...config, steps: 0, timeLimit: computeTimeBudget(config) }, computeStarThresholds(3000, 0));
 }
 
 /**
@@ -284,7 +295,6 @@ export function collectibleSpecsFor(goal, rows, cols) {
  */
 export function computeStarThresholds(star1, steps, { pod = false } = {}) {
   const stars = CONFIG.STAR_CONFIG;
-  const round500 = (value) => Math.round(value / 500) * 500;
   const bonus = pod ? stars.podFactor : 1; // 3.6 v1.18：金豆荚关的三星阈值更高
   const settlement = round500(estimateSettlementScore(star1, steps) * stars.settlementCoverage);
   return [
@@ -292,6 +302,29 @@ export function computeStarThresholds(star1, steps, { pod = false } = {}) {
     round500(star1 * stars.secondFactor * bonus) + settlement,
     round500(star1 * stars.thirdFactor * bonus) + settlement
   ];
+}
+
+/**
+ * Step 24（v1.38 / D052）：**彩星线 = 三星阈值 × `STAR_CONFIG.rainbowFactor`**（默认 1.15），取整到 500。
+ * 口径来自《开心消消乐》官方公告（2020-02-28）：「每关在**达到 3 星分数之后**会出现彩星分数，
+ * 达到彩星分数之后关卡花变成漂亮的彩星关卡花」，且**彩星不计入总星星数** —— 与 20.4 预留的
+ * `rainbow` 字段语义一致（20.4 只做了字段与迁移，本步才把规则接上）。
+ * 纯函数：同一个 3★ 阈值永远算出同一条彩星线（设计期派生，不引入随机）。
+ */
+export function computeRainbowThreshold(star3) {
+  const base = Number(star3);
+  return Number.isFinite(base) && base > 0 ? round500(base * CONFIG.STAR_CONFIG.rainbowFactor) : 0;
+}
+
+/**
+ * Step 24：彩星是否获得 —— **必须通关**（3.6/3.7：未通关不给任何荣誉）且**最终分 ≥ 彩星线**。
+ * 关卡没有彩星线（旧配置 / 临时配置）时一律 false。
+ */
+export function isRainbowEarned(level) {
+  if (!level?.completed) return false;
+  const line = Number(level.rainbowThreshold);
+  if (!Number.isFinite(line) || line <= 0) return false;
+  return Number(level.currentScore) >= line;
 }
 /**
  * Step 12.2（用户批准）：难度 → 步数。**设计期派生**，不引入运行时随机性 ——

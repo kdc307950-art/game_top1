@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.37
+> 版本：v1.38
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -1125,6 +1125,38 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 
 ---
 
+## 4.6 新增 Step 24：彩星（rainbow）分数线与展示
+
+### Step 24：在三星之上加一条「彩星线」（分数制，不计入总星数）
+
+**目标**：把 20.4 预留的 `rainbow` 字段**接上规则与展示** —— 每关在三星分数线之上再加一条**彩星线**，通关且最终分达标即点亮彩星。**玩法零改动**：计分、步数、目标、星级、关卡表与所有逻辑模块的**既有语义**一律不动，只**新增**一条荣誉线。用户口径：「开始彩星分数线」。
+
+**规则来源（对齐参考游戏）**：《开心消消乐》官方公告（2020-02-28，[TapTap](https://www.taptap.cn/moment/15206728828193602)）原文 —— 「每关在**达到 3 星分数之后**会出现彩星分数，达到彩星分数之后关卡花变成漂亮的彩星关卡花」，且「**彩星不加入总星星数计算**」（当年 4 星关全部改成了彩星）。这正是 20.4 预留字段时参照的语义。
+
+**标定（先测后定，新增 `_build/measure-rainbow.mjs`）**：300 局真实对局（50 关 × 贪心/随机两档 × 3 种子，与 `measure-step20.mjs` 同一玩家模型）—— 通关 187（62.3%）；通关余步比例中位 **20.8%** / p75 39.1%；最终分 ÷ 三星阈值中位 **0.48** / **max 1.38**。⇒ ×1.10–1.30 都有**可达实例**；弱玩家通关局在 ×1.15 上的命中率约 1%（**下界**）。**用户在候选里选定 ×1.15**（分数制）。
+
+**范围**：`config.js`（`STAR_CONFIG.rainbowFactor`）、`level.js`（`computeRainbowThreshold` / `isRainbowEarned` / `withStars` 给四处关卡与演示关配置挂 `rainbowThreshold`）、`game.js`（`GameSnapshot.rainbow`）、`storage.js`（`getLevelRainbows` / `readLevelRainbows`，**存档格式不变**）、`app.js`（载入/落盘/传给地图层）、`hud.js`（结束面板的彩虹五角星 +「彩星」小字）、`vine-map.js` + `vine-map.css`（节点 `data-rainbow` + 彩虹星，SVG 静态渐变）、`tests/level.test.js`、`_build/verify-step24.mjs`。
+
+**验收**：`node tests/run-all.js` 全绿（彩星线公式与取整 / 彩星线严格高于三星线 / 只在通关且达标时给 / 缺字段不给）；`python _build/consistency_check.py` 全绿（`STAR_CONFIG.rainbowFactor` 已登记附录 B，覆盖断言扩到 **Step 0-24**）；浏览器套件 `_build/verify-step24.mjs` PASS（阈值一致性 / 快照 `rainbow` / 落盘往返 / 地图节点 `data-rainbow` 与彩虹星 / 结束面板出现彩虹色像素 / **⭐ n/150 不受彩星影响**）；**出截图交用户确认**。
+
+**禁止**：把彩星做成「第四颗星」或计入 `⭐ n/150`（20.4 与用户方案 §2.2 的口径）；改动手写关卡表（彩星线必须**由公式派生**）；给失败局发彩星；引入素材或依赖（D009）；在 canvas 用每帧渐变或 `shadowBlur` 画彩星（D043/D044）；在 SVG 侧用 `feGaussianBlur` / `drop-shadow` 等视觉滤镜（D049 第 2 条）；改存档格式（v2 的 `{ stars, rainbow }` 早已就位）。
+
+**前置依赖**：Step 20.4 已落地（v2 存档的 `rainbow` 字段与 `readLevelRecords` / `recordLevelStars({ rainbow })` 就位）；用户已选定规则形式与系数（分数制 ×1.15）。
+
+**参考**：《开心消消乐》官方公告「【功能优化】余步分数调整，彩星功能上线」（TapTap，2020-02-28）；`DECISIONS.md` **D042**（20.4 的字段预留）与 **D052**（本步口径与标定）。
+
+**提示词**：
+```text
+任务：实现 Step 24 彩星（rainbow）分数线与展示（分数制：彩星线 = 三星阈值 × 1.15，不计入总星数）
+开始前：读 AGENTS.md（3.7 / 4.2 / 4.4 / 附录 B）、ROADMAP.md §4.6、DECISIONS.md D042 与 D052、PROGRESS.md 的 20.4 记录
+范围：config.js 加 STAR_CONFIG.rainbowFactor；level.js 加 computeRainbowThreshold / isRainbowEarned 并给四处配置挂 rainbowThreshold；game.js 快照加 rainbow；storage.js 加 getLevelRainbows / readLevelRainbows（存档格式不变）；app.js 载入/落盘/传参；hud.js 结束面板画彩虹五角星；vine-map.js + vine-map.css 画节点彩星
+验收：tests/run-all.js 与 consistency_check.py 全绿；verify-step24.mjs PASS（阈值/快照/落盘/地图标记/面板像素/⭐ 不受影响）；出截图交用户确认
+禁止：把彩星做成第四颗星或计入 ⭐ n/150；手写彩星线；失败局发彩星；引入素材/依赖；canvas 每帧渐变或 shadowBlur；SVG 视觉滤镜；改存档格式
+前置依赖：Step 20.4（v2 存档字段就位）、用户选定「分数制 ×1.15」
+```
+
+---
+
 ## 5. 完成记录
 
 ### 第一阶段
@@ -1163,6 +1195,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [x] **Step 21**：对局 UI 视觉升级（21.1 HUD 果汁化 / 21.2 道具栏与设置齿轮 / 21.3 棋子拟人化与质感重烘焙，**三步全部完成**，见 §4.3 与 DECISIONS D048；21.3 之后又按用户视觉评审做了 **P0/P1/P1.5/P2** 四项返工 —— 特殊糖果发光线与高对比条纹、步数 ≤5 红色警告与心跳、道具栏深色底 + 果冻图标且标签不折行、三处普通糖果细节、棋盘暖色环境光，见 DECISIONS **D050**）
 - [x] **Step 22**：藤蔓地图「共生」重构（22.1 坐标口径翻转 / 22.2 曲线穿过节点 + 藤蔓渐粗 **已完成**；**22.3 视觉降噪与焦点待开工**，见 §4.4 与 DECISIONS D049）
 - [x] **Step 23**：对局页「满屏竖版」配比（画布 390×744 铺满、HUD 47 → 123px、棋盘区 311 → 370px、格边长 38.9 → 46.25px、HUD 之下与棋盘之下不再留空白，见 §4.5 与 DECISIONS **D051**）
+- [x] **Step 24**：彩星分数线与展示（分数制：**彩星线 = 三星阈值 × 1.15**，通关且达标即点亮；结束面板画彩虹五角星、藤蔓地图节点挂彩星标记；**不计入 ⭐ n/150**，见 §4.6 与 DECISIONS **D052**）
 
 ---
 
@@ -1170,6 +1203,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 
 | 版本 | 日期 | 修改人 | 原因 | 影响范围 |
 |---|---|---|---|---|
+| v1.38 | 2026-09-26 | Agent（用户口径「开始彩星分数线」，规则与系数由用户拍板） | 与宪法 v1.38 同步：**新增 §4.6 Step 24「彩星分数线与展示」** —— 分数制（彩星线 = 三星阈值 × `STAR_CONFIG.rainbowFactor` 1.15，**标定脚本 `measure-rainbow.mjs` 的 300 局实测**）、`isRainbowEarned` 只在通关且达标时给、`GameSnapshot.rainbow` 纯追加、`storage.getLevelRainbows` 派生量（**存档格式不变**）、结束面板彩虹星与地图节点彩星标记、**不计入 ⭐ n/150**；顺带把 §5 完成记录里 Step 12/13/14/15 的过期勾选与 Step 21/22/23/24 一并补齐 | §4.6、§5、第 6 节 |
 | v1.1 | 2026-09-18 | Agent | 初始版本 | 全文 |
 | v1.2 | 2026-09-18 | Agent | 补全 `REFERENCES.md` 交叉引用、明确 ESM 运行方式、补全 Step 7-18 提示词、修正 Step 6/13/14/16/17 的禁止项与测试项 | 第 0 节、各 Step、第 6 节 |
 | v1.3 | 2026-09-18 | Agent | Step 0 范围与验收补 `REFERENCES.md`（M1）、Step 6 措辞去歧义（M5）、Step 16 标注 `assets/` 启用时点（M2） | Step 0、Step 6、Step 16、第 6 节 |

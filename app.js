@@ -73,6 +73,7 @@ const view = {
   levelId: demoLevelRequested(), // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=` 进演示关）
   screen: 'playing', // 'playing' | 'select'：对局界面与藤蔓地图（19.2 起地图是画布外的 DOM 层）
   levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
+  levelRainbows: {}, // Step 24：拿到彩星的关卡 `{ id: true }`（派生量，供地图节点画彩星标记）
   mapDrag: null, // 19.5：地图拖拽的临时状态（{ startY, startOffset, lastY, lastT, velocity, moved }）
   mapInertia: 0, // 19.5：松手后惯性滑动的 rAF id（0 = 没有在滑）
   mapDragged: false, // 19.5：这一轮手势是「拖拽」而不是「点按」—— 用来抑制随后那次 click
@@ -135,6 +136,7 @@ function init() {
   view.ctx = ctx;
   view.best = storage.readBestScore();
   view.levelStars = storage.readLevelStars(); // Step 12.2：载入每关星级（选关界面用）
+  view.levelRainbows = storage.readLevelRainbows(); // Step 24：载入彩星表（同一份 v2 记录派生）
   view.boosters = storage.readBoosters(); // Step 15（3.9）：载入道具数量
   view.prefs = storage.readPrefs(); // Step 16（5.6）：载入音效/震动偏好
   view.audio = createAudio({ logger: log, isEnabled: () => view.prefs.sound });
@@ -921,6 +923,7 @@ function drawMap() {
   }
   renderMap(host, {
     stars: view.levelStars,
+    rainbows: view.levelRainbows, // Step 24：彩星标记（彩星不计入 starTotal）
     current: view.levelId,
     centerOn: view.levelId,
     totalStars,
@@ -1111,8 +1114,12 @@ function finishGame() {
   }
   if (snapshot.won) {
     // Step 12.2：每关只记录最佳星级（重玩更好才覆盖），并立刻落盘（v1.16：落盘在 storage.js）
-    const starRecord = storage.recordLevelStars(view.levelStars, view.levelId, snapshot.stars);
+    // Step 24（v1.38 / D052）：同时落彩星标记（`options.rainbow` 缺省沿用该关既有标志，
+    // 因此「这一局没拿到彩星」不会把之前拿到的彩星抹掉）。
+    const starRecord = storage.recordLevelStars(view.levelStars, view.levelId, snapshot.stars, { rainbow: snapshot.rainbow });
+    view.levelRainbows = storage.readLevelRainbows(); // 地图节点立刻能看到彩星
     log('info', `第 ${view.levelId} 关星级记录为 ${starRecord.best} 星（${starRecord.updated ? '更新' : '沿用旧纪录'}，已写入 localStorage）`);
+    if (snapshot.rainbow) log('info', `第 ${view.levelId} 关达成**彩星**（最终分 ≥ 彩星线，不计入总星数）`);
   }
   log(
     'info',

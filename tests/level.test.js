@@ -15,6 +15,7 @@ import {
   computeStarThresholds,
   computeStepBudget,
   computeTimeBudget,
+  computeRainbowThreshold,
   consumeStep,
   consumeTime,
   createLevel,
@@ -23,6 +24,7 @@ import {
   grantTime,
   HIDDEN_LEVEL_IDS,
   isLevelUnlocked,
+  isRainbowEarned,
   isTianbianOpen,
   isTimeLevel,
   unlockStarsFor
@@ -512,6 +514,40 @@ test('天边云层：门槛来自 UNLOCK_CONFIG.tianbianStars，且隐藏关不�
   assertTrue(cfg.tianbianStars <= LEVEL_COUNT * 3, '天边门槛不超过主线满星数');
   assertTrue(HIDDEN_LEVEL_IDS.every((id) => id > LEVEL_COUNT), '隐藏关在主线圈之外');
   assertEqual(LEVEL_COUNT, 50, '主线仍是 50 关（总星数分母 150 不变）');
+});
+
+// ---------------------------------------------------------------------------
+// Step 24（v1.38 / D052）：彩星分数线与获得条件（分数制：彩星线 = 三星阈值 × rainbowFactor）
+// ---------------------------------------------------------------------------
+test('彩星线 = round500(三星阈值 × STAR_CONFIG.rainbowFactor)，且严格高于三星线', () => {
+  const factor = CONFIG.STAR_CONFIG.rainbowFactor;
+  assertEqual(factor, 1.15, '系数取自附录 B（默认 1.15）');
+  assertEqual(computeRainbowThreshold(20000), 23000, '20000 × 1.15 = 23000（已对齐 500 格）');
+  assertEqual(computeRainbowThreshold(12340), 14000, '12340 × 1.15 = 14191 → 取整到 14000');
+  assertEqual(computeRainbowThreshold(0), 0, '没有三星阈值就没有彩星线（不造出「0 分也能拿彩星」的漏洞）');
+  assertEqual(computeRainbowThreshold(-5), 0, '脏输入按 0 处理');
+  // 50 关 + 全部演示关：彩星线都必须严格高于三星阈值
+  const ids = [...Array(LEVEL_COUNT)].map((_, i) => i + 1).concat(DEMO_LEVEL_IDS);
+  for (const id of ids) {
+    const cfg = getLevelConfig(id);
+    const t3 = cfg.starThresholds[2];
+    assertTrue(cfg.rainbowThreshold > t3, `第 ${id} 关彩星线 ${cfg.rainbowThreshold} > 三星线 ${t3}`);
+    assertEqual(cfg.rainbowThreshold, computeRainbowThreshold(t3), `第 ${id} 关彩星线由公式派生（不手写）`);
+    const ratio = cfg.rainbowThreshold / t3;
+    assertTrue(ratio >= 1.1 && ratio <= 1.2, `第 ${id} 关彩星线 / 三星线 = ${ratio.toFixed(3)} 落在 [1.10, 1.20]`);
+  }
+});
+
+test('彩星只在「通关 + 最终分 ≥ 彩星线」时获得', () => {
+  const cfg = getLevelConfig(1);
+  const base = { rainbowThreshold: cfg.rainbowThreshold, currentScore: cfg.rainbowThreshold, completed: true };
+  assertTrue(isRainbowEarned(base), '刚好达到彩星线 → 给');
+  assertTrue(isRainbowEarned({ ...base, currentScore: cfg.rainbowThreshold + 1 }), '超过彩星线 → 给');
+  assertFalse(isRainbowEarned({ ...base, currentScore: cfg.rainbowThreshold - 1 }), '差 1 分 → 不给');
+  assertFalse(isRainbowEarned({ ...base, completed: false }), '未通关（步数用尽/时间到）→ 即使分数够也不给');
+  assertFalse(isRainbowEarned({ ...base, rainbowThreshold: undefined }), '关卡没有彩星线 → 不给');
+  assertFalse(isRainbowEarned({ ...base, rainbowThreshold: 0 }), '彩星线为 0（异常数据）→ 不给');
+  assertFalse(isRainbowEarned(null), '空对象 → 不给');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

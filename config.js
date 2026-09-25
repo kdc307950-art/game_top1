@@ -216,7 +216,13 @@ export const CONFIG = {
     secondFactor: 1.7,
     thirdFactor: 2.5,
     podFactor: 1.2,
-    settlementCoverage: 0.6
+    settlementCoverage: 0.6,
+    // Step 24（v1.38 / D052）：**彩星线 = 三星阈值 × rainbowFactor**（取整到 500）。
+    // 口径来自《开心消消乐》官方公告：「每关在达到 3 星分数之后会出现彩星分数，达到彩星分数之后关卡花变成彩星」，
+    // 且彩星**不计入总星星数**（与 20.4 预留的 `rainbow` 字段语义一致）。
+    // 1.15 由 `_build/measure-rainbow.mjs` 标定：300 局里最好的一局达到 1.38 × 3★（存在可达实例），
+    // 而弱玩家通关局的命中率只有 ~1%（下界）——人类会明显更高，因此 1.15 既够得着、又保持稀有。
+    rainbowFactor: 1.15
   },
 
   // 步数由难度派生（Step 12.2，用户批准）：「难度分 → 步数」公式的系数（附录 B 逐键登记）。

@@ -124,6 +124,20 @@ export function getTotalRainbows(records) {
 }
 
 /**
+ * Step 24（v1.38 / D052）：把 v2 记录表摊平成 `{ 关卡id: true }`（**只为拿到彩星的关卡留键**），
+ * 供地图层在节点上画彩星标记。与 `getTotalRainbows` 同一口径：只认**严格布尔** `true`，
+ * 脏数据（字符串 / 数字）一律不算；非数字键忽略。
+ */
+export function getLevelRainbows(records) {
+  const out = {};
+  for (const [key, entry] of Object.entries(records ?? {})) {
+    if (!/^\d+$/.test(key)) continue;
+    if (entry && typeof entry === 'object' && entry.rainbow === true) out[key] = true;
+  }
+  return out;
+}
+
+/**
  * 总星数（v1.21，用户方案 §1.3）：**派生量**，不进存档 —— 存了就会有两处真相源，
  * 与 4.2 对分数的口径一致（「分数不另存字段，统一读 level.currentScore」）。
  */
@@ -255,6 +269,11 @@ export function createStorage(logger = () => {}, backend = localStorageBackend) 
     /** 彩星数量（派生量，不入存档；**不计入总星数**，见 `getTotalRainbows`）。 */
     readTotalRainbows() {
       return getTotalRainbows(this.readLevelRecords());
+    },
+
+    /** Step 24：拿到彩星的关卡表 `{ 关卡id: true }`（派生量，供地图层画彩星标记）。 */
+    readLevelRainbows() {
+      return getLevelRainbows(this.readLevelRecords());
     },
 
     /**

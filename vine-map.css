@@ -388,6 +388,15 @@
   stroke-width: 1;
 }
 
+/* Step 24（v1.38 / D052）：彩星标记 —— 用 `<defs>` 里的**静态**彩虹渐变填充（1 个元素、零脚本动画）。
+   ⚠️ 刻意**不用任何滤镜**（`drop-shadow` / `feGaussianBlur` 都属 D049 第 2 条禁用的视觉滤镜）：
+   存在感靠「彩虹填充 + 亮金描边 + 比三星略粗的描边」表达，与既有光影口径一致。 */
+.vine-node-star--rainbow {
+  fill: url(#vine-rainbow);
+  stroke: #fff3c4;
+  stroke-width: 1.6;
+}
+
 .vine-node:focus-visible .vine-node-body {
   stroke: var(--vine-gold);
   stroke-width: 3.5;

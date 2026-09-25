@@ -49,6 +49,9 @@ const FLOAT_OUTLINE = 'rgba(28, 22, 48, 0.85)';
 // 连击文案：第 3 / 4 / 5+ 层各一句（`comboText` 是纯函数，可在 Node 里测）
 const COMBO_TEXTS = ['太棒了！', '干得好！', '不可思议！'];
 const COMBO_FROM_LEVEL = 2; // 级联层下标 ≥ 2（= 第 3 层）起显示连击文案
+// Step 24（v1.38 / D052）：彩星标记的配色（五角星按**五个角**分色，纯几何填充、无渐变）。
+const RAINBOW_COLORS = ['#ff5f6d', '#ffb340', '#ffe14d', '#4ecb71', '#a06bff'];
+const RAINBOW_LABEL_COLOR = '#ffe9a8';
 
 /** HUD 四个信息格的位置（静态图层与文字共用，避免两处各算一遍）。v1.14：3 格 → 4 格（5.5）。
  *  Step 23：横向按**画布宽**（满宽 HUD 带）、纵向按**HUD 带高**摊开 —— 卡片因此接近正方形。 */
@@ -194,8 +197,7 @@ export function drawHud(ctx, { canvasW, hudHeight, hud, nowMs = 0 }) {
   });
 }
 
-/** Step 23：把字号压到「这段文本恰好放得进 `maxWidth`」（只量一次：按宽度比线性缩放，不循环）。 */
-function fitSize(ctx, text, maxWidth, want, weight) {
+/** Step 23：把字号压到「这段文本恰好放得进 `maxWidth`」（只量一次：按宽度比线性缩放，不循环）。 */function fitSize(ctx, text, maxWidth, want, weight) {
   const size = Math.max(8, Math.round(want));
   ctx.font = `${weight} ${size}px ${FONT_STACK}`;
   const measured = ctx.measureText(text).width;
@@ -333,6 +335,25 @@ export function drawBanner(ctx, field, text) {
   ctx.fillText(text, field.x + field.side / 2, y + h / 2);
 }
 
+/**
+ * Step 24（v1.38 / D052）：彩星标记 —— 五角星按**五个角**分色（每角一次三角形填充，共 5 次）。
+ * 纯几何、静态颜色：没有渐变、没有阴影模糊类 API（D043/D044 的红线对「结束面板」同样适用）。
+ */
+function drawRainbowStar(ctx, cx, cy, r) {
+  for (let i = 0; i < 5; i += 1) {
+    const a0 = -Math.PI / 2 + (i * Math.PI * 2) / 5;
+    const a1 = a0 + Math.PI / 5;
+    const a2 = a0 + (Math.PI * 2) / 5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r);
+    ctx.lineTo(cx + Math.cos(a1) * r * 0.46, cy + Math.sin(a1) * r * 0.46);
+    ctx.lineTo(cx + Math.cos(a2) * r, cy + Math.sin(a2) * r);
+    ctx.closePath();
+    ctx.fillStyle = RAINBOW_COLORS[i % RAINBOW_COLORS.length];
+    ctx.fill();
+  }
+}
+
 export function drawGameOver(ctx, field, overlay) {
   // overlay.reason：'won'（达成 3.6 的目标）/ 'steps'（步数用尽）/ 'stuck'（3.8 约束 4：死局重排超限）
   // / 'time'（v1.19：时间关倒计时归零且目标未达成，3.6 v1.18）
@@ -376,6 +397,18 @@ export function drawGameOver(ctx, field, overlay) {
     ctx.font = `${line.weight} ${Math.round(field.side * line.size)}px ${FONT_STACK}`;
     ctx.fillStyle = line.color;
     ctx.fillText(line.text, cx, py + panelH * line.at);
+  }
+
+  // Step 24（v1.38 / D052）：**彩星** —— 星星行右侧一枚彩虹五角星 +「彩星」小字。
+  // 纯几何（每个角一次填充，共 5 次；**零渐变、零阴影**，与 D043/D044 一致），只在通关且达标时画。
+  if (overlay.rainbow && stars > 0) {
+    const r = panelH * 0.09;
+    const bx = cx + panelW * 0.3;
+    const by = py + panelH * 0.3;
+    drawRainbowStar(ctx, bx, by, r);
+    ctx.font = `700 ${Math.round(field.side * 0.032)}px ${FONT_STACK}`;
+    ctx.fillStyle = RAINBOW_LABEL_COLOR;
+    ctx.fillText('彩星', bx, by + r * 2);
   }
 
   // Step 12.2：通关后有「下一关」（最后一关除外），失败时是「重试」；两者都带「选关」
