@@ -123,6 +123,12 @@ export function createRenderer() {
 // 21.1（D048）：HUD 卡片的烘焙材质。纯观感常量按 D013 就地，不进规则层。
 const CARD_SHADOW_COLOR = 'rgba(6, 4, 14, 0.45)';
 const CARD_HIGHLIGHT_COLOR = 'rgba(255, 255, 255, 0.1)';
+// P2：棋盘暖色环境光 —— 竖直渐变 + 加色混合，天花板上洒下来的一层暖光。
+// 三段的量级是算好的：顶部在 `#221d38`(34,29,56) 上叠加 ≈ (22,15,9) ⇒ R−B 由 −22 抬到 ≈ −9、
+// 亮度仍只有 ≈ 55（暗盘没被洗白、糖果依旧跳出来）；底部只剩 ≈ (8,5,3) ⇒ 上暖下冷的方向感。
+const AMBIENT_LIGHT_TOP = 'rgba(255, 178, 108, 0.085)';
+const AMBIENT_LIGHT_MID = 'rgba(255, 172, 100, 0.05)';
+const AMBIENT_LIGHT_BOTTOM = 'rgba(255, 166, 94, 0.03)';
 
 /** 静态图层：背景 + HUD 底 + 棋盘区底。一帧内不变，烘焙后每帧只 drawImage 一次（红线 2）。 */
 function buildChrome(sizePx, dpr, layout) {
@@ -168,6 +174,22 @@ function buildChrome(sizePx, dpr, layout) {
       ctx.fill();
     }
   }
+  // P2（用户评审「深色棋盘看久了累」）：**极淡的暖色环境光**。
+  // 一盏「室内暖灯」从棋盘上方落下来（竖直渐变 + **加色混合**），给偏冷的暗紫底盘补上一点环境暖色；
+  // 用加色而不是覆盖，格位槽自己的层次一分不减；渐变压在 HUD 与糖果**之下**，只在空隙里看得见。
+  // 整块只在**布局期**烘焙一次（红线 2：零每帧渐变），纯几何渐变、**不含任何模糊滤镜**（D043/D044）；
+  // 裁剪在棋盘圆角内，绝不会溢到 HUD 或道具条。
+  ctx.save();
+  roundRectPath(ctx, x, y, side, side, side * FIELD_RADIUS_RATIO);
+  ctx.clip();
+  ctx.globalCompositeOperation = 'lighter';
+  const warm = ctx.createLinearGradient(0, y, 0, y + side);
+  warm.addColorStop(0, AMBIENT_LIGHT_TOP);
+  warm.addColorStop(0.55, AMBIENT_LIGHT_MID);
+  warm.addColorStop(1, AMBIENT_LIGHT_BOTTOM);
+  ctx.fillStyle = warm;
+  ctx.fillRect(x, y, side, side);
+  ctx.restore();
   return canvas;
 }
 

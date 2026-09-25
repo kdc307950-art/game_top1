@@ -29,9 +29,10 @@ const BLUSH_COLOR = 'rgba(255, 186, 202, 0.5)'; // 偏**浅**的粉（在红糖�
 const STRIPE_COLOR = 'rgba(255, 255, 255, 0.96)';
 /** P0-1（用户 2026-09-26）：条纹的**深色边** —— 浅色棋子（尤其黄）上白纹对比不足，
  *  在每条白纹下面先铺一条深色描边，任何底色上都能读出「高对比度条纹」。
- *  颜色刻意用**中性暗**（不是棕色）：混向中性暗能**保住底色的色相**，
- *  否则格心取样会偏 20°+，`verify-step12b` 那类「按色相识别棋子」的探针会被打扰。 */
-const STRIPE_EDGE_COLOR = 'rgba(20, 16, 30, 0.58)';
+ *  ⚠️ 颜色是**底色自己的深色版**（`mixHex(base, …, STRIPE_EDGE_MIX)`），不是中性黑：
+ *  混向中性暗会把红糖果的色相从 358° 拉到 330°（格心取样偏 28°，实测），
+ *  混向「底色的深色版」则**精确保留色相**，同时与白纹的对比度更高（黄糖果实测 132→ 更高）。 */
+const STRIPE_EDGE_MIX = 0.62;
 const STRIPE_EDGE_RATIO = 0.22; // 深色边的厚度 / 糖果半径（白纹 0.16r 居中叠在它上面）
 const STRIPE_CORE_RATIO = 0.16; // 白纹厚度 / 糖果半径（21.3 v3 由 0.14 加厚）
 const ARROW_COLOR = 'rgba(255, 255, 255, 0.96)';
@@ -115,17 +116,27 @@ export const BASE_COLORS = ['#f2555a', '#f7a325', '#ffd93b', '#4ecb71', '#38b6ff
 // 三角形原本 `outer 1.12 + squash 0.62` ⇒ 纵向半高 1.81r，而精灵只有 0.5 格 = 1.39r
 // ⇒ **顶部顶点被精灵边界裁掉**（黄三角形的尖被削平，实测最外 1px 有 13 个不透明像素、minY = 0）。
 // 21.3 v2 按用户反馈「加宽主体、软化尖角、降低纵向尖长」进一步调整为 outer 0.9 + squash 0.34。
+// `round`（P1.5 / 用户评审第 2 条）：多边形与星形的**圆角半径**（× 糖果半径）—— 消除「硬边」。
+// `rim` / `lift`（P1.5 / 用户评审第 3 条）：该形状的**暗边浓度**与主体上移量 —— 橙方原本
+// 「像被框死」是因为所有形状共用 0.45 的暗边，改成 0.32 + 更小的上移量后更通透。
 const SHAPES = [
   { kind: 'circle', face: 1 },
-  { kind: 'roundRect', corner: 0.42, face: 0.94 },
+  { kind: 'roundRect', corner: 0.42, face: 0.94, rim: 0.32, lift: 0.035 },
   // 21.3 v2/v3 按用户反馈「加宽主体、软化尖角、降低纵向尖长」调整：
   // `outer 0.9→1.0`、`squash 0.34→0.16` ⇒ 宽 1.73r、纵向半高 **1.16r**（更矮更宽、视觉重量向红圆/橙方靠齐），
   // 也**给发光线留出余量**（1.16 × 1.10 + 0.07 = 1.35r < 精灵 1.389r）。
-  { kind: 'polygon', sides: 3, spin: 0, outer: 1, squash: 0.16, face: 0.9 },
-  { kind: 'polygon', sides: 4, spin: 0, outer: 1.06, face: 0.82 },
-  { kind: 'star', points: 5, outer: 1.08, inner: 0.52, face: 0.86 },
-  { kind: 'polygon', sides: 6, spin: 0, outer: 1.02, face: 0.94 }
+  { kind: 'polygon', sides: 3, spin: 0, outer: 1, squash: 0.16, face: 0.9, round: 0.2 },
+  { kind: 'polygon', sides: 4, spin: 0, outer: 1.06, face: 0.82, round: 0.24 },
+  { kind: 'star', points: 5, outer: 1.08, inner: 0.52, face: 0.86, round: 0.13 },
+  // 蓝六边形顺手也给一点圆角（同一条规则：多边形的角一律倒角，避免「几何棋子」感）——
+  // 它的内角是 120°、本来就最「钝」，故取比绿菱更小的 0.16。
+  { kind: 'polygon', sides: 6, spin: 0, outer: 1.02, face: 0.94, round: 0.16 }
 ];
+
+// P1.5：倒角半径的**安全上限** —— 每个角最多「吃掉」相邻两条边各自 45% 的长度。
+// `arcTo` 的切点到顶点的距离是 `R / tan(ψ/2)`（ψ = 被切掉的那个夹角），
+// 两端相加一旦超过边长，两个圆角就会重叠自交。纯造型常量，按 D013 留在模块内。
+const FILLET_EDGE_SHARE = 0.45;
 
 /**
  * 糖果精灵图集：每个颜色 5 张（普通 / 横向条纹 / 纵向条纹 / 包装 / 魔力鸟），共 30 张。
@@ -477,7 +488,7 @@ function paintLayerBadge(ctx, size, layers) {
  *   ③ 主体：径向渐变，**光源固定在左上**（`cx − 0.32r, cy − 0.42r`）。
  * `light` / `dark` / `rim` 允许微调，但**光源位置与三层结构对所有棋子一致**。
  */
-function paintVolume(ctx, shape, cx, cy, radius, base, { light = 0.55, dark = 0.22, rim = RIM_MIX, shadow = BAKED_SHADOW } = {}) {
+function paintVolume(ctx, shape, cx, cy, radius, base, { light = 0.55, dark = 0.22, rim = RIM_MIX, shadow = BAKED_SHADOW, lift = 0.05 } = {}) {
   ctx.fillStyle = shadow;
   shapePath(ctx, shape, cx + radius * 0.05, cy + radius * 0.11, radius * 0.99);
   ctx.fill();
@@ -491,7 +502,7 @@ function paintVolume(ctx, shape, cx, cy, radius, base, { light = 0.55, dark = 0.
   grad.addColorStop(0.5, base);
   grad.addColorStop(1, mixHex(base, '#000000', dark));
   ctx.fillStyle = grad;
-  shapePath(ctx, shape, cx - radius * 0.03, cy - radius * 0.05, radius * 0.97);
+  shapePath(ctx, shape, cx - radius * 0.03, cy - radius * lift, radius * 0.97);
   ctx.fill();
 }
 
@@ -515,7 +526,8 @@ function paintGloss(ctx, cx, cy, radius) {
  * 全部为路径/渐变绘制：不使用阴影模糊类 API（红线 1，见 REFERENCES §3.5）。
  */
 function paintCandy(ctx, cx, cy, radius, base, shape, withFace = true) {
-  paintVolume(ctx, shape, cx, cy, radius, base);
+  // P1.5：暗边浓度与主体上移量可以**逐形状**覆盖（橙方用更轻的 rim ⇒ 不再「被框死」）
+  paintVolume(ctx, shape, cx, cy, radius, base, { rim: shape.rim ?? RIM_MIX, lift: shape.lift ?? 0.05 });
 
   // 内嵌图案 + 高光 + 表情都在形状裁剪区里画，避免溢出到相邻格子
   ctx.save();
@@ -525,7 +537,7 @@ function paintCandy(ctx, cx, cy, radius, base, shape, withFace = true) {
   const motif = mixHex(base, '#000000', MOTIF_MIX);
   ctx.fillStyle = motif;
   ctx.strokeStyle = motif;
-  paintMotif(ctx, shape, cx, cy, radius);
+  paintMotif(ctx, shape, cx, cy, radius, base);
   ctx.globalAlpha = 1;
   paintGloss(ctx, cx, cy, radius);
   if (withFace) paintFace(ctx, cx, cy, radius * (shape.face ?? 1), base);
@@ -567,12 +579,18 @@ function paintFace(ctx, cx, cy, r, base) {
 /** 内嵌图案：每种形状一个可辨识的小图案，与形状同族但更小，避免细格子里糊成一团。
  *  **不使用横向/纵向长条**（用户反馈第 5 条：长条会被误读为条纹特效的线索）——
  *  方形改「小圆角方框」、六边形改「小六边形框」、菱形改「小菱形框」，与条纹糖果一眼分开。 */
-function paintMotif(ctx, shape, cx, cy, r) {
+function paintMotif(ctx, shape, cx, cy, r, base) {
   if (shape.kind === 'circle') {
-    ctx.lineWidth = r * 0.15;
+    // P1.5（用户评审）：原来是**一圈实心描边**（深色圆环）—— 看起来像「外贴上去的圆片」。
+    // 改成**由中心深色向边缘淡出的径向渐变**（烘焙期一次性，不是每帧），彻底消除贴纸感。
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.58);
+    g.addColorStop(0, mixHex(base, '#000000', MOTIF_MIX));
+    g.addColorStop(0.5, mixHex(base, '#000000', MOTIF_MIX * 0.6));
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(cx, cy, r * 0.34, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.arc(cx, cy, r * 0.58, 0, Math.PI * 2);
+    ctx.fill();
     return;
   }
   if (shape.kind === 'roundRect') {
@@ -657,7 +675,7 @@ function paintStripedCandy(ctx, cx, cy, radius, base, shape, direction) {
   };
   for (let i = -1; i <= 1; i += 1) {
     const offset = i * radius * 0.34;
-    bar(offset, radius * STRIPE_EDGE_RATIO, STRIPE_EDGE_COLOR); // 深色边（先画，白纹压在它上面）
+    bar(offset, radius * STRIPE_EDGE_RATIO, mixHex(base, '#000000', STRIPE_EDGE_MIX)); // 底色的深色版（保色相）
     bar(offset, radius * STRIPE_CORE_RATIO, STRIPE_COLOR); // 高对比度白纹
   }
   ctx.restore();
@@ -808,22 +826,59 @@ function paintMagicCandy(ctx, cx, cy, radius) {
     return;
   }
   const tips = shape.kind === 'star' ? shape.points * 2 : shape.sides;
-  ctx.beginPath();
+  const pts = [];
   for (let i = 0; i < tips; i += 1) {
     const isInner = shape.kind === 'star' && i % 2 === 1;
     const length = isInner ? r * shape.inner : r * shape.outer;
     const angle = -Math.PI / 2 + (i * Math.PI * 2) / tips;
-    const x = cx + Math.cos(angle) * length;
     // squash 让三角形/菱形等比拉伸，避免细长失真
-    const y = cy + Math.sin(angle) * length * (1 + (shape.squash ?? 0));
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    pts.push({ x: cx + Math.cos(angle) * length, y: cy + Math.sin(angle) * length * (1 + (shape.squash ?? 0)) });
   }
+  // P1.5（用户评审「绿菱硬边」）：`shape.round` 让多边形的角**圆润**（软糖感），
+  // 用 `arcTo` 在「顶点 ← 相邻边中点」之间倒角 —— 与「描边加粗假装圆角」不同，
+  // 它不会把形状撑大，因此不会顶破精灵边界（探针逐张量最外 1px 必须全透明）。
+  const corner = (shape.round ?? 0) * r;
+  if (corner > 0.5) {
+    const n = pts.length;
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const start = mid(pts[n - 1], pts[0]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    for (let i = 0; i < n; i += 1) {
+      const next = pts[(i + 1) % n];
+      const to = mid(pts[i], next);
+      // ⚠️ 半径必须**逐角夹紧**（见 `filletRadius`）：五星的边长只有 0.73r 左右，
+      // 而外尖的切点距离是 `R / tan(18°) ≈ 3.08R`，R 取 0.13r 时两端切点相加会**超过边长**
+      // ⇒ 相邻两个圆角互相重叠、路径自交（渲染出毛刺）。夹紧后既不会重叠，也不会把形状撑大。
+      ctx.arcTo(pts[i].x, pts[i].y, to.x, to.y, filletRadius(pts[(i + n - 1) % n], pts[i], next, corner));
+    }
+    ctx.closePath();
+    return;
+  }
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
   ctx.closePath();
 }
 
-/** 圆角矩形路径（Canvas 提供的 roundRect 在部分旧版移动浏览器缺失，故自行绘制）。 */
-export function roundRectPath(ctx, x, y, w, h, r) {
+/**
+ * P1.5：算某个顶点的**安全倒角半径**。
+ * `arcTo` 的切点到顶点的距离 `t = R / tan(ψ/2)`（ψ = 两条边之间的夹角，凸角就是内角、
+ * 凹角（五星的内凹点）就是被切掉的缺口角 —— 两者都恰好等于两条边向量的夹角），
+ * 因此只要保证「相邻两条边各自最多被吃掉 45%」，同一顶点两侧的圆角永远不会重叠。
+ * 返回值恒 ≤ `want`：形状因此**只可能被倒角、不可能被撑大**（精灵边界安全）。
+ */
+function filletRadius(prev, cur, next, want) {
+  const e1 = Math.hypot(prev.x - cur.x, prev.y - cur.y);
+  const e2 = Math.hypot(next.x - cur.x, next.y - cur.y);
+  if (e1 < 1e-6 || e2 < 1e-6) return 0;
+  const ux = (prev.x - cur.x) / e1, uy = (prev.y - cur.y) / e1;
+  const vx = (next.x - cur.x) / e2, vy = (next.y - cur.y) / e2;
+  const wedge = Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy)));
+  const limit = FILLET_EDGE_SHARE * Math.min(e1, e2) * Math.tan(wedge / 2);
+  return Math.max(0, Math.min(want, limit));
+}
+
+/** 圆角矩形路径（Canvas 提供的 roundRect 在部分旧版移动浏览器缺失，故自行绘制）。 */export function roundRectPath(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
