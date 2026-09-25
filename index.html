@@ -26,6 +26,8 @@
          图标一律是**内联 SVG**（零素材 D009：不引入任何图片文件）。 -->
     <div id="controls">
       <div id="boosters" role="group" aria-label="道具">
+        <!-- P1 修复（用户 2026-09-26 评审）：标签一律**两个字**，三个键等宽、单行显示。
+             `aria-label` 保留完整名称（无障碍读出来仍是「加五步 / 小木锤」）。 -->
         <button class="booster" type="button" data-kind="refresh" aria-label="刷新">
           <span class="booster-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8" fill="none"/><path d="M20 4.5V9h-4.5" fill="none"/></svg>
@@ -37,14 +39,14 @@
           <span class="booster-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M7 4h4v5.5c2.9.4 5 2.6 5 5.5v4H7z"/></svg>
           </span>
-          <span class="booster-label">加五步</span>
+          <span class="booster-label">加步</span>
           <span class="booster-count">0</span>
         </button>
         <button class="booster" type="button" data-kind="hammer" aria-label="小木锤">
           <span class="booster-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M13.5 3.5 20 10l-2.2 2.2-6.5-6.5z"/><path d="m11.2 9.2 3.6 3.6-6.4 6.4-3.6-3.6z"/></svg>
           </span>
-          <span class="booster-label">小木锤</span>
+          <span class="booster-label">木锤</span>
           <span class="booster-count">0</span>
         </button>
       </div>

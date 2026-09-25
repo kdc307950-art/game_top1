@@ -89,16 +89,18 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-width: 88px;
-  padding: 8px 11px 10px;
+  gap: 5px;
+  min-width: 84px;
+  padding: 8px 9px 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
   /* HUD 同款深色底：半透明白的顶光叠在深紫面板上（与 canvas 里的卡片同一语言） */
   background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.045) 100%);
   background-color: #241f3a;
   color: #f2f0ff;
-  font: 700 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* P1 修复（用户评审「文字换行太出戏」）：字号 13 → 12.5、内边距与间距各收 1–2px，
+     给「两个字」的标签留出余量 —— 360px 宽的机型也不折行（探针在 390/360 两种宽度都量）。 */
+  font: 700 12.5px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   cursor: pointer;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 3px 0 #15112a, 0 6px 12px rgba(0, 0, 0, 0.35);
   transition: transform 120ms ease-out, box-shadow 120ms ease-out;
@@ -115,8 +117,8 @@ body {
 .booster-icon {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 9px;
   align-items: center;
   justify-content: center;
@@ -139,8 +141,8 @@ body {
 }
 
 .booster-icon svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: #1d1a30;
   stroke: #1d1a30;
   stroke-width: 1.9;
@@ -148,8 +150,11 @@ body {
   stroke-linejoin: round;
 }
 
+/* P1 修复（用户评审「文字换行太出戏」）：**硬性单行**。
+   `nowrap` 是兜底 —— 将来标签若变长只会溢出，不会折成两行把按钮撑高、破坏三键的视觉对称。 */
 .booster-label {
   line-height: 1;
+  white-space: nowrap;
 }
 
 /* 计数：右上角红色圆形徽章（悬出按钮边缘一点，像糖果盒上的贴纸）。
@@ -184,28 +189,30 @@ body {
 }
 
 /* 用光（disabled）：底色更暗、图标退成灰果冻；徽章也退灰 */
+/* 用光（disabled）：底色更暗、图标退成灰果冻、文字更弱 —— 与可用态拉开更大差距（用户评审要求：0 次的木锤可以再暗一点） */
 .booster[disabled] {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-  background-color: #1c1830;
-  color: rgba(242, 240, 255, 0.42);
-  border-color: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 3px 0 #15112a;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.015) 100%);
+  background-color: #171327;
+  color: rgba(242, 240, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 3px 0 #100d1e;
   cursor: default;
 }
 
 .booster[disabled] .booster-icon {
-  background-image: linear-gradient(180deg, #6f6b82 0%, #4a4660 100%);
-  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.22), inset 0 2px 0 rgba(255, 255, 255, 0.18);
+  background-image: linear-gradient(180deg, #5f5b73 0%, #3c3850 100%);
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.22), inset 0 2px 0 rgba(255, 255, 255, 0.12);
 }
 
 .booster[disabled] .booster-icon svg {
-  fill: rgba(255, 255, 255, 0.5);
-  stroke: rgba(255, 255, 255, 0.5);
+  fill: rgba(255, 255, 255, 0.38);
+  stroke: rgba(255, 255, 255, 0.38);
 }
 
 .booster[disabled] .booster-count {
-  background: #7d7890;
-  border-color: #cfcbd8;
+  background: #625d75;
+  border-color: #b3afc2;
+  opacity: 0.75;
 }
 
 /* 设置齿轮：贴在道具行右端的浮层按钮（绝对定位 → 不改变道具行的居中与条高） */
