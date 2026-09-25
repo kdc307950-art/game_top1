@@ -8,7 +8,7 @@
 //   - 5.4：逻辑先全部算完（game.trySwap 同步结算），再按时间线播放快照 —— 动画不阻塞逻辑更新；
 //   - 逻辑模块（config/game/board/match/score/level 等）本步未改动。
 
-import { BOOSTER_KIND, CELL_TYPE, CONFIG, STORAGE_KEYS } from './config.js';
+import { BOOSTER_KIND, CELL_TYPE, CONFIG, PARTICLE_KIND, STORAGE_KEYS } from './config.js';
 import { cloneBoard } from './board.js'; // v1.20：道具的回放首帧快照（与 trySwap 的 afterSwap 同语义）
 import { createAudio, createHaptics } from './audio.js'; // Step 16（5.6）：音效与震动
 import {
@@ -19,6 +19,8 @@ import {
   useBooster as gameUseBooster
 } from './game.js';
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
+// Step 17（v1.27）：粒子系统的纯逻辑（池/生命周期/确定性生成）；本文件只负责在时间线上生成与推进
+import { activeParticles, clearParticles, createParticleSystem, spawnBurst, update as updateParticles } from './particles.js';
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
 import { DEMO_LEVEL_IDS, LEVEL_COUNT, getLevelConfig, isTimeLevel } from './level.js';
@@ -36,6 +38,7 @@ const CLOCK_INTERVAL_MS = 250; // 时间关倒计时的刷新间隔（3.6 第 8 
 const renderer = createRenderer();
 const timeline = createTimeline({
   onFrame: (phase, progress) => {
+    stepParticles(phase); // Step 17：先推进/生成粒子，再画这一帧（保证与相位同帧）
     view.hudScore = view.playback ? hudScoreAt(view.playback, phase.levelIndex) : view.game.level.currentScore; // 连消收益逐层显示
     // Step 16（5.6）：每层消除配一声「连击升调」的音（+ 一次轻震）；同一层不重复响
     if (phase.phase === 'clear' && phase.levelIndex !== view.lastClearLevel) {
@@ -84,7 +87,11 @@ const view = {
   prefs: null,
   audio: null,
   haptics: null,
-  lastClearLevel: -1
+  lastClearLevel: -1,
+  // Step 17（v1.27）：粒子系统 + 相位跟踪（生成只在相位切换时发生）+ 上一帧时间（算 dt）
+  particles: null,
+  particlePhase: null,
+  particleAt: 0
 };
 
 init();
@@ -111,6 +118,10 @@ function init() {
   view.audio = createAudio({ logger: log, isEnabled: () => view.prefs.sound });
   view.haptics = createHaptics({ isEnabled: () => view.prefs.haptic });
   view.systemReducedMotion = prefersReducedMotion();
+  // Step 17（v1.27）：系统「减少动效」或配置开关为真时 enabled = false —— 粒子**不生成**（不是变透明）
+  view.particles = createParticleSystem({
+    reducedMotion: view.systemReducedMotion || CONFIG.ANIMATION_CONFIG.reducedMotion
+  });
   startNewGame();
   applyLayout();
   bindBoosters(); // Step 15：道具条（画布外的 DOM 元素）
@@ -457,9 +468,85 @@ function finishTimeline() {
   view.playback = null;
   view.hudScore = null;
   view.firstGroups = [];
+  resetParticles(); // Step 17：回放结束后清空粒子，避免它们停在新画面上
   drawFrame();
   if (pendingGameOver) finishGame();
 }
+
+// ---------------------------------------------------------------------------
+// 粒子动画（Step 17，v1.27；AGENTS.md 2.3 / 15）
+//
+// 本文件只做**编排**：把 `particles.js` 的纯逻辑挂到时间线的每帧回调上 ——
+//   · 生成只在**相位切换**时发生一次（同一个相位对象会连续回调多帧）；
+//   · 推进用真实时间差 `dt`（`update` 内部把 dt 夹在 [0,100]ms，暂停回来不会瞬移）；
+//   · 种类由该格**被消除前**的 `cell.type` 决定（消除相位的 board 是消除前快照），
+//     因此不需要给逻辑层加任何「谁被引爆了」的新字段；
+//   · 种子键 = 关卡 id + 级联层（`phase.levelIndex`）+ `cell.id` + 种类 ⇒ 同局面同粒子。
+// ---------------------------------------------------------------------------
+
+/** 每帧：先推进粒子，再在相位切换时生成这一批。 */
+function stepParticles(phase) {
+  const system = view.particles;
+  if (!system) return;
+  const now = nowMs();
+  const dt = view.particleAt > 0 ? now - view.particleAt : 0;
+  view.particleAt = now;
+  updateParticles(system, dt);
+  if (phase !== view.particlePhase) {
+    view.particlePhase = phase;
+    spawnPhaseParticles(phase);
+  }
+}
+
+/** 消除相位 → 粒子：逐格按种类生成；同一批清掉 ≥ 2 颗特殊糖果时，在质心再补一炸「组合」。 */
+function spawnPhaseParticles(phase) {
+  const system = view.particles;
+  if (!system || !phase || phase.phase !== 'clear' || !phase.keys) return;
+  const specials = [];
+  for (const key of phase.keys) {
+    const [r, c] = String(key).split(',').map(Number);
+    const cell = phase.board?.[r]?.[c];
+    if (!cell) continue;
+    const kind =
+      cell.type === CELL_TYPE.MAGIC ? PARTICLE_KIND.MAGIC
+        : cell.type === CELL_TYPE.STRIPED ? PARTICLE_KIND.STRIPED
+          : cell.type === CELL_TYPE.WRAPPED ? PARTICLE_KIND.WRAPPED
+            : PARTICLE_KIND.CLEAR;
+    if (kind !== PARTICLE_KIND.CLEAR) specials.push({ r, c });
+    spawnBurst(system, {
+      r,
+      c,
+      kind,
+      color: Number.isInteger(cell.color) ? cell.color : 0,
+      direction: cell.direction ?? null,
+      levelId: view.levelId,
+      stage: phase.levelIndex ?? 0,
+      cellId: cell.id
+    });
+  }
+  // 组合（3.3）：同批 ≥ 2 颗特殊糖果 → 质点处一记「最大的一爆」
+  if (specials.length >= 2) {
+    const r = Math.round(specials.reduce((sum, pos) => sum + pos.r, 0) / specials.length);
+    const c = Math.round(specials.reduce((sum, pos) => sum + pos.c, 0) / specials.length);
+    spawnBurst(system, {
+      r,
+      c,
+      kind: PARTICLE_KIND.COMBO,
+      color: 0,
+      levelId: view.levelId,
+      stage: phase.levelIndex ?? 0,
+      cellId: 1000 + specials.length * 64 + r * 8 + c // 组合的种子键：颗数 + 质心
+    });
+  }
+}
+
+/** 清空粒子与相位跟踪（回放结束/换局时调用）。 */
+function resetParticles() {
+  if (view.particles) clearParticles(view.particles);
+  view.particlePhase = null;
+  view.particleAt = 0;
+}
+
 // ---------------------------------------------------------------------------
 // 道具条（Step 15，v1.20；AGENTS.md 3.9）
 //
@@ -692,6 +779,8 @@ function drawFrame(entry = null, progress = 1) {
     falling: entry && (entry.phase === 'fall' || entry.phase === 'shuffle') ? { moves: entry.moves, progress } : null,
     hidden: entry && entry.phase === 'fall' ? entry.hidden : null,
     banner: entry?.banner ?? null, // 5.5：重排前给出明确提示（结算阶段刻意不叠加任何横幅，见 timeline.js）
+    // Step 17（v1.27）：本帧的粒子快照（particles.js 的只读叶子字段，已按 maxPerFrame 截断）
+    particles: view.particles ? activeParticles(view.particles) : [],
     // Step 19.2：选关界面已改为画布外的藤蔓地图层（`#map`），canvas 场景里不再有选关网格
     hud: {
       score: view.hudScore ?? view.game.level.currentScore,

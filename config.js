@@ -40,6 +40,18 @@ export const DIRECTION = Object.freeze({
   V: 'v'
 });
 
+/**
+ * 粒子的爆发种类（AGENTS.md 2.2 / 2.3，v1.27 / Step 17）。
+ * 由 render.js 侧的贴图选形状、由 particles.js 决定颗数与方向分布；**不参与任何游戏规则**。
+ */
+export const PARTICLE_KIND = Object.freeze({
+  CLEAR: 'clear',       // 普通消除：小爆（全向、略带上抛）
+  STRIPED: 'striped',   // 条纹糖果：沿爆破方向拉长
+  WRAPPED: 'wrapped',   // 包装糖果：环形炸开
+  MAGIC: 'magic',       // 魔力鸟：全色相大爆
+  COMBO: 'combo'        // 组合（同批 ≥ 2 颗特殊糖果）：最大的一爆
+});
+
 /** 匹配形状（AGENTS.md 4.2 match.detectMatchShape） */
 export const MATCH_SHAPE = Object.freeze({
   LINE3: 'line3',
@@ -108,6 +120,35 @@ export const CONFIG = {
     settleHold: 900,
     shuffleMaxTries: 50,     // AGENTS.md 3.8
     reducedMotion: false     // 对应 prefers-reduced-motion，见 REFERENCES.md §2.1 Step 5
+  },
+
+  // 粒子动画（Step 17，AGENTS.md 2.2 / 2.3 / 15，v1.27）。**纯观感**：不参与任何规则与计分。
+  // 数值口径：
+  //   · capacity = 池上限（颗）；maxPerFrame = 每帧贴图上限 —— 宪法 15 节「单帧绘制调用 ≤ 200」，
+  //     棋盘/障碍/环/HUD 实测约占 90–140 次，留给粒子的份额就是这一项。
+  //   · 每格颗数按事件种类递增（普通 3 → 组合 14）；单次事件再受 maxPerBurst 封顶。
+  //   · 抖动只由「种子」派生（particles.js 的 mulberry32），**不使用运行时随机**：同输入同粒子。
+  PARTICLE_CONFIG: {
+    enabled: true,        // 总开关（关掉即完全不生成，用于降级/排查）
+    capacity: 192,        // 池上限（颗）；超出时丢弃最旧的一颗
+    maxPerFrame: 96,      // 每帧最多贴图颗数（15 节绘制调用预算里留给粒子的份额）
+    maxPerBurst: 48,      // 单次事件最多生成颗数
+    clearCount: 3,        // 普通消除：每格颗数
+    stripedCount: 8,      // 条纹糖果：每格颗数（沿 direction 拉长）
+    wrappedCount: 10,     // 包装糖果：每格颗数（环形）
+    magicCount: 12,       // 魔力鸟：每格颗数（全色相）
+    comboCount: 14,       // 组合（同批 ≥ 2 颗特殊糖果）：每格颗数
+    lifeMs: 420,          // 基础存活时长（ms）
+    lifeJitter: 0.35,     // 存活抖动比例（±）
+    speed: 0.0042,        // 初速（格 / ms）—— 1 格约需 240ms，与 clearDuration 同量级
+    speedJitter: 0.4,     // 初速抖动比例（±）
+    gravity: 0.0000075,   // 重力加速度（格 / ms²）
+    friction: 0.9985,     // 每毫秒的速度衰减（按 dt 取幂）
+    size: 0.13,           // 基础直径（格）
+    sizeJitter: 0.3,      // 尺寸抖动比例（±）
+    specialSizeBoost: 1.15, // 特效类（条纹/包装/魔力鸟/组合）的尺寸放大倍率 —— 与「颗数递增」一起表达强度
+    spread: 0.9,          // 方向锥角比例（1 = 整圆；普通消除取 0.9 略带上抛）
+    seed: 20260925        // 确定性随机种子基数（与关卡 id / 级联层 / cell.id 混合）
   },
 
   // 障碍物层数上限（AGENTS.md 3.4 / 附录 A）

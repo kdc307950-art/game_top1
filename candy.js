@@ -125,6 +125,68 @@ export function buildSpriteAtlas(cellCss, dpr) {
   });
 }
 
+// 粒子外观（Step 17 / 宪法 v1.27，用户拍板的外观方案 A：预烘焙精灵 + 三类强度）。
+// 三种形状各 6 色，全部在布局时烘焙一次、每帧只 drawImage（15 节红线 2 的「静态烘焙复用」）。
+// 刻意只用**实心填充 + 一层半透明白高光**：零阴影模糊类 API、零每帧渐变（REFERENCES.md §3.5 红线 1）。
+const PARTICLE_BAKE_RATIO = 0.2; // 粒子精灵的烘焙边长 / 格子边长（渲染时按实际尺寸缩放）
+const PARTICLE_SHAPES = ['dot', 'shard', 'star'];
+const PARTICLE_HIGHLIGHT = 'rgba(255, 255, 255, 0.55)';
+
+/** 三种粒子形状的路径：圆点 / 斜菱（条纹）/ 五角星（包装·魔力鸟·组合）。 */
+function particlePath(ctx, shape, cx, cy, r) {
+  ctx.beginPath();
+  if (shape === 'dot') {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  } else if (shape === 'shard') {
+    ctx.moveTo(cx, cy - r * 1.15);
+    ctx.lineTo(cx + r * 0.62, cy);
+    ctx.lineTo(cx, cy + r * 1.15);
+    ctx.lineTo(cx - r * 0.62, cy);
+    ctx.closePath();
+  } else {
+    const outer = r * 1.08;
+    const inner = r * 0.46;
+    for (let i = 0; i < 10; i += 1) {
+      const radius = i % 2 === 0 ? outer : inner;
+      const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+}
+
+/**
+ * 粒子精灵图集（Step 17）：返回 `{ dot, shard, star }`，每项是 6 色（下标 = `cell.color`）的精灵数组。
+ * 形状与事件种类的对应由 `render.js` 决定（普通消除 → dot，条纹 → shard，包装/魔力鸟/组合 → star）。
+ * 旋转由渲染层用 `ctx.rotate` 施加，图集里一律正放。
+ */
+export function buildParticleAtlas(cellCss, dpr) {
+  const px = Math.max(6, Math.round(cellCss * PARTICLE_BAKE_RATIO * dpr));
+  const bake = (shape, base) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = px;
+    canvas.height = px;
+    const ctx = canvas.getContext('2d');
+    const r = px * 0.4;
+    particlePath(ctx, shape, px / 2, px / 2, r);
+    ctx.fillStyle = base;
+    ctx.fill();
+    // 左上高光：与糖果的 HIGHLIGHT_COLOR 同一语言，但只画一个不透明小圆点（不做渐变）
+    ctx.beginPath();
+    ctx.arc(px / 2 - r * 0.32, px / 2 - r * 0.34, r * 0.28, 0, Math.PI * 2);
+    ctx.fillStyle = PARTICLE_HIGHLIGHT;
+    ctx.fill();
+    return canvas;
+  };
+  return PARTICLE_SHAPES.reduce((atlas, shape) => {
+    atlas[shape] = BASE_COLORS.map((base) => bake(shape, base));
+    return atlas;
+  }, {});
+}
+
 /**
  * 收集物精灵图集（Step 14，3.6 的水果关 / 金豆荚关）：
  * 返回 `{ fruit, pod }`，每张正好覆盖一格。收集物**占格且格内没有动物**（4.1），

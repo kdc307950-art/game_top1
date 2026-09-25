@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.26
+> 版本：v1.27
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -663,6 +663,8 @@
 
 **目标**：为消除、特殊元素触发、组合效果加入粒子动画。
 
+> **完成记录（v1.27 / Step 17）**：新增纯逻辑模块 `particles.js`（固定容量环形池、生命周期、按事件种类的生成计划、确定性 PRNG、只读快照）+ `tests/particles.test.js`（7 例）；`candy.js` 新增 `buildParticleAtlas`（3 形状 × 6 色，布局时烘焙、每帧只 `drawImage`）；`render.js` 新增 `drawParticles`；`app.js` 把「生成 + 推进」挂到 `timeline` 的每帧回调上（生成只在相位切换时一次）。**强度分三档**（普通消除 3 颗/格 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14），方向按事件区分（向上扇形 / 双向直线 / 环形 / 全色相）。**验收数据**：本机 60 帧渲染循环平均单帧耗时、每帧 `drawImage` 调用数 ≤ `maxPerFrame`（96）、每帧路径 `shadowBlur` 计数 = 0、`prefers-reduced-motion` 下粒子数为 0 —— 取证见 `PROGRESS.md` 的 Step 17 记录与 `_build/verify-step17.mjs`。口径与替代方案见 `DECISIONS.md` **D044**。
+
 **范围**：`app.js`、`styles.css`、`config.js`。
 
 **验收**：粒子动画不影响帧率预算（`AGENTS.md` 15 节）；特殊元素触发有独特粒子效果。
@@ -1039,7 +1041,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 - [ ] Step 14：关卡类型（**进行中**：宪法 v1.18 规则 + v1.19 落地契约已落地；14.1 水果关 / 14.2 时间关 / 14.3 金豆荚关按子步骤分别验收，见 DECISIONS D035）
 - [ ] Step 15：道具系统（**进行中**：宪法 v1.20 + D036 的落地口径已定；刷新 / 加五步 / 小木锤 + 数量持久化 + 画布外道具条）
 - [x] Step 16：音效与震动反馈（**零素材**：Web Audio 合成 + `navigator.vibrate`；音高按连击层数/星级派生（同输入同声音）；音效与震动各自可开关且偏好持久化；桌面无 `vibrate` 静默降级；顺带根治 P3-13（`test()` 现在 await 异步用例）；见 DECISIONS D038）
-- [ ] Step 17：粒子动画与视觉打磨
+- [x] Step 17：粒子动画与视觉打磨（**已完成**：`particles.js` + 确定性粒子 + 三类强度 + 帧预算，见 §4.2 与 DECISIONS D044）
 - [ ] Step 18：Capacitor 打包
 - [ ] **Step 19**：藤蔓地图与存档演进（19.1 存档版本化**已完成**；**19.2 藤蔓地图已完成**（滚动口径 (a)：5 页 × 每页 10 关，只画不拦）；19.3 解锁与软件化挂起 —— 见 DECISIONS D037 / D039）
 - [x] **Step 20**：结算阶段（余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部连锁引爆）+ 星级统一动态调整 + 彩星字段预留（20.1–20.4 **全部完成**，见 §4.2 与 DECISIONS D041 / D042）
@@ -1063,6 +1065,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | v1.19 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.19 同步：Step 14 的落地契约（时间关 `timeLimit`/`remainingTime`、收集物 `collectibles`/`CollectibleHit`、`applyGravity` 的下落上限、`level.consumeTime` 与 `game.tickTime`、`computeTimeBudget`、`TIME_CONFIG`/`STAR_CONFIG`）；更新 §0.1 的当前暂停点为「Step 14 进行中」，Step 14 完成后进 Step 15 前需再过一轮 Gate 0.1 | §0.1、Step 14、第 6 节 |
 | v1.20 | 2026-09-22 | Agent（用户预授权默认） | 与宪法 v1.20 同步：Step 15 道具系统（3.9 规则、`game.useBooster`/`BoosterResult`、`level.grantSteps`/`grantTime`、`BOOSTER_CONFIG` 4 键、`BOOSTER_KIND`、画布外道具条与 `--booster-bar-h`）；§0.1 的暂停点更新为「Step 15 进行中，完成后进 Step 16 前需再过一轮 Gate 0.1」 | §0.1、Step 15、第 6 节 |
 | v1.21 | 2026-09-22 | Agent（用户批准 19.1） | 与宪法 v1.21 同步：新增 §4.1 Step 19（藤蔓地图 + 存档演进，19.1 已完成 / 19.2 待滚动口径 / 19.3 需先批规则 / 软件化挂起），`storage.js` 的 backend 注入与存档版本化进入契约 | §4.1、Step 19、第 5/6 节 |
+| v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | 与宪法 v1.27 同步：**Step 17 粒子动画与视觉打磨完成** —— 新增 `particles.js`（确定性粒子：环形池 + 生成计划 + 只读快照）、`candy.js` 的 `buildParticleAtlas`、`render.js` 的 `drawParticles`、`app.js` 的时间线挂载；15 节新增粒子每帧贴图上限（96）/ 池上限（192）/ reduced-motion 不生成三条；附录 B 新增 `PARTICLE_CONFIG` 20 键、B-2 新增 `PARTICLE_KIND`；`tests/particles.test.js` 7 例 | 第 6 节、Step 17、附录 B、附录 B-2 |
 | v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | 与宪法 v1.26 同步：**20.4 彩星字段预留 + 存档迁移**（`STORAGE_CONFIG.schemaVersion` 1 → 2，`levels` 的值改为 `{ stars, rainbow }`，v0/v1 就地迁移且老存档不丢；新增 `readLevelRecords`/`writeLevelRecords`/`getTotalRainbows`，对外形状 `readLevelStars`/`getTotalStars`/`recordLevelStars` 不变；彩星不计入总星数）；Step 20 的 20.1–20.4 全部完成 | §4.2、§5、第 6 节 |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | 与宪法 v1.25 同步：新增 §4.2 Step 20（结算阶段 + 星级统一动态调整，20.1–20.3 已完成 / 20.4 彩星待批准）；§4.1 表里的软件化行去掉「20」这个编号以免与 Step 20 冲突；新增 `settlement.js`、`LEVELS.md` 阈值列改公式输出（`sync-levels-stars.mjs` / `measure-step20.mjs`） | §4.1、§4.2、§5、第 6 节 |
 | v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | 与宪法 v1.24 同步：Step 19.2 藤蔓地图按用户修订方案重做（坐标归一化 0–1、路径改单条平滑贝塞尔且锚点进 `VINE_MAP_CONFIG.anchors`、节点显式坐标不参与路径计算、`data-state` 两态、星星 +40%、呼吸光效、翻页箭头 + 总星数进度条、叶子沿切线旋转、附录 B `VINE_MAP_CONFIG` 8→19 键）；19.3 与软件化仍挂起 | §4.1、§5、第 6 节 |

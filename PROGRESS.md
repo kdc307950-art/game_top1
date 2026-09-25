@@ -5,6 +5,67 @@
 
 ---
 
+## 2026-09-25（Step 17：粒子动画与视觉打磨 —— 完成并验证 + Gate 0.1 第十三轮）
+
+用户口径：P0 收口后选 **A：Step 17**。执行卡的三处待拍板项里，①（模块归属）与 ③（密度与帧预算）由宪法约束推导为推荐默认，②（外观）由用户**拍板方案 A：预烘焙精灵 + 三类强度**。粒子是**纯观感**，玩法与逻辑模块一行未改；口径记入 `DECISIONS.md` **D044**。
+
+### 完成项（产品代码）
+
+- **宪法 v1.27**：2.2/2.3 登记新模块 `particles.js`；15 节新增三行（粒子每帧贴图上限 `maxPerFrame` = 96、池上限 `capacity` = 192、reduced-motion 不生成）；附录 B 新增 `PARTICLE_CONFIG` **20 键**、附录 B-2 新增 `PARTICLE_KIND`；第 11 节修订记录与 `ROADMAP.md` v1.27（Step 17 完成记录）同步。
+- **`particles.js`（新模块，纯逻辑）**：固定容量**环形池**（溢出覆盖最旧、O(1)、永不阻塞逻辑）、`update(dt)`（dt 夹在 [0,100]ms；位置/速度/寿命积分 + 到期回收）、`planBurst`（按种类产出初值：普通消除**向上扇形**、条纹沿 `direction` **双向直线**、包装**环形**、魔力鸟与组合**环形 + 全色相**）、`activeParticles`（只读快照，≤ `maxPerFrame`，alpha = `(life/maxLife)^0.7`）、`particleStats`。**确定性**：`mulberry32(PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类"))` —— 不用 `Math.random`、不读时间，同输入同粒子。
+- **`candy.js`**：新增 `buildParticleAtlas(cellCss, dpr)` —— 3 形状（圆点/菱形/五角星）× 6 色，**布局时一次性烘焙**；只用实心填充 + 一层半透明白高光（零渐变、零阴影模糊）。
+- **`render.js`**：`prepare` 缓存粒子图集；新增 `drawParticles`（每颗只一次 `drawImage`，旋转用 `translate/rotate` 后恢复 `globalAlpha`），画在障碍之上、环与 HUD 之下。
+- **`app.js`**：`stepParticles`（每帧推进 + **只在相位切换时**生成一次）+ `spawnPhaseParticles`（种类由**消除前快照**的 `cell.type`/`cell.direction` 推断 —— 因此逻辑层不需要新增任何字段；同批 ≥ 2 颗特殊糖果 → 在质心补一记 `combo`）+ `resetParticles`（回放结束清空）；boot 里按「系统减少动效 ∨ `ANIMATION_CONFIG.reducedMotion`」决定 `enabled`。
+- **`tests/particles.test.js`（新，7 例 944 断言）**：池有界 / 生命周期 / 确定性 / 按事件产出 / `dt` 边界 / reduced-motion / 快照面积与内存（槽位不持有 `cell` 引用）。
+
+### 验证（原始命令 + 退出码）
+
+- **L1**：`node tests/run-all.js` → **12 个文件 / 257 用例 / 3122 断言 / 0 失败 / exit 0**。
+- **L0**：`python _build/consistency_check.py` → **全部通过（失败 0 项）**；红线 grep（`app.js render.js candy.js hud.js timeline.js particles.js` 的 `shadowBlur` 计数）= **0**。
+- **L2/L3**：新增 `_build/verify-step17.mjs`，**独立连跑 3 次 + 门禁内 2 次全绿**：播放帧画布调用峰值 **77**（贴图 74 + 路径 3，≤ 15 节的 200）；粒子贴图峰值 **9**（≤ `maxPerFrame` 96）且出现在 25–75 帧；画布耗时 p95 **0.20–0.30ms**（≤ 8ms）；静止后粒子全部回收（0 残留）；`prefers-reduced-motion: reduce` 下**粒子 0 颗**且有效交换仍扣 1 步；页面不可滚动；控制台无 error/warning、无未捕获异常。日志 `_build/step17-verify-{1..6}.log`。
+- **一次性烘焙帧（如实）**：每个布局一次 **459 次画布调用 / ~3.0ms**（65 贴图 + 394 路径：chrome + 30 张糖果精灵 + 障碍/收集物 + 18 张粒子精灵）。15 节的「单帧绘制调用 ≤ 200」针对**播放中的每一帧**；烘焙帧单独登记为 **P3-F**，并已在 `verify-step17` 里按「路径数 > 50」与播放帧区分开。
+- **Gate 0.1 第十三轮（`_build/g13-summary.txt`，22 套件 + 5 次复跑）**：**21 套件 PASS / 1 套件 FAIL 2 项（`verify-step6`，见下 P3-5 第十五次 —— 结算时序的 harness 缺陷，已改脚本并复跑 2 次各 0 失败）**。逐套件：step4 56s、step5 10s、**step6 55s（红 → 修后 41s/50s 全绿）**、step7 51s、step8 38s、step9 40s、step10 41s、step11 43s、step12 48s、step12b 54s、step13 4s、step14 12s、step15 21s、step16 15s、**step17 6s**、step19-2 16s、**step20 19s（45/45）**、audit7 64s、audit8 66s、audit9 63s、audit10 62s、audit11 63s；复跑 step4-2 41s、step12-2 39s、step12b-2 54s、**step17-2 6s**、step20-2 18s（45/45）。
+
+### 缺陷登记
+
+- **P3-F（新，一次性成本）**：布局/烘焙帧 459 次画布调用（~3.0ms）—— 低端机首帧或旋转屏幕时可能可见卡顿；回归计划：Step 18.3（WebView 兼容）复测首帧，必要时把烘焙拆到多帧（`requestIdleCallback`）或按需烘焙。
+- **P3-G（新，取证缺口）**：浏览器侧只取证了**普通消除**的粒子；条纹/包装/魔力鸟/组合由 `tests/particles.test.js` 按种类覆盖（颗数/方向/全色相），**浏览器里未逐类取证**。回归计划：在 `verify-step17` 里用关卡夹具强制三类事件各一次。
+- **P3-5 第十五次**：`verify-step6` 阶段 4 的**通关时序** —— 日志顺序是「关卡完成（3.6）」→ 结算阶段（900ms 定格 + 逐颗连锁引爆）→「关卡结果」，而套件每手只等 `250 + 级联×120 + 500` ms；遇到引爆次数多的局面就读得太早，于是「终态」与「结束面板」两项假失败（本轮实测：`转化 0 颗 / 引爆 5 次`）。处置与既往一致 —— **改脚本**（通关后轮询等结算演完，断言一字未改），复跑 2 次全绿。
+- **P3-10 / P3-12 / P3-14 / P3-C / P3-D / P3-E 沿用**。
+
+### 边界（如实）
+
+- **真机（L4/L5）仍空白**：粒子观感、极窄视口（< 220px 棋盘）下的相对尺寸、低端机帧率都未取证；本机证据是桌面 headless + 390×844 触摸模拟（L3），且启动参数固定为 `--disable-gpu --force-color-profile=srgb`（D043 第 6 条）。
+- **粒子不参与规则**：`board.js` / `game.js` / `match.js` / `special.js` / `score.js` / `obstacles.js` / `level.js` / `settlement.js` 本步**一行未改**；`resolveBoard` / `trySwap` 的契约与数值零改动。
+
+### 下一步
+
+- Step 17 已完成并自测通过，**允许进入下一个 Step**（打 tag `step17-done` 与 `gate-0.1-step17-pass`）。可选方向（等用户口径）：① **Step 18 Capacitor 打包**（前置依赖已满足：Step 17 已验收 + 门禁通过；需用户明确批准「零依赖例外」与目标平台）；② **19.3 解锁门槛 / 天边关卡 / 隐藏关**（需先给规则口径）；③ **彩星分数线与展示**（20.4 的字段已就位）。
+
+---
+
+## 2026-09-25（Step 17 执行卡：粒子动画与视觉打磨）
+
+> 按 ROADMAP §0.5 在开工前逐项填写；DoR 见 §0.6。本 Step **没有玩法规则空白**（不碰 3.x 的任何规则与数值），但有三处需要口径：**模块归属**、**粒子外观**、**粒子密度与帧预算**。第 1、3 项按推荐默认执行（架构与预算是宪法约束推导出来的，不是审美偏好）；第 2 项属外观方案，按 D020 的先例**等用户拍板**。
+
+1. **开始前置条件**：Step 16 已验收（`step16-done`），**Gate 0.1 第十二轮已通过**（`gate-0.1-step20-pass`，见本文件同日记录与 D043）—— 这是 0.1 门禁对「进入下一个玩法 Step」的硬要求。起点 = tag `gate-0.1-step20-pass`，工作区干净。相关章节：AGENTS 15（性能与动画预算：单帧绘制调用 ≤ 200、60fps/低端机 ≥ 30fps）、2.2/2.3（目录与模块边界）、5.4（先更新逻辑状态再播动画）、6（≤300 行的目标值）；ROADMAP Step 17；`REFERENCES.md` §2.3 Step 17 与 **§3.5 的三条性能红线（每帧路径 `shadowBlur` = 0、静态图层烘焙复用、修饰性描边 alpha ≤ 0.1，且三条各需一条验证动作）**；前置决策：D020（零素材程序化外观）、D023、D043。
+2. **允许修改范围**：新增 `particles.js` + `tests/particles.test.js`；`config.js`（`PARTICLE_CONFIG`）、`candy.js`（粒子精灵烘焙）、`render.js`（每帧贴图）、`app.js`（把粒子的生成/更新挂到动画时间线上）、`styles.css`（仅在需要时）、**AGENTS.md v1.27**（2.2 目录 + 2.3 边界 + 附录 B 的 `PARTICLE_CONFIG` + 15 节的粒子预算行 + 第 11 节修订说明）、`ROADMAP.md`（头部同步 + Step 17 完成记录）、`prompts.md`、`DECISIONS.md`（D044）。**禁止**：引入任何粒子引擎或第三方库（ROADMAP 原文）；在每帧绘制路径使用 `shadowBlur`/`filter`/逐颗 `createRadialGradient`；改任何游戏规则、计分或关卡数值；让粒子进入逻辑层（`board.js`/`game.js`/`match.js`/`special.js`/`score.js`/`obstacles.js`/`level.js`/`settlement.js` 一律不动）；用运行时 `Math.random`（粒子必须**确定性**，见下）。
+3. **口径与推荐默认**：
+   - **① 模块归属（推荐默认）**：新增 `particles.js`（纯逻辑：池、生命周期、更新、确定性 PRNG、按事件产出的**只读粒子快照**）+ `tests/particles.test.js`；`render.js` 只做「快照 → drawImage」。理由：`render.js` 已 301 行、`candy.js` 597 行、`app.js` 790 行（第 6 节 300 行是目标值，三者都已超），再把粒子塞进任一都会让下一步无法维护；Step 7 拆出 `candy.js`（v1.7）就是同一条推理。
+   - **② 粒子外观（待用户拍板）**：见下一条消息的三选一；推荐 **(a) 预烘焙精灵**。
+   - **③ 密度与帧预算（推荐默认）**：宪法 15 节「单帧绘制调用 ≤ 200」；棋盘 64 格 + 障碍 + 环 + HUD 实测约占 90–140 → **粒子每帧 ≤ 96 次 `drawImage`**；池上限 **192 颗**；单次消除每格 2–5 颗（按格数缩放，整批 ≤ 48 颗）；超出上限时**丢弃最旧**而不是阻塞逻辑。`prefers-reduced-motion` 或 `ANIMATION_CONFIG.reducedMotion` 为真时**不生成**粒子（不是变透明）。**确定性**：粒子抖动只用「按事件键派生的固定种子 PRNG」（键 = 关卡 id + 阶段序号 + 格子的 `cell.id`），同输入同帧完全一致 —— 既延续 D039/D041 的口径，也让像素巡检可复现。
+4. **执行顺序**：执行卡与 DoR（本条）→ 用户拍板外观 → 宪法 v1.27 登记 → `config.js` 的 `PARTICLE_CONFIG` → `particles.js`（池 + 更新 + 确定性 PRNG + 快照）+ `tests/particles.test.js` → `candy.js` 烘焙粒子精灵 → `render.js` 贴图 → `app.js` 把「按阶段产出粒子 + 每帧更新」挂上时间线 → 失败用例 → 修复 → `_build/verify-step17.mjs` 浏览器取证（帧耗时/调用数/三类触发/reduced-motion）→ 全量回归 → Gate 0.1 第十三轮 → 文档与提交。
+5. **必须产物**：源码 diff；`node tests/run-all.js`（0 失败、exit 0）；新增 `tests/particles.test.js`；`_build/verify-step17.mjs` 的 L2/L3 结果；`python _build/consistency_check.py`；`DECISIONS.md` D044；`[step17]` 提交 + `step17-done` tag；五份文档同步。
+6. **自动化测试**：`node tests/run-all.js`；单跑 `tests/particles.test.js`。新增用例至少覆盖：① 池**有界**（超出上限丢弃最旧、活动数不超上限）；② 生命周期（生成 → 存活 → 到期回收，`update` 后活动数单调回落到 0）；③ **确定性**（同种子同事件序列 → 逐帧粒子状态逐位相同；换事件键 → 不同）；④ 按事件类型产出（普通/条纹/包装/魔力鸟/组合各自的颗数、速度方向、颜色取自该格颜色）；⑤ `dt` 边界（0、负、超大不产生 NaN，不越界）；⑥ reduced-motion 下 `spawn` 返回空且不占用池；⑦ 内存（单局结束后池内引用全部释放 —— 不长期持有已消除 `cell`）。
+7. **手动/浏览器测试**：390×844@DPR3；三类事件各触发一次并截图确认粒子出现；**帧耗时**：用 `performance.now()` 包住渲染循环取 60 帧平均（预算 16.6ms，目标 ≤ 8ms）；**绘制调用数**：打点统计 `drawImage`/`fill` 等调用次数 ≤ 200（其中粒子 ≤ 96）；`shadowBlur` 计数 = 0；`prefers-reduced-motion` 下无粒子且流程照常；全程 0 异常。
+8. **证据等级**：L1 + L2 + L3（桌面 headless + 窄屏触摸模拟，固定启动参数 `--disable-gpu --force-color-profile=srgb`，见 D043 第 6 条）；真机与真机帧率**未验证**。
+9. **失败处理**：P0/P1 阻止收尾；P2 登记负责人/复现/回归计划；P3 进待办。若帧预算不达标，先减粒子数/去渐变，**不得**靠降低棋盘动画质量换。
+10. **回滚点**：`gate-0.1-step20-pass`；实现失败或测试连续 2 次原因不明时回到该点（不用 `git reset --hard`）。
+
+**DoR（可开始）判定**：目标（三类消除事件的粒子表现 + 帧预算达标 + 可验证）与非目标（不做音效/震动、不做玩法改动、不做粒子引擎、不做真机取证）明确；前置 Step 16 与 Gate 0.1 第十二轮已验收；允许修改文件已列出；口径 ①③ 已定（模块归属与帧预算由宪法推导），口径 ② **待用户拍板外观**；夹具（各事件类型、池溢出、reduced-motion）与验收路径可执行；风险（**粒子把单帧调用数顶过 200**、**每帧路径混入 `shadowBlur`/渐变导致 3 倍代价**、**粒子间接持有已消除 `cell` 引用造成内存滞留**、**运行时随机破坏像素巡检的可复现性**）已识别并各自写成用例或验证动作；回滚点已登记 → **通过（待外观拍板后开工）**。
+
+---
+
 ## 2026-09-25（P0 收口 + Gate 0.1 第十二轮收口：Step 20 门禁通过 —— 三处 harness 根因、门禁环境固定）
 
 用户口径：审查进度后**先做 P0 收口**（提交基线 + 把上一轮门禁的红项定位到根因 + 补齐记录）。**产品代码零改动** —— 本轮只动测试夹具、验证脚本、门禁环境与文档。口径与完整证据见 `DECISIONS.md` **D043**。

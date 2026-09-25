@@ -313,16 +313,21 @@
 参考：REFERENCES.md §2.3 Step 16
 ```
 
-## Step 17：粒子动画与视觉打磨
+## Step 17：粒子动画与视觉打磨（已完成，v1.27 / D044）
 
 ```text
 任务：为消除、特效、组合效果加入粒子动画
-范围：允许改 app.js、styles.css、config.js
+范围：新增 particles.js + tests/particles.test.js；允许改 candy.js、render.js、app.js、config.js
 验收：粒子不影响帧率预算（60fps，低端机 ≥30fps）；特效有独特粒子表现
-测试：DevTools Performance 实测单帧耗时；确认每帧路径无 shadowBlur
-禁止：引入粒子引擎；每帧滥用 shadowBlur
+      粒子每帧贴图 ≤ PARTICLE_CONFIG.maxPerFrame（96）且计入 15 节的「单帧绘制调用 ≤ 200」；
+      prefers-reduced-motion 下不生成（不是变透明）；同输入同粒子（确定性）
+测试：_build/verify-step17.mjs 实测「播放帧画布调用数 / 画布耗时 p95 / 粒子贴图峰值 / 减少动效下 0 颗」；
+      确认每帧路径无阴影模糊类 API（源码 grep 计数 = 0）
+禁止：引入粒子引擎；每帧滥用阴影模糊/径向渐变；用运行时随机抖动；为粒子改动任何玩法规则或 4.2 契约
 前置依赖：Step 16
-参考：REFERENCES.md §2.3 Step 17
+参考：REFERENCES.md §2.3 Step 17 与 §3.5 三条性能红线；DECISIONS.md D044
+已完成：particles.js（环形池 + 确定性生成计划 + 只读快照）、candy.js 的 buildParticleAtlas、
+        render.js 的 drawParticles、app.js 的时间线挂载；外观方案 A（预烘焙精灵 + 三类强度）
 ```
 
 ## Step 18：Capacitor 打包

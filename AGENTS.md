@@ -1,9 +1,24 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.26
+> 版本：v1.27
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.26 → v1.27 关键变更）
+
+本次修订按**用户拍板的外观方案 A**（预烘焙精灵 + 三类强度）落地 **Step 17：粒子动画与视觉打磨**。粒子是**纯观感**：不参与任何规则、计分与关卡数值，逻辑模块一行未动；口径记入 `DECISIONS.md` **D044**。
+
+1. **新增模块 `particles.js`** 并登记进 2.2 目录与 2.3 边界：它是粒子的**纯逻辑** —— 固定容量环形池、生命周期推进、按事件种类的**生成计划**、确定性 PRNG，以及对渲染层暴露的**只读快照**。它不认识棋盘 / `GameState` / DOM / Canvas / 存档，因此可在 Node 里逐项测量。为什么单独成模块：`render.js`（301 行）、`candy.js`（597 行）、`app.js`（790 行）都已越过第 6 节的 300 行目标值，把粒子塞进任一都会继续恶化（与 v1.7 拆出 `candy.js` 同一条推理）。
+2. **确定性是硬要求**：粒子抖动只由 `PARTICLE_CONFIG.seed` 与**事件键**（`关卡 id : 级联层 : cell.id : 种类`）派生的 `mulberry32` 决定，**不使用 `Math.random`、不读时间** —— 同输入必然同粒子。这既延续 D039（藤蔓路径）/ D041（结算转化）的口径，也让像素巡检可复现。因此本文件有**第三份** `mulberry32`（另两份在 `settlement.js` 与 `vine-map.js`）：不复用是为守住 2.3 的单向依赖（粒子层不得依赖结算逻辑，也不得依赖画布外的地图渲染层）。
+3. **坐标系与设备无关**：粒子的位置以**棋盘格**为单位（1.0 = 一格边长）、原点在棋盘左上角；`render.js` 乘 `cellPx` 后加棋盘区偏移。这样粒子在 Node 里可直接判定，也天然跟随 `computeBoardSize` 的几何变化。
+4. **每帧绘制调用预算（15 节）**：新增 `PARTICLE_CONFIG.maxPerFrame`（默认 96）与 `capacity`（默认 192）两键 —— 「单帧绘制调用 ≤ 200」里棋盘/障碍/环/HUD 实测约占 90–140 次，留给粒子的就是这一份额；池满时**覆盖最旧的一颗**（O(1)、永不阻塞逻辑）。第 15 节新增三行登记：粒子每帧贴图上限、池上限、reduced-motion 的行为。
+5. **reduced-motion 是「不生成」而不是「生成了再隐身」**：`app.js` 把系统的 `prefers-reduced-motion` 与 `ANIMATION_CONFIG.reducedMotion` 一起传给 `createParticleSystem`，此时 `spawnBurst` 恒返回 0、池保持为空。
+6. **三类强度由颗数递增表达**（普通 3 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14 颗/格），方向分布按事件区分：普通消除是**向上的扇形**、条纹沿 `direction` 呈**双向直线**、包装是环形、魔力鸟与组合是**环形 + 全色相**。贴图精灵由 `candy.js` 的 `buildParticleAtlas` 在布局时**一次性烘焙**，每帧只 `drawImage`（沿用 15 节红线 2），且**零 `shadowBlur`、零每帧渐变**。
+7. **新增 `tests/particles.test.js`**（7 例）覆盖七组性质：池有界 / 生命周期 / 确定性 / 按事件产出 / `dt` 边界 / reduced-motion / 快照面积与内存。
+8. **附录 B 新增 `PARTICLE_CONFIG` 20 键**，**附录 B-2 新增 `PARTICLE_KIND`**（`clear` / `striped` / `wrapped` / `magic` / `combo`）。
 
 ---
 
@@ -443,6 +458,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   obstacles.js     # 障碍物逻辑（冰块、雪块、藤蔓、巧克力）
   level.js         # 关卡目标、步数限制、三星评分
   settlement.js    # 结算阶段：余步 → 递增奖励分 + 随机特殊糖果 → 连锁引爆（纯逻辑，固定种子 PRNG，v1.25）
+  particles.js     # 粒子动画的纯逻辑：固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照（v1.27）
   vine-map.js      # 藤蔓关卡地图：SVG 渲染 + 分页 + 归一化坐标 + 确定性路径（不读状态、不写存档，v1.24）
   vine-map.css     # 藤蔓地图样式：节点状态 / 星星 / 叶子 / 翻页位移（画布外的绝对定位层，v1.24）
   app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播（localStorage 读写已移交 storage.js，v1.16）
@@ -467,6 +483,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
     audio.test.js
     vine-map.test.js
     settlement.test.js
+    particles.test.js
   AGENTS.md
   ROADMAP.md
   PROGRESS.md
@@ -492,6 +509,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `obstacles.js`：障碍物创建、消除、层数管理。
 - `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**归一化 0–1**，v1.24）。
 - `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
+- `particles.js`：**粒子动画的纯逻辑**（v1.27）：固定容量环形池（`capacity`）、按 `dt` 的积分与回收、按事件种类（`PARTICLE_KIND`）的**生成计划**（`planBurst`）、确定性 PRNG（`mulberry32` + 事件键）以及给渲染层的**只读快照**（`activeParticles`，最多 `maxPerFrame` 项）。它**不认识棋盘 / `GameState` / DOM / Canvas / 存档**，也不实现任何游戏规则 —— 生成与推进由 `app.js` 在动画时间线上调用，贴图只在 `render.js`；因此池有界、生命周期、确定性与 `dt` 边界都能在 Node 里逐项测。**不使用运行时随机**：种子 = `PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类")`（同输入同粒子，像素巡检可复现）。坐标以**棋盘格**为单位（1.0 = 一格），渲染时乘 `cellPx`。
 - `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀）。只接收「坐标表 + 星级表 + 当前关 + 总星数」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**，节点状态只有 `visited`/`attainable` 两态（**没有 `locked`**）。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24，见 D040）。
 - `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
@@ -1166,6 +1184,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | **Step 17 粒子动画与视觉打磨**：新增模块 `particles.js`（固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照，2.2/2.3 登记）；粒子一律**确定性**（`mulberry32` + 事件键 `关卡id:级联层:cell.id:种类`，不用 `Math.random`/不读时间）；坐标以棋盘格为单位、渲染时乘 `cellPx`；15 节新增粒子每帧贴图上限（`maxPerFrame` = 96）、池上限（`capacity` = 192）与「reduced-motion 不生成」三条；三类强度由**颗数递增**表达（普通 3 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14），方向按事件区分（扇形 / 双向直线 / 环形 / 全色相）；附录 B 新增 `PARTICLE_CONFIG` 20 键、附录 B-2 新增 `PARTICLE_KIND`；新增 `tests/particles.test.js`（7 例） | 2.2、2.3、15、附录 B、附录 B-2、11、`config.js`、`particles.js`、`candy.js`、`render.js`、`app.js`、`ROADMAP.md` |
 | v1.26 | 2026-09-23 | Agent（用户方案的 Step 20 第 4 项） | **彩星字段预留 + 存档迁移**：`STORAGE_CONFIG.schemaVersion` 1 → 2（`levels` 的值由数字改为 `{ stars, rainbow }`），v0/v1 **就地迁移**逐关补 `rainbow: false`（老存档不丢、幂等、更高版本仍只读不写）；新增 `readLevelRecords` / `writeLevelRecords` / `getTotalRainbows`，而 `readLevelStars` / `getTotalStars` / `recordLevelStars` 的对外形状**不变**（后者加可选 `options.rainbow`，缺省沿用既有标志）；口径为**彩星不计入总星数**；本步只做字段与迁移、**不做彩星规则**；附录 B 的 `schemaVersion` 默认值 1 → 2；`ROADMAP.md` 标 20.4 完成并同步 v1.26 | 2.3、附录 B、11、`config.js`、`storage.js`、`ROADMAP.md`、`tests/integration.test.js` |
 | v1.25 | 2026-09-23 | Agent（用户批准的 Step 20 方案） | **结算阶段 + 星级统一动态调整**：3.6 第 7 条改写为「余步 → 递增奖励分 + 随机特殊糖果 → 从棋盘底部到顶部逐颗连锁引爆」（受控伪随机 `mulberry32(seed + 关卡id)`、只落朴素动物格、`resolveBoard({final:true})` 跳过重排）；3.5 删除「每剩余一步 30 分」（`SCORE_CONFIG.stepBonus` / `getRemainingStepBonus`），避免与结算阶段重复计分；3.7 新增统一动态派生 `level.computeStarThresholds`（`2★/3★ = 倍率 × 基准分 + 结算期望分 × settlementCoverage`，`typicalRemainingRatio` 由 300 局实测标定为 0.20）；新增模块 `settlement.js`（2.2/2.3 登记）；`ResolveResult` 追加 `settlement`、`resolveBoard` 追加 `options.final`；附录 B 新增 `SETTLEMENT_CONFIG` 5 键 + `STAR_CONFIG.settlementCoverage` + `ANIMATION_CONFIG.settleBanner`，删除 `SCORE_CONFIG.stepBonus` 与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 阈值列改为公式输出（新增 `sync-levels-stars.mjs` / `measure-step20.mjs`）；`ROADMAP.md` 新增 Step 20（用户方案的「19.3.x」落此，19.3 解锁名额保留） | 2.2、2.3、3.5、3.6、3.7、4.2、15、附录 B、11、`config.js`、`level.js`、`game.js`、`settlement.js`、`timeline.js`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
 | v1.24 | 2026-09-22 | Agent（用户批准的 19.2 v2 修订方案） | Step 19.2 藤蔓地图重做（第三次迭代）：坐标改**归一化 0–1**（`LEVELS.md` §9 / `LEVEL_MAP_POS` / 巡检都只比归一化值）；路径改**单条平滑贝塞尔**（锚点进 `VINE_MAP_CONFIG.anchors`、跨屏靠 Y 轴衔接、抖动只用 `mulberry32(seed + page)`、不写死控制点）；节点显式坐标且**不参与路径计算**（取舍见 D040）；节点状态机 `data-state` 只有 `visited`/`attainable`（无 `locked`）；星星移出节点正下方并放大 40%；当前关卡改呼吸光效（删掉粉色底 + 黄边框）；分页改 `[◀] 第 N / 5 页 [▶]` + 总星数进度条 + 平移动画；叶子沿切线旋转；附录 B `VINE_MAP_CONFIG` 8 → 19 键 | 2.2、2.3、附录 B、11、`ROADMAP.md`、`config.js`、`level.js`、`LEVELS.md`、`vine-map.js`、`vine-map.css`、`app.js`、`tests/vine-map.test.js` |
@@ -1302,6 +1321,9 @@ const LEVEL_3 = {
 | 单帧绘制调用       | 不超过 200 次                                          |
 | 棋盘更新与渲染解耦 | 必须先更新逻辑状态，再播放动画                         |
 | 内存               | 单局新增对象可被 GC 回收，禁止长期持有已消除 cell 引用 |
+| 粒子每帧贴图调用   | 不超过 `PARTICLE_CONFIG.maxPerFrame`（96），并计入上面的「单帧绘制调用 ≤ 200」总预算 |
+| 粒子池上限         | `PARTICLE_CONFIG.capacity`（192）；池满时**覆盖最旧的一颗**（O(1)、不阻塞逻辑） |
+| 粒子与 reduced-motion | `prefers-reduced-motion` 或 `ANIMATION_CONFIG.reducedMotion` 为真时**不生成**（不是生成了再隐身） |
 
 所有时长定义于 `config.js` 的 `ANIMATION_CONFIG`。
 
@@ -1485,6 +1507,26 @@ const LEVEL_3 = {
 | `STORAGE_KEYS.BEST_SCORE`          | 最高分存储键       | `xxl_best_score`     | 3.5 / ROADMAP Step 4 |
 | `STORAGE_KEYS.LEVEL_STARS`         | 每关星级存档键     | `xxl_level_stars`    | 3.7 / ROADMAP Step 12.2 |
 | `STORAGE_KEYS.MUTED`               | 静音开关存储键     | `xxl_muted`          | ROADMAP Step 16 |
+| `PARTICLE_CONFIG.enabled`          | 粒子总开关（关掉即不生成） | true         | 15 v1.27 |
+| `PARTICLE_CONFIG.capacity`         | 粒子池上限（颗）   | 192                  | 15 v1.27 |
+| `PARTICLE_CONFIG.maxPerFrame`      | 每帧贴图上限（次 `drawImage`，计入「≤ 200」总预算） | 96 | 15 v1.27 |
+| `PARTICLE_CONFIG.maxPerBurst`      | 单次事件生成上限（颗） | 48                | 15 v1.27 |
+| `PARTICLE_CONFIG.clearCount`       | 普通消除每格颗数   | 3                    | 15 v1.27 |
+| `PARTICLE_CONFIG.stripedCount`     | 条纹糖果每格颗数   | 8                    | 15 v1.27 |
+| `PARTICLE_CONFIG.wrappedCount`     | 包装糖果每格颗数   | 10                   | 15 v1.27 |
+| `PARTICLE_CONFIG.magicCount`       | 魔力鸟每格颗数     | 12                   | 15 v1.27 |
+| `PARTICLE_CONFIG.comboCount`       | 组合（同批 ≥ 2 颗特殊）每格颗数 | 14      | 15 v1.27 |
+| `PARTICLE_CONFIG.lifeMs`           | 基础存活时长（ms） | 420                  | 15 v1.27 |
+| `PARTICLE_CONFIG.lifeJitter`       | 存活抖动比例（±）  | 0.35                 | 15 v1.27 |
+| `PARTICLE_CONFIG.speed`            | 初速（格 / ms）    | 0.0042               | 15 v1.27 |
+| `PARTICLE_CONFIG.speedJitter`      | 初速抖动比例（±）  | 0.4                  | 15 v1.27 |
+| `PARTICLE_CONFIG.gravity`          | 重力加速度（格 / ms²） | 0.0000075        | 15 v1.27 |
+| `PARTICLE_CONFIG.friction`         | 每毫秒的速度衰减   | 0.9985               | 15 v1.27 |
+| `PARTICLE_CONFIG.size`             | 基础直径（格）     | 0.13                 | 15 v1.27 |
+| `PARTICLE_CONFIG.sizeJitter`       | 尺寸抖动比例（±）  | 0.3                  | 15 v1.27 |
+| `PARTICLE_CONFIG.specialSizeBoost` | 特效类（非普通消除）的尺寸放大倍率 | 1.15 | 15 v1.27 |
+| `PARTICLE_CONFIG.spread`           | 普通消除扇形锥角比例（1 = 整圆） | 0.9 | 15 v1.27 |
+| `PARTICLE_CONFIG.seed`             | 粒子确定性的种子基数（与事件键混合） | 20260925 | 15 v1.27 |
 | `STORAGE_KEYS.BOOSTERS`            | 道具数量存储键     | `xxl_boosters`       | ROADMAP Step 15 |
 
 新增或修改配置项时，必须同步更新本表与第 3 节相关条款。第 1 条（`COLOR_NAMES`）的映射顺序即 `cell.color` 索引语义，调整顺序等于改动所有关卡目标，属破坏性变更。
@@ -1502,4 +1544,5 @@ const LEVEL_3 = {
 | `GOAL_TYPE`      | `score` / `collect` / `clearIce` / `mixed` / `fruit` / `pod` | 4.4 / 3.6    |
 | `COLLECTIBLE_TYPE` | `fruit` / `pod`                                 | 4.1 / 3.6 v1.19 |
 | `BOOSTER_KIND`   | `refresh` / `addSteps` / `hammer`                | 3.9 / 4.2 v1.20 |
+| `PARTICLE_KIND`  | `clear` / `striped` / `wrapped` / `magic` / `combo` | 15 / 2.3 v1.27 |
 | `STORAGE_KEYS`   | 见附录 B 上表                                    | 2.3 / 9      |

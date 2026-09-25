@@ -8,6 +8,31 @@
 
 ---
 
+---
+
+## D044：Step 17 —— 粒子动画与视觉打磨（外观方案 A：预烘焙精灵 + 三类强度）
+
+- 日期：2026-09-25
+- 状态：**已落地**（纯观感：不改任何游戏规则、计分与关卡数值；逻辑模块一行未动）
+- 背景：`ROADMAP.md` 的 Step 17 只给了验收（粒子不影响帧率预算、特效有独特粒子表现）与两条禁止（不引入粒子引擎、不滥用每帧阴影模糊），没有给外观与模块归属。执行卡把三处列成「需口径」：**模块归属**、**外观**、**密度与帧预算**。前两处按宪法约束推导为推荐默认，**外观由用户拍板选 A**（预烘焙精灵 + 三类强度）。三条红线（每帧路径零阴影模糊 / 静态烘焙复用 / 修饰性描边 alpha ≤ 0.1）来自 `REFERENCES.md` §3.5。
+- 决定：
+  1. **新增纯逻辑模块 `particles.js`**（2.2 / 2.3 登记），而不是塞进 `render.js` / `candy.js` / `app.js`：三者已分别 301 / 597 / 790 行（第 6 节的 300 行是目标值），继续塞会让下一步无法维护；与 v1.7 拆出 `candy.js` 同一条推理。模块只做「固定容量环形池 + 生命周期推进 + 按事件种类的生成计划 + 确定性 PRNG + 只读快照」，不认识棋盘 / `GameState` / DOM / Canvas / 存档。
+  2. **确定性是硬要求**：抖动只由 `PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类")` 派生的 `mulberry32` 决定，**不用 `Math.random`、不读时间**。同输入必然同粒子 —— 延续 D039（藤蔓路径）/ D041（结算转化）的口径，也让像素巡检可复现。本文件因此有**第三份** `mulberry32`（另两份在 `settlement.js` 与 `vine-map.js`）：不复用是为守住 2.3 的单向依赖。
+  3. **坐标系与设备无关**：粒子位置以**棋盘格**为单位（1.0 = 一格）、原点 = 棋盘左上角，`render.js` 乘 `cellPx` 后加棋盘区偏移 —— 与 DPR 无关、天然跟随 `computeBoardSize` 的几何变化，并可在 Node 里逐项判定。
+  4. **三类强度 = 颗数递增 + 形状区分**（用户拍板 A）：普通消除 3 颗/格（圆点、向上扇形）、条纹 8（菱形、沿 `direction` 双向直线）、包装 10（五角星、环形）、魔力鸟 12（五角星、环形 + 全色相）、组合 14（在**同批 ≥ 2 颗特殊糖果**的质心再补一记）。外观全部是 `candy.js` 的 `buildParticleAtlas` 在**布局时烘焙**的 3 形状 × 6 色精灵（实心填充 + 一层半透明白高光），每帧只 `drawImage` —— 零渐变、零阴影模糊（红线 1）。
+  5. **每帧预算**（15 节「单帧绘制调用 ≤ 200」）：`PARTICLE_CONFIG.maxPerFrame` = 96 是留给粒子的份额，池上限 `capacity` = 192；池满时**覆盖最旧的一颗**（O(1)、永不阻塞逻辑层）。**实测**：播放帧画布调用峰值 **77**（贴图 74 + 路径 3），画布耗时 p95 **0.20ms**；一次性**烘焙帧** 459 次调用（2.9ms，每布局一次）如实登记为 **P3-F**。
+  6. **reduced-motion = 不生成**：`app.js` 把系统的 `prefers-reduced-motion` 与 `ANIMATION_CONFIG.reducedMotion` 一起传给 `createParticleSystem`，此时 `spawnBurst` 恒返回 0、池保持为空（不是生成了再变透明）—— 浏览器实测 0 颗且对局流程照常（有效交换仍扣 1 步）。
+  7. **不给逻辑层加字段**：粒子种类由「消除相位里该格**被消除前**的 `cell.type` / `cell.direction`」推断（`timeline.js` 的消除相位 board 就是消除前快照），因此 4.2 契约一行没改 —— 这是本步最关键的边界取舍。
+  8. **新增 `tests/particles.test.js`（7 例）**：池有界 / 生命周期 / 确定性 / 按事件产出 / `dt` 边界 / reduced-motion / 快照面积与内存（不持有 `cell` 引用）。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **257 用例 / 3122 断言 / 0 失败 / exit 0**（新增 7 例 944 断言）。
+  - **L0**：`python _build/consistency_check.py` → 全部通过（`particles.js` 已进 2.2、`PARTICLE_CONFIG` 20 键与 `PARTICLE_KIND` 已登记、两文件版本 v1.27 相等）。
+  - **L2/L3**：`_build/verify-step17.mjs`（新增套件）**连跑 3 次全绿**：消除期间粒子出现（粒子贴图峰值 9，≤ `maxPerFrame`）；播放帧调用峰值 77 ≤ 200；画布耗时 p95 0.20ms ≤ 8ms；`prefers-reduced-motion` 下 0 颗粒子且仍扣 1 步；红线 grep 计数 0；控制台无 error/warning、无未捕获异常、页面不可滚动。日志 `_build/step17-verify-{1..6}.log`。
+  - 门禁：Gate 0.1 第十三轮（22 套件 + 5 次复跑）见 `PROGRESS.md` 与 `_build/g13-summary.txt`。
+- 影响：`config.js`（`PARTICLE_CONFIG` 20 键 + `PARTICLE_KIND`）、新增 `particles.js` 与 `tests/particles.test.js`、`candy.js`（`buildParticleAtlas`）、`render.js`（`drawParticles` + 缓存粒子图集）、`app.js`（`stepParticles` / `spawnPhaseParticles` / `resetParticles` + 场景加 `particles`）、`AGENTS.md` v1.27、`ROADMAP.md` v1.27、`prompts.md`。
+- 替代方案：① 把粒子写进 `render.js` 或 `candy.js`（否决：两者都已超 300 行目标值）；② 抖动用运行时随机（否决：像素巡检不可复现，且与 D039/D041 的口径冲突）；③ 每颗粒子用径向渐变/发光（否决：REFERENCES §3.5 实测 3 倍代价，且 headless 巡检会因此超时）；④ DOM/CSS 粒子层（否决：棋盘是 canvas，DOM 粒子会引入额外的重绘层级与触摸命中面，而 5.1 的「禁滚动/缩放」也要求页面保持静态）；⑤ 在逻辑层新增「谁被引爆了」的字段（否决：可由消除前快照的 `cell.type` 推出，不必动 4.2 契约）；⑥ 把精灵烘焙拆到多帧（暂不做：烘焙帧是每布局一次的一次性成本，先登记 P3-F）。
+- 未验证（如实）：① **真机观感与帧率**（本机是桌面 headless + 390×844 触摸模拟，属 L3）；② **浏览器里未逐类取证**条纹/包装/魔力鸟/组合的粒子（Node 侧 `tests/particles.test.js` 已按种类覆盖颗数、方向与全色相；真实对局里强制三类事件各一次登记为 P3 回归项）；③ 粒子在**极窄视口**（< 220px 棋盘）下的相对尺寸只按比例缩放，未单独取证。
+
 ## D043：Gate 0.1 第十二轮（Step 20 + 20.4）的收口 —— 三处 harness 根因、门禁环境固定与 L1 确定性口径
 
 - 日期：2026-09-25

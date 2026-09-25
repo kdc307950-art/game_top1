@@ -12,7 +12,7 @@
 // 外观方案经用户批准（深色描边 + 内阴影 + 内嵌图案 + 高光 + 条纹/方向箭头），见 DECISIONS.md D020。
 
 import { CELL_TYPE, CONFIG, DIRECTION } from './config.js';
-import { buildCollectibleAtlas, buildObstacleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
+import { buildCollectibleAtlas, buildObstacleAtlas, buildParticleAtlas, buildSpriteAtlas, roundRectPath } from './candy.js';
 import { HUD_RATIO, drawBanner, drawGameOver, drawHud, hudCellBackground, hudCells } from './hud.js';
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
@@ -31,6 +31,8 @@ const FIELD_COLOR = '#221d38';
 const SLOT_COLOR = 'rgba(255, 255, 255, 0.045)'; // 格位槽底色（红线 3：≤ 0.1 的修饰性底色）
 const MATCH_RING_COLOR = 'rgba(255, 246, 180, 0.95)';
 const SELECT_RING_COLOR = 'rgba(255, 255, 255, 0.85)';
+// Step 17（v1.27）：粒子种类 → 精灵形状（外观方案 A：三类强度由颗数与形状共同表达）
+const PARTICLE_SHAPE_OF = { clear: 'dot', striped: 'shard', wrapped: 'star', magic: 'star', combo: 'star' };
 
 /** 画布边长（CSS 像素）：取可用宽高中的较小者，扣除安全区、留白与棋盘下方的道具条（5.1 / 3.9）。 */
 export function computeBoardSize() {
@@ -92,7 +94,8 @@ export function createRenderer() {
       chrome: buildChrome(sizePx, dpr, layout),
       sprites: buildSpriteAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr),
       obstacles: buildObstacleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr), // Step 11：冰块/雪块
-      collectibles: buildCollectibleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr) // Step 14：水果/金豆荚
+      collectibles: buildCollectibleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr), // Step 14：水果/金豆荚
+      particles: buildParticleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr) // Step 17：粒子精灵（3 形状 × 6 色）
     };
   }
 
@@ -106,6 +109,7 @@ export function createRenderer() {
     drawCandies(ctx, cache, scene, field);
     drawCollectibles(ctx, cache, scene, field); // 3.6（v1.19）：水果/金豆荚占格、独立于糖果绘制
     drawObstacles(ctx, cache, scene, field); // 5.4：冰块覆层要盖在糖果之上
+    drawParticles(ctx, cache, scene, field); // Step 17：粒子在障碍之上、环与 HUD 之下
     drawRings(ctx, scene, field);
     if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的明确提示
     drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud });
@@ -264,6 +268,37 @@ function blit(ctx, sprite, x, y, cell, scale, alpha) {
     const size = cell * scale;
     const offset = (cell - size) / 2;
     ctx.drawImage(sprite, x + offset, y + offset, size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Step 17（v1.27）：粒子贴图。`scene.particles` 是 `particles.js` 的**只读快照**
+ * （已按 `PARTICLE_CONFIG.maxPerFrame` 截断，最多 96 项），本函数只做 `drawImage`：
+ * 每颗一次调用、无路径重建、无渐变、无阴影模糊类 API（REFERENCES.md §3.5 红线 1）。
+ * 坐标快照以「棋盘格」为单位（原点 = 棋盘左上角），因此这里乘 `cellPx` 再加棋盘区偏移。
+ * 旋转用 `ctx.translate/rotate` 施加（图集里精灵一律正放）。
+ */
+function drawParticles(ctx, cache, scene, field) {
+  const list = scene.particles;
+  if (!list || list.length === 0 || !cache.particles) return;
+  const cell = cache.cellCss;
+  for (const particle of list) {
+    const set = cache.particles[PARTICLE_SHAPE_OF[particle.kind] ?? PARTICLE_SHAPE_OF.clear];
+    if (!set) continue;
+    const sprite = set[particle.color % set.length];
+    const size = Math.max(1, particle.size * cell); // size 是「直径（格）」
+    if (particle.rot) {
+      ctx.save();
+      ctx.globalAlpha = particle.alpha;
+      ctx.translate(field.x + particle.x * cell, field.y + particle.y * cell);
+      ctx.rotate(particle.rot);
+      ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
+      ctx.restore();
+    } else {
+      ctx.globalAlpha = particle.alpha;
+      ctx.drawImage(sprite, field.x + particle.x * cell - size / 2, field.y + particle.y * cell - size / 2, size, size);
+    }
   }
   ctx.globalAlpha = 1;
 }
