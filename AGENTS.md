@@ -1,9 +1,21 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.33
+> 版本：v1.34
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.33 → v1.34 关键变更）
+
+本版落地 **Step 22.2：曲线穿过节点（让节点长在藤蔓上）+ 藤蔓分段渐粗**（22.3 视觉降噪待开工）。**玩法零改动**：解锁门槛、天边云层、隐藏关、50 关表、存档、所有逻辑模块一律不动；口径仍记在 `DECISIONS.md` **D049**。
+
+1. **数据流方向（本步的灵魂）**：节点坐标（`LEVELS.md §9` ↔ `LEVEL_MAP_POS` ↔ `check-vine-map.mjs` **三件套**）**仍是唯一真相源**，藤蔓**反向拟合**穿过它们 —— 不是「沿曲线取节点」。`buildVineAnchors()` 因此改为返回 **`[入口延伸点] + 53 个节点圆心 + [出口延伸点]`**；`buildVineSegments()` 改为 **Catmull-Rom → 三次贝塞尔**（`c1 = p1 + (p2 − p0)/6`、`c2 = p2 − (p3 − p1)/6`），曲线在节点处**一阶连续**且**精确穿过**每个 `from`/`to`。旧口径「锚点与节点无关、节点不参与路径计算」（D040）**在本步被明确取代**，`tests/vine-map.test.js` 里那条「节点坐标不出现在路径里」的断言按新口径**反向改写**为「全部 53 个节点坐标都在曲线点上」。
+2. **`anchors` 语义收窄 + `pathJitter` 退役（附录 B 同步）**：`VINE_MAP_CONFIG.anchors` 由「10 个跨越整个世界的独立锚点」变成**只有入口/出口两个延伸点**（`[{x:0.2,y:−0.06},{x:0.48,y:1.06}]`，x 与首/末节点对齐，藤蔓从世界下方伸进来、向正上方伸出去）；`pathJitter`（26px 的控制点抖动量）**随「锚点 + 抖动」方案一起删除** —— 形状现在完全由节点坐标决定，**不再需要任何随机/抖动**。新增的**渐粗造型比例**（`VINE_TAPER = 0.58`、`VINE_TAPER_SPAN = 6`）按 D013 作为**模块内本地常量**留在 `vine-map.js`，不进附录 B。
+3. **藤蔓渐粗（分段描边）**：SVG 的 `stroke` 不支持沿路径的宽度渐变，因此新增 `buildVineTaperSegments()` 把曲线切成 9 段、每段给出自己的 `d` 与**相对倍率** `factor`（世界最底 0.58 倍 → 最顶 1 倍），相邻段共享端点、`stroke-linecap: round` 让接缝不可见；CSS 侧宽度 = 「基准线宽 × 每段的 `--vine-taper`」，**基准粗细仍只有一处定义**。`#vine-path` / `.vine-path-under` 因此从 `<path>` 变成**分组 `<g>`**（探针按「各 chunk 的 d 拼接」等价改写），并新增一条隐形 `.vine-measure` 路径专供 `getPointAtLength` 量长度/摆叶子。
+4. **硬指标（在渲染结果上量，不只在 Node 里算）**：新增 `_build/shot-map-222.mjs` —— 对**真实 DOM** 里的 `.vine-measure` 按 **1px 采样**，逐个数 53 个 `.vine-node` 圆心到采样折线的距离：**最大 0.47px**（最差是第 27 关）；`_build/check-vine-map.mjs` 用独立复算（40 采样/贝塞尔）得 **0px**；`tests/vine-map.test.js` 同口径 ≤ 0.5px。渐粗在浏览器里实测 **9 段：4.64px（世界最底）→ 7.62px（最顶）**；叶子 136 片全部落在曲线长度内。
+5. **验证**：`tests/run-all.js` **13 文件 / 272 用例 / 3396 断言 / 0 失败**；`python _build/consistency_check.py` 全部通过（v1.34；「附录 B 无幽灵键」这条**抓到了** `pathJitter` 的残留，已随本步删除）；`_build/check-vine-map.mjs` **25 项 PASS**；`lint-levels.mjs` PASS；浏览器套件 `verify-step19-2` / `verify-step19-3` / `verify-step19-4` **全绿**（19-2 与 19-4 按「`#vine-path` 变分组」做了**规则变更式改写**，并各新增一条渐粗断言）。**如实说明**：本机没有视觉模型，Agent 看不到截图，观感请以 `_build/step222-map-{bottom,mid,top}.png` 为准（三帧已用 nav/offset 与像素统计证明确为不同视图）。
 
 ---
 
@@ -1271,6 +1283,7 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.34 | 2026-09-26 | Agent（用户确认：曲线拟合节点） | **Step 22.2 曲线穿过节点 + 藤蔓渐粗**（玩法零改动）：`buildVineAnchors()` = 入口延伸点 + **53 个节点圆心** + 出口延伸点，`buildVineSegments()` 改 **Catmull-Rom→三次贝塞尔**（节点处一阶连续、**精确穿过**每个节点）；**旧口径「节点不参与路径计算」（D040）被本步取代**，`tests/vine-map.test.js` 的对应断言反向改写；`anchors` 收窄为**只有入口/出口两个延伸点**、`pathJitter` **退役**（附录 B 同步，一致性脚本的「无幽灵键」检查抓到了残留）；新增 `buildVineTaperSegments()`（9 段渐粗，`VINE_TAPER`=0.58 按 D013 留作本地常量），`#vine-path`/`.vine-path-under` 由 `<path>` 变**分组**、新增隐形 `.vine-measure` 供 `getPointAtLength`；`verify-step19-2`/`19-4` 按「分组」规则变更式改写并各加一条渐粗断言。**验证**：272 用例 / 3396 断言 / 0 失败、`check-vine-map` **25 PASS**、`consistency` 全通过、`19-2/19-3/19-4` 全绿；新增 `_build/shot-map-222.mjs` 在**真实 DOM** 上按 1px 采样量出「节点到曲线最大 **0.47px**」、渐粗 4.64→7.62px | 2.3、附录 B、11、`config.js`、`vine-map.js`、`vine-map.css`、`tests/vine-map.test.js`、`_build/check-vine-map.mjs`、`_build/verify-step19-2.mjs`、`_build/verify-step19-4.mjs`、`ROADMAP.md` §4.4、`DECISIONS.md` D049、`PROGRESS.md` |
 | v1.33 | 2026-09-26 | Agent（用户确认四条口径） | **Step 22.1 藤蔓地图坐标口径翻转**（玩法零改动，纯记法/换算重构）：`LEVEL_MAP_POS.y` 改为**自世界底部起算**且**随关号递增**（第 1 关 0.10 → 第 50 关 0.84），屏幕换算统一为 `screenY = (1 − y) × 世界总高` 并收成 `vine-map.js` 的**唯一**入口 `screenYOf()`；同步生成器 / `LEVELS.md §9` / `level.js` / `check-vine-map.mjs`（单调性递减→递增、云带改 `1 − tianbianBand`）/ `config.js`（`anchors` 翻号：入口 −0.06、出口 1.06）/ `tests/vine-map.test.js`；`app.js` 一行未改。**两条工程性修正**：拒绝「由曲线定义节点」（三件套真相源不变，改为曲线反向拟合）与「`box-shadow` / SVG 滤镜光影」（改用几何 + 静态渐变）；平移保持「节点居中夹取」、世界总高保持固定比例。**验证**：271 用例 / 3402 断言 / 0 失败、`check-vine-map` 20 PASS、`consistency_check` 全通过、`verify-step19-2/19-3/19-4` 全绿；新增 `_build/shot-map-flip.mjs` 用 **PNG sha256 逐字节相同**证明「视觉零变化」（entry `63dada28…` / panned `4057a39c…`） | 2.3、附录 B 注释、11、`config.js`、`_build/gen-vine-map.mjs`、`level.js`、`LEVELS.md`、`vine-map.js`、`_build/check-vine-map.mjs`、`tests/vine-map.test.js`、`ROADMAP.md` §4.4、`DECISIONS.md` D049、`prompts.md`、`PROGRESS.md` |
 | v1.32 | 2026-09-26 | Agent（用户批准：Step 21 三片全做） | **Step 21.2 道具栏与设置齿轮**（玩法零改动、全在 DOM/CSS）：3.9 的 UI 补「红色圆形计数徽章（悬出右上角、恒等于存档值、为 0 时整键 `disabled` 变灰）+ 内联 SVG 图标 + 糖果质感四层 `box-shadow`」；音效/震动两个开关从常驻一行收进道具行右端的**设置齿轮浮层**（`aria-controls` / `aria-expanded`，绝对定位）；**抓两个真缺陷**：徽章因缺 `box-sizing: border-box` 被撑成 34×26 椭圆、设置浮层原「向上飘」会盖住棋盘约 155px（棋盘底边仅 551px）—— 改为贴在本带内且不盖齿轮；`verify-step16` 的「开关区在画布下方」按新口径**重写为更强的三条**；新增 `_build/shot-booster-21.mjs`（27 项 PASS + 两张截图） | 3.9、5.5 的补充、11、`config.js`（无新增键）、`index.html`、`styles.css`、`app.js`、`ROADMAP.md`、`PROGRESS.md`、`prompts.md`、`_build/verify-step16.mjs` |
 | v1.31 | 2026-09-26 | Agent（用户批准：完整方案） | **Step 21.1 HUD 果汁化**（玩法零改动）：HUD 留在 canvas（用户方案的「DOM 进度条 / `.warning` 类」按 2.3 的分工工程性修正）；新增 `HUD_CONFIG` 9 键与 `hud.js` 的五条纯函数（`goalEntries` / `goalProgress` / `heartbeatScale` / `flashFactor` / `comboText`）+ 有界飘字池（不引入第四份 PRNG）；`render.js` 的卡片材质只在布局期烘焙（单帧 85 次绘制调用、0 新建渐变）；`app.js` 的飘字 ticker 只在有飘字时存在；修掉「连击横幅在最后一层为 clear 时永久残留」的真缺陷；新增 `tests/hud.test.js`（8 例）与 `_build/shot-hud-21.mjs`（16 项 PASS） | 2.3、5.5、15、附录 B、11、`config.js`、`hud.js`、`render.js`、`app.js`、`tests/hud.test.js`、`ROADMAP.md`、`prompts.md` |
@@ -1569,7 +1582,7 @@ const LEVEL_3 = {
 | `VINE_MAP_CONFIG.width`            | 世界 viewBox 宽（归一化 x 的换算基准） | 360            | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.height`           | 一个「旧屏」的高度（viewBox 单位；**世界总高 = height × worldHeightRatio**） | 640 | 19.2 v1.24 / 19.5 v1.30 |
 | `VINE_MAP_CONFIG.worldHeightRatio` | 世界总高倍率（19.5 起取代「每页 10 关」；6.5 时 53 关 ≈ 每屏 5.9 行，密度与 19.4 相当） | 6.5 | 2.3 v1.30 |
-| `VINE_MAP_CONFIG.anchors`          | 路径锚点（归一化 0–1，**跨越整个世界**：入口在世界下方之外、出口在世界上方之外） | 10 个锚点，见 2.3 | 19.2 v1.24 / 19.5 v1.30 |
+| `VINE_MAP_CONFIG.anchors`          | 路径**延伸点**（归一化 0–1，**只有入口/出口两个**；22.2 起曲线反向拟合穿过节点，不再是「一串独立锚点」） | `[{x:0.2,y:−0.06},{x:0.48,y:1.06}]` | 19.2 v1.24 / 19.5 v1.30 / **22.2 v1.34** |
 | `VINE_MAP_CONFIG.nodeColumns`      | 节点 X 列（归一化，≥3 列打破两列对齐） | `[0.2, 0.48, 0.76]` | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.nodesPerRow`      | 每行节点数（行沿世界自下而上推进；2 个/行 → 53 关 = 27 行） | 2 | 2.3 v1.30 |
 | `VINE_MAP_CONFIG.nodeMarginY`      | 节点区上下边距（归一化到**世界**高；同时保证首/末关都能被视口真正居中） | 0.11 | 19.2 v1.24 / 19.5 v1.30 |
@@ -1583,7 +1596,6 @@ const LEVEL_3 = {
 | `VINE_MAP_CONFIG.particleCount`    | 星光点数（确定性，**不使用运行时随机**） | 150 | 2.3 v1.30 |
 | `VINE_MAP_CONFIG.tianbianBand`     | 世界**顶部**云层带的高度比例（须覆盖全部隐藏关、且不盖住第 50 关） | 0.155 | 2.3 v1.30 |
 | `VINE_MAP_CONFIG.backdropBleed`    | 天空/地面超出世界上下边缘的出血量（px；保证平移到位也不露白） | 800 | 2.3 v1.30 |
-| `VINE_MAP_CONFIG.pathJitter`       | 路径控制点抖动量（px，只影响曲线形状） | 26       | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.nodeRadius`       | 节点半径（px）     | 16                   | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.starSize`         | 星星基准尺寸（px，= 第一版 `★` 字形的 11px） | 11    | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.starScale`        | 星星放大倍率（比第一版大 40%） | 1.4          | 19.2 v1.24 |

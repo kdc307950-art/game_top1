@@ -38,6 +38,10 @@ export const MAP_PARALLAX = Object.freeze({ far: MAP.parallaxFar, near: MAP.para
 // 云团的 `[fx, fy, fr]` 满足 `fx × width − fr × width ≥ ±cloudDrift`（漂移 ±7px）——
 // 否则云团会被视口的 `overflow: hidden` 从两侧硬切一刀（19.5 的布局体检抓到的缺陷）。
 const FAR_BAND_Y = 1024;
+/** 藤蔓**渐粗**的造型比例（D013：纯造型，不进附录 B）：世界最底 `VINE_TAPER` 倍 → 最顶 1 倍；
+ *  每段跨 `VINE_TAPER_SPAN` 个点（段间共享端点，接缝被 round linecap 吃掉）。 */
+const VINE_TAPER = 0.58;
+const VINE_TAPER_SPAN = 6;
 const CLOUD_PUFFS = [
   [0.15, 0.05, 0.1],
   [0.28, -0.14, 0.13],
@@ -196,31 +200,41 @@ export function mulberry32(seed) {
 }
 
 /**
- * 路径锚点（世界 viewBox 像素）：**只来自 `VINE_MAP_CONFIG.anchors`**，与 `LEVEL_MAP_POS` / 节点无关。
- * 归一化 y 允许略超 1（世界下方）与小于 0（世界上方）—— 两端的漫出量正好被平移极限吃掉。
+ * 曲线要**穿过**的点（世界 viewBox 像素，自世界下方到上方）：
+ * `[入口延伸点] + [53 个节点圆心（按关号升序）] + [出口延伸点]`。
+ *
+ * **22.2（v1.34 / D049）的核心口径**：节点坐标（`LEVEL_MAP_POS`，真相源是 `LEVELS.md` §9）**仍旧是唯一的
+ * 真相源**，藤蔓反过来**拟合**它们 —— 不是「沿曲线取节点」。因此这里把节点点当作 Catmull-Rom 的控制点，
+ * 曲线**精确穿过每个节点圆心**（`_build/check-vine-map.mjs` 与 `tests/vine-map.test.js` 都会逐点复算距离）。
+ * 归一化 y 允许略超 1 / 小于 0（两眼延伸点在世界之外），两端的漫出量正好被平移极限吃掉。
  */
 export function buildVineAnchors() {
-  return MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(screenYOf(anchor.y, MAP_WORLD_HEIGHT)) }));
+  const ends = MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(screenYOf(anchor.y, MAP_WORLD_HEIGHT)) }));
+  const nodes = [...LEVEL_MAP_POS]
+    .sort((a, b) => a.id - b.id)
+    .map((pos) => ({ x: round3(pos.x * MAP.width), y: round3(screenYOf(pos.y, MAP_WORLD_HEIGHT)) }));
+  return [ends[0], ...nodes, ends[ends.length - 1]];
 }
 
 /**
- * 路径的贝塞尔分段：控制点 = **弦中点分解 + 固定种子抖动**（两类来源，代码里不写死控制点坐标）。
- * 返回 `[{ from, c1, c2, to }]`，与 `buildVinePath` 的 `d` 一一对应（供测试断言「曲线不是直线拼接」）。
+ * Catmull-Rom → 三次贝塞尔的**分段**：返回 `[{ from, c1, c2, to }]`，与 `buildVinePath` 的 `d` 一一对应。
+ * 相邻两段的切线由**前后各一点**决定（`c1 = p1 + (p2 − p0)/6`、`c2 = p2 − (p3 − p1)/6`），
+ * 因此曲线在节点处**一阶连续**（不会出现折角），且**必然穿过**每个 `from`/`to`。
+ * **不使用运行时随机**：形状完全由节点坐标决定（22.2 起 `pathJitter` 已随「锚点 + 抖动」方案一起退役）。
  */
 export function buildVineSegments() {
-  const anchors = buildVineAnchors();
-  const rng = mulberry32(MAP.seed);
-  const jitter = () => (rng() * 2 - 1) * MAP.pathJitter;
+  const pts = buildVineAnchors();
   const segments = [];
-  for (let i = 1; i < anchors.length; i += 1) {
-    const from = anchors[i - 1];
-    const to = anchors[i];
-    const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? pts[i + 1];
     segments.push({
-      from,
-      c1: { x: round1((from.x + mid.x) / 2 + jitter()), y: round1((from.y + mid.y) / 2 + jitter()) },
-      c2: { x: round1((to.x + mid.x) / 2 + jitter()), y: round1((to.y + mid.y) / 2 + jitter()) },
-      to
+      from: p1,
+      to: p2,
+      c1: { x: round1(p1.x + (p2.x - p0.x) / 6), y: round1(p1.y + (p2.y - p0.y) / 6) },
+      c2: { x: round1(p2.x - (p3.x - p1.x) / 6), y: round1(p2.y - (p3.y - p1.y) / 6) }
     });
   }
   return segments;
@@ -235,6 +249,50 @@ export function buildVinePath() {
   d += ` C ${round1(c1.x)} ${round1(c1.y)}, ${round1(c2.x)} ${round1(c2.y)}, ${round1(to.x)} ${round1(to.y)}`;
   for (const seg of segments.slice(1)) {
     d += ` C ${round1(seg.c1.x)} ${round1(seg.c1.y)}, ${round1(seg.c2.x)} ${round1(seg.c2.y)}, ${round1(seg.to.x)} ${round1(seg.to.y)}`;
+  }
+  return d;
+}
+
+/**
+ * **渐粗**：把整条曲线切成若干段，每段给出自己的 `d` 与缩放系数 —— 世界底部细、顶部粗，像真的藤。
+ *
+ * 为什么不在一条 `d` 上用渐变描边：SVG 的 `stroke` 不支持沿路径的宽度渐变，只能分段描。
+ * 相邻两段**共享端点**且用 `stroke-linecap: round`，接缝看不出来。
+ *
+ * 返回 `[{ d, factor }]`，`factor` 是**相对基准线宽**的倍率（`1` = 顶部最粗、`VINE_TAPER` = 底部最细）。
+ * 纯函数、无随机：同一份坐标永远切出同一批段（`tests/vine-map.test.js` 逐项复算）。
+ */
+export function buildVineTaperSegments({ span = VINE_TAPER_SPAN } = {}) {
+  const pts = buildVineAnchors();
+  if (pts.length < 2) return [];
+  const chunks = [];
+  const total = pts.length - 1;
+  for (let start = 0; start < total; start += span) {
+    const from = Math.max(0, start - 1); // 往前借一个点，接缝处的切线才连续
+    const to = Math.min(pts.length - 1, start + span);
+    const slice = pts.slice(from, to + 1);
+    const t = total === 0 ? 1 : start / total; // 0 = 世界最底（入口端）、1 = 世界最顶（出口端）
+    chunks.push({
+      d: pathThrough(slice),
+      // t 越大越靠上 ⇒ 越粗；世界最底 = VINE_TAPER 倍、最顶 = 1 倍
+      factor: round3(VINE_TAPER + (1 - VINE_TAPER) * t)
+    });
+  }
+  return chunks;
+}
+
+/** 把一串点用同一条 Catmull-Rom→贝塞尔规则连成 `d`（`buildVinePath` 与渐粗分段共用，避免两套算法）。 */
+function pathThrough(pts) {
+  if (pts.length < 2) return '';
+  let d = `M ${round1(pts[0].x)} ${round1(pts[0].y)}`;
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? pts[i + 1];
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    d += ` C ${round1(c1.x)} ${round1(c1.y)}, ${round1(c2.x)} ${round1(c2.y)}, ${round1(p2.x)} ${round1(p2.y)}`;
   }
   return d;
 }
@@ -565,11 +623,27 @@ export function renderMap(host, {
   const far = buildFarLayer(-farShift - FAR_BAND_Y, MAP_WORLD_HEIGHT + farShift + FAR_BAND_Y);
   far.setAttribute('data-parallax-factor', String(MAP.parallaxFar));
   svg.appendChild(far);
-  // 藤蔓画**两层**（深色垫层 + 亮色芯）—— 同一份 `d`、更粗更「藤」的观感；仍然是确定性路径
-  const d = buildVinePath();
-  svg.appendChild(el('path', { class: 'vine-path-under', d }));
-  const path = el('path', { class: 'vine-path', id: 'vine-path', d });
-  svg.appendChild(path);
+  // 藤蔓画**两层**（深色垫层 + 亮色芯）—— 22.2 起两层都**分段渐粗**（世界底部细 → 顶部粗），
+  // 段间共享端点、`stroke-linecap: round` 让接缝不可见。宽度由 CSS 的基准线宽 × 每段的 factor 得到，
+  // 因此「基准粗细」仍只在 CSS 里定义一处（这里只决定**相对**倍率）。
+  const taper = buildVineTaperSegments();
+  const underGroup = el('g', { class: 'vine-path-under' });
+  for (const chunk of taper) {
+    const stroke = el('path', { class: 'vine-chunk vine-chunk--under', d: chunk.d, 'data-taper-factor': String(chunk.factor) });
+    stroke.style.setProperty('--vine-taper', String(chunk.factor));
+    underGroup.appendChild(stroke);
+  }
+  svg.appendChild(underGroup);
+  const vineGroup = el('g', { class: 'vine-path', id: 'vine-path' });
+  for (const chunk of taper) {
+    const stroke = el('path', { class: 'vine-chunk vine-chunk--core', d: chunk.d, 'data-taper-factor': String(chunk.factor) });
+    stroke.style.setProperty('--vine-taper', String(chunk.factor));
+    vineGroup.appendChild(stroke);
+  }
+  svg.appendChild(vineGroup);
+  // 叶子沿**整条曲线**采样：用一条不可见的完整路径量长度（`getPointAtLength` 需要真实 DOM 元素）
+  const measure = el('path', { class: 'vine-measure', d: buildVinePath(), 'aria-hidden': 'true' });
+  svg.appendChild(measure);
   const vines = el('g', { class: 'vine-nodes' });
   let hidden = 0;
   for (const position of LEVEL_MAP_POS) {
@@ -587,7 +661,7 @@ export function renderMap(host, {
   svg.appendChild(near);
   world.appendChild(svg);
   viewport.appendChild(world);
-  world.dataset.leaves = String(decorateLeaves(path, svg));
+  world.dataset.leaves = String(decorateLeaves(measure, svg));
   world.dataset.hiddenNodes = String(hidden);
   viewport.dataset.worldHeight = String(round1(geometry.worldHeight));
   viewport.dataset.scale = String(round3(geometry.scale));

@@ -20,6 +20,7 @@ import {
   buildVineAnchors,
   buildVinePath,
   buildVineSegments,
+  buildVineTaperSegments,
   centerMapOn,
   clampMapOffset,
   clampStars,
@@ -161,42 +162,55 @@ test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRN
   assertTrue(seqA1.every((v) => v >= 0 && v < 1), '取值落在 [0,1)');
 });
 
-test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × 世界总高，y 走 screenYOf），跨越整个世界', () => {
+test('buildVineAnchors：22.2 起 = 入口延伸点 + **53 个节点圆心** + 出口延伸点（节点仍是真相源）', () => {
   const anchors = buildVineAnchors();
-  assertDeepEqual(
-    anchors,
-    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(screenYOf(anchor.y, MAP_WORLD_HEIGHT)) })),
-    '锚点 = config 的归一化锚点 × (width, 世界总高)；y 一律走 screenYOf 换算'
-  );
-  assertTrue(anchors.length >= 4, '锚点至少 4 个');
-  const climbUp = MAP.climbDirection !== 'down';
-  if (climbUp) {
-    assertTrue(anchors[0].y > MAP_WORLD_HEIGHT, '入口在**世界下方之外**（屏幕 y > 世界总高）');
-    assertTrue(anchors[anchors.length - 1].y < 0, '出口在**世界上方之外**（屏幕 y < 0）');
-  } else {
-    assertTrue(anchors[0].y < MAP_WORLD_HEIGHT && anchors[anchors.length - 1].y > MAP_WORLD_HEIGHT, '自上而下时入口在世界内、出口在世界下方之外');
-  }
-  const span = Math.max(...anchors.map((a) => a.y)) - Math.min(...anchors.map((a) => a.y));
-  assertTrue(span > MAP_WORLD_HEIGHT, `锚点跨越整个世界（跨度 ${round1(span)} > ${MAP_WORLD_HEIGHT}）`);
-  const nodePoints = LEVEL_MAP_POS.map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(screenYOf(pos.y, MAP_WORLD_HEIGHT)) }));
-  assertTrue(
-    anchors.every((anchor) => !nodePoints.some((point) => point.x === anchor.x && point.y === anchor.y)),
-    '锚点与节点坐标不重合（路径不经过节点）'
-  );
+  const expected = [
+    { x: round3(MAP.anchors[0].x * MAP.width), y: round3(screenYOf(MAP.anchors[0].y, MAP_WORLD_HEIGHT)) },
+    ...[...LEVEL_MAP_POS]
+      .sort((a, b) => a.id - b.id)
+      .map((pos) => ({ x: round3(pos.x * MAP.width), y: round3(screenYOf(pos.y, MAP_WORLD_HEIGHT)) })),
+    { x: round3(MAP.anchors[1].x * MAP.width), y: round3(screenYOf(MAP.anchors[1].y, MAP_WORLD_HEIGHT)) }
+  ];
+  assertDeepEqual(anchors, expected, '曲线要穿过的点 = [入口] + 节点（按关号升序）+ [出口]');
+  assertEqual(anchors.length, LEVEL_MAP_POS.length + 2, '点数 = 节点数 + 两个延伸点');
+  assertEqual(MAP.anchors.length, 2, '延伸点只有入口/出口两个（不再是一串独立锚点）');
+  assertTrue(anchors[0].y > MAP_WORLD_HEIGHT, '入口在**世界下方之外**（屏幕 y > 世界总高）');
+  assertTrue(anchors[anchors.length - 1].y < 0, '出口在**世界上方之外**（屏幕 y < 0）');
+  // 22.2 的取舍：为了「藤蔓穿过节点」，路径**必须**经过节点坐标 —— 旧口径（节点不参与路径）已退役
+  const nodePoints = LEVEL_MAP_POS.map((pos) => `${round3(pos.x * MAP.width)} ${round3(screenYOf(pos.y, MAP_WORLD_HEIGHT))}`);
+  const onCurve = anchors.filter((a) => nodePoints.includes(`${a.x} ${a.y}`)).length;
+  assertEqual(onCurve, LEVEL_MAP_POS.length, '全部 53 个节点坐标都在曲线点上（这正是 22.2 要达到的效果）');
 });
 
-test('buildVinePath：**一条**贯穿世界的 d、设计期派生、是曲线而不是直线拼接、且与节点坐标无关', () => {
+test('buildVinePath：**一条**贯穿世界的 d、设计期派生、曲线而不是直线拼接、且**穿过每个节点**', () => {
   const first = buildVinePath();
-  assertEqual(first, buildVinePath(), '两次结果完全相同（19.5 起只有一条路径，不再逐页）');
+  assertEqual(first, buildVinePath(), '两次结果完全相同（确定性路径，不使用运行时随机）');
   assertTrue(first.startsWith('M '), '以 M 开头');
-  assertEqual(first.split('C').length - 1, buildVineAnchors().length - 1, '每两个锚点之间一段三次贝塞尔');
-  // 节点坐标是显式的、**不参与路径计算**（D040 的取舍在 19.5 仍然成立）：路径里不应出现任何节点坐标
-  LEVEL_MAP_POS.slice(0, 12).forEach((node) => {
-    const point = `${round1(node.x * MAP.width)} ${round1(screenYOf(node.y, MAP_WORLD_HEIGHT))}`;
-    assertFalse(first.includes(` ${point}`), `第 ${node.id} 关的坐标不出现在路径 d 里`);
-  });
   const segments = buildVineSegments();
-  assertEqual(segments.length, buildVineAnchors().length - 1, '分段数 = 锚点数 − 1');
+  assertEqual(first.split('C').length - 1, segments.length, '每两个点之间一段三次贝塞尔');
+  assertEqual(segments.length, buildVineAnchors().length - 1, '分段数 = 点数 − 1');
+  // 22.2 的硬指标（与 _build/check-vine-map.mjs 同口径）：曲线**精确穿过每个节点圆心**
+  const nodes = [...LEVEL_MAP_POS].sort((a, b) => a.id - b.id);
+  const at = (seg, t) => {
+    const u = 1 - t;
+    return {
+      x: u * u * u * seg.from.x + 3 * u * u * t * seg.c1.x + 3 * u * t * t * seg.c2.x + t * t * t * seg.to.x,
+      y: u * u * u * seg.from.y + 3 * u * u * t * seg.c1.y + 3 * u * t * t * seg.c2.y + t * t * t * seg.to.y
+    };
+  };
+  const samples = [];
+  for (const seg of segments) for (let s = 0; s <= 40; s += 1) samples.push(at(seg, s / 40));
+  let worst = 0;
+  for (const node of nodes) {
+    const point = { x: round3(node.x * MAP.width), y: round3(screenYOf(node.y, MAP_WORLD_HEIGHT)) };
+    let best = Infinity;
+    for (const s of samples) {
+      const dist = Math.hypot(s.x - point.x, s.y - point.y);
+      if (dist < best) best = dist;
+    }
+    if (best > worst) worst = best;
+  }
+  assertTrue(worst <= 0.5, `每个节点到曲线的距离 ≤ 0.5px（实得 ${round3(worst)}px）`);
   const deviations = segments.map((seg) => {
     const dx = seg.to.x - seg.from.x;
     const dy = seg.to.y - seg.from.y;
@@ -204,8 +218,18 @@ test('buildVinePath：**一条**贯穿世界的 d、设计期派生、是曲线�
     const distance = (point) => Math.abs((point.x - seg.from.x) * dy - (point.y - seg.from.y) * dx) / length;
     return Math.max(distance(seg.c1), distance(seg.c2));
   });
-  assertTrue(deviations.every((value) => value > 0.5), `每段都不是直线（控制点偏离弦）：${JSON.stringify(deviations)}`);
-  assertTrue(Math.max(...deviations) > 5, '曲线确实弯曲（最大偏离 > 5px）');
+  assertTrue(Math.max(...deviations) > 0.5, '曲线确实弯曲（控制点偏离弦）');
+});
+
+test('buildVineTaperSegments：分段渐粗（世界底部细 → 顶部粗），段间共享端点、确定性', () => {
+  const chunks = buildVineTaperSegments();
+  assertTrue(chunks.length >= 5, `切成多段才能渐粗（实得 ${chunks.length} 段）`);
+  assertDeepEqual(chunks, buildVineTaperSegments(), '两次结果完全相同（纯函数、无随机）');
+  const factors = chunks.map((c) => c.factor);
+  assertTrue(factors.every((f) => f >= 0.5 && f <= 1.001), `倍率都在 [0.5, 1]：${round3(Math.min(...factors))}–${round3(Math.max(...factors))}`);
+  assertTrue(factors[0] < factors[factors.length - 1], `世界底部更细、顶部更粗（${factors[0]} → ${factors[factors.length - 1]}）`);
+  assertTrue(chunks.every((c) => c.d.startsWith('M ')), '每段都是自己的完整 d（M 开头）');
+  assertTrue(chunks.every((c) => c.d.includes(' C ')), '每段至少一段三次贝塞尔');
 });
 
 test('nodeState：19.3 起是三态 —— visited / attainable / locked（locked 只由「未解锁」决定）', () => {

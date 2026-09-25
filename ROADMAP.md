@@ -1,6 +1,6 @@
 # ROADMAP — 手机版消消乐项目路线图
 
-> 版本：v1.33
+> 版本：v1.34
 > 关联文件：`AGENTS.md`（宪法）、`REFERENCES.md`（借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
 > 使用方式：每个 Step 都是一个可独立验收的小任务。开始前先读 `AGENTS.md` 对应章节、`REFERENCES.md` 对应章节、本文件对应 Step、`PROGRESS.md` 最近记录与 `DECISIONS.md` 全部条目，结束后在 `PROGRESS.md` 追加一条记录。
 
@@ -1068,7 +1068,7 @@ iOS 在具备 macOS/Xcode 环境时按相同版本族添加 `@capacitor/ios@$cap
 | 子步骤 | 内容 | 状态 |
 |---|---|---|
 | **22.1** | **坐标口径翻转**：`LEVEL_MAP_POS.y` 改为**自世界底部起算、随关号递增**；生成器 / `LEVELS.md §9` / `mapGeometry`·`visibleLevelIds`·`focusedLevelId` / 云带与锚点语义 / `check-vine-map.mjs` 单调性 / `tests/vine-map.test.js` 与 `verify-step19-2/19-3/19-4` 全部同步。**视觉零变化** | **已完成**（v1.33，PNG sha256 逐字节相同为证） |
-| **22.2** | **曲线穿过节点**（反向拟合，节点仍是真相源）+ 藤蔓**分段渐粗**（世界底部细 → 顶部粗）+ 沿路径的叶子/卷须（固定种子） | 待开工 |
+| **22.2** | **曲线穿过节点**（反向拟合，节点仍是真相源）+ 藤蔓**分段渐粗**（世界底部细 → 顶部粗）+ 沿路径的叶子/卷须（固定种子） | **已完成**（v1.34，`_build/step222-map-*.png`；节点到曲线 ≤ 0.47px） |
 | **22.3** | **视觉降噪与焦点**：当前关金色呼吸光环 + 放大 15% +「当前」标签（**去掉**小黄箭头）；未解锁改**磨砂质感**（半透明低饱和暗绿 + 白细描边 + 精致小锁）；星星 **+30%**、未点亮改浅灰描边；底部**渐变遮罩**（暗示「下面还有路」）；首次进入的**上滑提示**（一次性、reduced-motion 不播）；「回到当前关」移到右下角并图标化 | 待开工 |
 
 **22 的范围**：`config.js`（`VINE_MAP_CONFIG` 的 `anchors` / 注释语义，可能在 22.3 微调 `starSize` / `starScale`）、`_build/gen-vine-map.mjs`（生成器：y 原点翻转、锚点语义）、`level.js`（`LEVEL_MAP_POS` 由生成器重写）、`LEVELS.md` §9（坐标表由生成器重写）、`vine-map.js`（屏幕换算、曲线拟合、渐粗、光影几何）、`vine-map.css`（焦点/磨砂/星标/遮罩/提示）、`app.js`（若 22.3 需要绑定提示的关闭）、`_build/check-vine-map.mjs`（巡检口径）、`tests/vine-map.test.js`、`_build/verify-step19-2/19-3/19-4.mjs`（按新坐标口径追平）。

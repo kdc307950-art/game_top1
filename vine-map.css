@@ -133,11 +133,11 @@
   }
 }
 
-/* 藤蔓本体：一条贯穿世界的有机曲线；`stroke-dasharray/offset` 只做一次「生长」观感 */
-.vine-path {
+/* 藤蔓本体：由若干「渐粗分段」拼成**一条**贯穿世界的有机曲线（22.2）。
+   每段自带 `--vine-taper`（1 = 世界顶部最粗、底部最细），宽度 = 基准 × 倍率；
+   段间共享端点 + round linecap，接缝不可见。这里只定义「相对基准」，基准粗细仍是单一来源。 */
+.vine-chunk {
   fill: none;
-  stroke: var(--vine-path);
-  stroke-width: 8;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 9000;
@@ -145,17 +145,27 @@
   transition: stroke-dashoffset 1200ms ease-out;
 }
 
-.vine-path.grown {
-  stroke-dashoffset: 0;
+.vine-chunk--core {
+  stroke: var(--vine-path);
+  stroke-width: calc(8px * var(--vine-taper, 1));
 }
 
 /* 19.4：藤蔓的**深色垫层**（更粗、无生长动画），与上层亮色芯叠出「有厚度的藤」 */
-.vine-path-under {
-  fill: none;
+.vine-chunk--under {
   stroke: #12281f;
-  stroke-width: 13;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: calc(13px * var(--vine-taper, 1));
+  transition: none;
+}
+
+/* 「生长」观感：类挂在分组 `<g class="vine-path">` 上，由它统一下发给每一段 */
+.vine-path.grown .vine-chunk {
+  stroke-dashoffset: 0;
+}
+
+/* 只用来量长度的隐形路径（叶子沿它采样），不参与绘制 */
+.vine-measure {
+  fill: none;
+  stroke: none;
 }
 
 /* 叶子与卷须：沿路径切线方向摆放，做轻微摇曳（尊重 prefers-reduced-motion） */
@@ -474,7 +484,7 @@
     transition: none;
   }
 
-  .vine-path {
+  .vine-path .vine-chunk {
     transition-duration: 0.001ms;
     stroke-dashoffset: 0;
   }
