@@ -1,13 +1,18 @@
-/* vine-map.css — 藤蔓关卡地图的样式（Step 19.2 v2 / AGENTS.md 2.3 / 5.1；口径见 DECISIONS D040）。
+/* vine-map.css — 藤蔓关卡地图的样式（Step 19.5：世界坐标 + 视口内纵向平移；AGENTS.md 2.3 / 5.1；口径见 D047）。
    地图是**画布外的绝对定位层**：它覆盖整个视口，不参与 canvas 的 `computeBoardSize`，
-   也不改 styles.css 里除 `--booster-bar-h` 之外的任何变量。禁止页面滚动（5.1）依旧成立 —— 分页是按钮，
-   不是滚动容器。节点状态一律由 `data-state` / `data-stars` 驱动（**不使用内联样式**）。 */
+   也不改 styles.css 里除 `--booster-bar-h` 之外的任何变量。
+   **5.1 的禁滚动/缩放依旧成立**：视口固定、`overflow: hidden`，平移的是世界自己的 `transform: translateY`，
+   页面本身一个像素都不滚（`document.documentElement.scrollTop` 恒为 0）。
+   节点状态一律由 `data-state` / `data-stars` 驱动（**不使用内联样式**；内联的只有世界/图层的动态 transform 与进度条宽度）。 */
 
 #map {
   /* 时长与周期来自 config.js 的 VINE_MAP_CONFIG（renderMap 以自定义属性注入），这里只给兜底值 */
   --vine-pulse-ms: 2000ms;
   --vine-leaf-ms: 3600ms;
-  --vine-slide-ms: 320ms;
+  --vine-scroll-ms: 420ms;
+  --vine-cloud-ms: 9000ms;
+  --vine-world-w: 360px;
+  --vine-world-h: 4160px;
   --vine-path: #2d6a4f;   /* 藤蔓品牌深绿 */
   --vine-gold: #fbc531;   /* 品牌亮金（当前关卡呼吸光效 / 三星环 / 点亮星星） */
   --vine-attainable: #2d6a4f; /* attainable 状态的绿色描边 */
@@ -33,63 +38,111 @@
   display: none;
 }
 
-/* 一屏只露一页：横向轨道靠 `transform: translateX` + `transition` 平滑位移（分页按钮驱动） */
+/* 固定视口：只露世界的一屏；纵向平移靠世界的 `transform: translateY`（页面本身不滚动） */
 .vine-viewport {
+  position: relative;
   flex: 1 1 auto;
   width: min(100%, 360px);
   overflow: hidden;
+  touch-action: none;
+  cursor: grab;
 }
 
-.vine-track {
-  display: flex;
-  height: 100%;
-  width: calc(var(--vine-pages, 5) * 100%);
-  transition: transform var(--vine-slide-ms) ease-out;
+#map[data-dragging='true'] .vine-viewport {
+  cursor: grabbing;
 }
 
-.vine-page {
-  flex: 0 0 calc(100% / var(--vine-pages, 5));
-  height: 100%;
+/* 世界：逻辑尺寸 = viewBox 尺寸（1 单位 = 1px），再按视口宽**统一缩放**（不会把节点压成椭圆） */
+.vine-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--vine-world-w);
+  height: var(--vine-world-h);
+  transform-origin: 0 0;
+  transition: transform var(--vine-scroll-ms) ease-out;
+  will-change: transform;
 }
 
-.vine-page-svg {
+/* 拖拽中/首次定位：不做过渡，跟手 */
+.vine-world--instant {
+  transition: none;
+}
+
+.vine-world-svg {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
 }
 
-/* 19.4 画风：分层背景（天空渐变 + 两层远山 + 地面色带）—— 只是观感层，不参与命中 */
-.vine-backdrop .vine-sky {
+/* 19.5 分层背景：天空渐变（世界底部深绿 → 顶部深空蓝）+ 地面色带 */
+.vine-backdrop .vine-sky,
+.vine-sky {
   opacity: 1;
-}
-
-.vine-hill {
-  stroke: none;
-}
-
-.vine-hill--far {
-  fill: #1f3b34;
-}
-
-.vine-hill--near {
-  fill: #1a322d;
 }
 
 .vine-ground {
   fill: #14261f;
 }
 
-/* 藤蔓本体：有机曲线（单条平滑贝塞尔）；`stroke-dasharray/offset` 只做一次「生长」观感 */
+/* 19.5 视差远景层：远山剪影 + 雾团（半透明重叠出层次；纯观感，不参与命中） */
+.vine-parallax {
+  pointer-events: none;
+}
+
+.vine-ridge {
+  fill: #1f3b34;
+  opacity: 0.55;
+}
+
+.vine-haze {
+  fill: #24404a;
+  opacity: 0.35;
+}
+
+/* 19.5 视差近景层：确定性星光点（闪烁相位由 class 决定，避免内联样式） */
+.vine-star {
+  fill: #ffe9a8;
+  opacity: 0.5;
+  animation: vine-twinkle 3200ms ease-in-out infinite;
+}
+
+.vine-star--p1 {
+  animation-delay: -800ms;
+  opacity: 0.35;
+}
+
+.vine-star--p2 {
+  animation-delay: -1600ms;
+  opacity: 0.6;
+}
+
+.vine-star--p3 {
+  animation-delay: -2400ms;
+  opacity: 0.42;
+}
+
+@keyframes vine-twinkle {
+  0%,
+  100% {
+    fill-opacity: 0.22;
+  }
+  50% {
+    fill-opacity: 0.85;
+  }
+}
+
+/* 藤蔓本体：一条贯穿世界的有机曲线；`stroke-dasharray/offset` 只做一次「生长」观感 */
 .vine-path {
   fill: none;
   stroke: var(--vine-path);
   stroke-width: 8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 4000;
-  stroke-dashoffset: 4000;
-  transition: stroke-dashoffset 900ms ease-out;
+  stroke-dasharray: 9000;
+  stroke-dashoffset: 9000;
+  transition: stroke-dashoffset 1200ms ease-out;
 }
 
 .vine-path.grown {
@@ -213,7 +266,7 @@
   text-anchor: middle;
 }
 
-/* 天边云层（19.3，第 6 页）：隐藏关未揭示时占据这一页，附「还差 N ⭐」 */
+/* 天边云层带（19.3 的第 6 页 → 19.5 的世界顶部一带）：隐藏关未揭示时铺在世界的顶端 */
 .vine-cloud-puff {
   fill: #cdd6f4;
   fill-opacity: 0.92;
@@ -239,13 +292,13 @@
 
 .vine-cloud-text {
   fill: #3b3a5c;
-  font-size: 26px;
+  font-size: 34px;
   font-weight: 800;
 }
 
 .vine-cloud-hint {
   fill: #4b4a70;
-  font-size: 15px;
+  font-size: 20px;
 }
 
 /* 点锁定节点时的一次性提示条（画布外 DOM，19.3；由 app.js 显示、自动淡出） */
@@ -312,7 +365,7 @@
   pointer-events: none;
 }
 
-/* 星星：从节点正下方移出到右侧，尺寸 = starSize × starScale（比第一版大 40%），间距 starGap */
+/* 星星：节点右侧（不压在藤蔓上），尺寸 = starSize × starScale，间距 starGap */
 .vine-node-star {
   fill: none;
   stroke: var(--vine-star-off);
@@ -336,7 +389,7 @@
   stroke-width: 3;
 }
 
-/* 总星数进度条（`⭐ 12/150`；只读展示，不写存档） */
+/* 总星数进度条（`⭐ 12/150`；只读展示，不写存档）—— **固定在世界之外**，不随平移移动 */
 .vine-progress {
   width: min(100%, 300px);
   display: flex;
@@ -345,7 +398,7 @@
   gap: 4px;
   color: #ffffff;
   font: 600 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55); /* 19.4：背景分层后文字更易读 */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 .vine-progress-bar {
@@ -362,18 +415,18 @@
   border-radius: 999px;
   background: linear-gradient(90deg, #f0a500 0%, var(--vine-gold) 55%, #ffe9a8 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
-  transition: width var(--vine-slide-ms) ease-out;
+  transition: width var(--vine-scroll-ms) ease-out;
 }
 
-/* 分页：`[◀] 第 N / 5 页 [▶]`（DOM 按钮，click 由 app.js 委托） */
-.vine-pager {
+/* 19.5 导航：`[▲] 第 N 关 / 共 M 关 [▼]`（取代 19.2 的左右翻页） */
+.vine-nav {
   display: flex;
   align-items: center;
   gap: 12px;
   padding-bottom: 4px;
 }
 
-.vine-pager-button {
+.vine-nav-button {
   width: 46px;
   height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -384,20 +437,40 @@
   cursor: pointer;
 }
 
-.vine-pager-button:disabled {
+.vine-nav-button:disabled {
   opacity: 0.35;
   cursor: default;
 }
 
-.vine-pager-label {
-  min-width: 96px;
+.vine-nav-label {
+  min-width: 132px;
   text-align: center;
   color: #ffffff;
   font: 600 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+/* 「回到当前关」：悬浮在地图右上角，**不随世界滚动** */
+.vine-recenter {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  right: calc(var(--safe-right) + 8px);
+  z-index: 3;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 233, 168, 0.55);
+  border-radius: 999px;
+  background: rgba(27, 24, 48, 0.82);
+  color: #ffe9a8;
+  font: 600 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.vine-recenter:active {
+  background: rgba(27, 24, 48, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .vine-track {
+  .vine-world,
+  .vine-progress-fill {
     transition: none;
   }
 
@@ -408,13 +481,14 @@
 
   /* 注意**选择器特异性**：动画是挂在 `.vine-node[data-state='attainable'] .vine-node-ring` 这类
      复合选择器上的，媒体查询里的单类选择器权重更低、压不住它 —— 所以这里必须用同权重或更高的写法
-     （19.4 的探针就是这么抓到的：`animation-name` 仍是 `pulse`）。 */
+     （19.4 的探针就是这么抓到的：`animation-name` 仍是 `pulse`）。19.5 的星光/远山同理。 */
   .vine-node[data-state] .vine-node-ring,
   .vine-node.vine-node--current .vine-node-halo,
   .vine-node .vine-node-arrow,
   .vine-cloud .vine-cloud-puff,
   .vine-node .vine-leaf-blade,
-  .vine-leaf .vine-leaf-blade {
+  .vine-leaf .vine-leaf-blade,
+  .vine-parallax--near .vine-star {
     animation: none;
   }
 }

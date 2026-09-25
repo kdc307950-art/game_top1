@@ -1,42 +1,155 @@
-// vine-map.js — 藤蔓关卡地图（SVG 渲染 + 分页 + 确定性路径）。见 AGENTS.md 2.2 / 2.3 / 5.1 与 DECISIONS D040（19.2 v2）。
+// vine-map.js — 藤蔓关卡地图（**世界坐标 + 视口内纵向平移** + 确定性路径）。见 AGENTS.md 2.3 / 5.1 与 D047（19.5）。
 //
-// 边界（2.3）：只做两件事 —— 读「坐标 + 星级 + 当前关」→ 画 SVG。**不读游戏状态、不写存档、不绑全局事件**
-// （事件由 app.js 在宿主元素上做委托）。坐标来自 `level.js` 的 `LEVEL_MAP_POS`（真相源是 `LEVELS.md` §9），
-// 星级与总星数由调用方从 `storage.js` 读好后传进来（总星数可经 `getTotalStars()` 纯函数派生）。
+// 边界（2.3）：只做两件事 —— 读「坐标 + 星级 + 当前关 + 解锁表」→ 把地图画成 DOM/SVG，并按调用方要求平移世界。
+// **不读游戏状态、不写存档、不绑全局事件**（拖拽/导航/键盘的事件全部由 app.js 绑在宿主元素上，
+// 再调用本模块导出的 `panMap` / `setMapOffset` / `centerMapOn`）。坐标来自 `level.js` 的 `LEVEL_MAP_POS`
+// （真相源是 `LEVELS.md` §9），星级、总星数、解锁表与云层状态都由调用方算好后传进来。
 //
-// 归一化坐标（19.2 v2 的核心口径）：`VINE_MAP_CONFIG.anchors` 与 `LEVEL_MAP_POS` 都是 **0–1** 的值，
-// 渲染时乘 viewBox 宽高（`width`/`height`），再由 SVG 缩放到容器 —— 巡检脚本只比归一化值，不依赖设备像素。
+// 19.5 的核心口径（用户口径「把左右翻页换成藤蔓向上蔓延」，见 DECISIONS D047）：
+//   · **没有「页」**：整张地图是一块**连续的世界**（世界总高 = `height × worldHeightRatio` 个 viewBox 单位）。
+//   · 视口固定、`overflow: hidden`；平移的是世界自己的 `transform: translateY` ——
+//     **页面本身仍然不可滚动/缩放**（5.1 不需要开例外），触摸手势也与 input.js 的 canvas 手势天然隔离。
+//   · 坐标一律归一化：x 相对 `width`、y 相对**世界总高**（0 = 世界顶部、1 = 世界底部，`up` 时第 1 关在世界最底）。
+//   · 渲染按视口宽**统一缩放**（`scale = 视口宽 / width`），因此节点不会被非等比拉伸成椭圆。
 //
-// 确定性（设计期派生）：路径只由 `VINE_MAP_CONFIG.anchors` + `mulberry32(seed + page)` 决定 ——
+// 确定性（设计期派生）：路径只由 `VINE_MAP_CONFIG.anchors` + `mulberry32(seed)` 决定 ——
 // **代码里不写死任何控制点**，也**不使用运行时随机**；节点坐标是显式的、**不参与路径计算**（D040 的取舍）。
-//
-// 分页（用户批准的滚动口径 (a)）：每页 `pageSize` 关、5 页 = 50 关；分页是**按钮**（不是滚动容器），
-// 翻页用 `transform: translateX` + `transition` 做平滑位移。地图是**画布外的绝对定位层**，不参与 `computeBoardSize`。
 
 import { CONFIG } from './config.js';
-import { LEVEL_MAP_POS } from './level.js';
+import { LEVEL_COUNT, LEVEL_MAP_POS } from './level.js';
 
 const MAP = CONFIG.VINE_MAP_CONFIG;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const SVG_TAGS = new Set(['svg', 'g', 'path', 'circle', 'ellipse', 'text', 'rect', 'line', 'polygon']);
+const SVG_TAGS = new Set(['svg', 'g', 'path', 'circle', 'ellipse', 'text', 'rect', 'line', 'polygon', 'defs', 'linearGradient', 'stop']);
+const POS_BY_ID = new Map(LEVEL_MAP_POS.map((pos) => [pos.id, pos]));
 
-/** 每页关卡数（= `VINE_MAP_CONFIG.pageSize`）。 */
-export const MAP_PAGE_SIZE = MAP.pageSize;
+/** 世界总高（viewBox 单位）。 */
+export const MAP_WORLD_HEIGHT = MAP.height * MAP.worldHeightRatio;
+/** ▲/▼ 一次移动的视口高比例（app.js 用它算平移量）。 */
+export const MAP_NAV_STEP_RATIO = MAP.navStepRatio;
+/** 视差/星光的**净**位移比例（导出给巡检与测试复算，不让调用方猜）。 */
+export const MAP_PARALLAX = Object.freeze({ far: MAP.parallaxFar, near: MAP.parallaxNear });
 
-/** 页数 = ⌈关卡数 / 每页关卡数⌉。 */
-export function pageCount(levelCount = LEVEL_MAP_POS.length) {
-  return Math.max(1, Math.ceil(levelCount / MAP.pageSize));
+// 远山带的带高（viewBox 单位）与云团的造型比例：**纯观感**，按 D013 留在模块内的本地常量。
+// 云团的 `[fx, fy, fr]` 满足 `fx × width − fr × width ≥ ±cloudDrift`（漂移 ±7px）——
+// 否则云团会被视口的 `overflow: hidden` 从两侧硬切一刀（19.5 的布局体检抓到的缺陷）。
+const FAR_BAND_Y = 1024;
+const CLOUD_PUFFS = [
+  [0.15, 0.05, 0.1],
+  [0.28, -0.14, 0.13],
+  [0.42, 0.06, 0.1],
+  [0.56, -0.1, 0.14],
+  [0.7, 0.08, 0.1],
+  [0.85, -0.06, 0.09]
+];
+
+/** 宿主元素 → 世界几何与平移状态（地图层自己不绑事件，因此状态跟着宿主走）。 */
+const WORLDS = new WeakMap();
+
+// ---------------------------------------------------------------------------
+// 纯几何（全部可在 Node 里单测；不碰 DOM）
+// ---------------------------------------------------------------------------
+
+/** 关号 → 世界归一化 y（0 = 世界顶部、1 = 世界底部）；未知关号返回 null。 */
+export function worldY(levelId) {
+  const pos = POS_BY_ID.get(Math.trunc(Number(levelId)));
+  return pos ? pos.y : null;
 }
 
-/** 第 `page` 页的关卡坐标（按关号升序，归一化）。越界页夹到 [1, 页数]。 */
-export function positionsOnPage(page, levelCount = LEVEL_MAP_POS.length) {
-  const wanted = clampPage(page, pageCount(levelCount));
-  return LEVEL_MAP_POS.filter((pos) => pos.page === wanted);
+/** 关号 → 世界归一化 x。 */
+export function worldX(levelId) {
+  const pos = POS_BY_ID.get(Math.trunc(Number(levelId)));
+  return pos ? pos.x : null;
 }
 
-/** 关号 → 所在页（供「进入某关后地图停在哪一页」用）。 */
-export function pageOf(levelId) {
-  return clampPage(Math.ceil((Number(levelId) || 1) / MAP.pageSize), pageCount());
+/**
+ * 由视口尺寸算出这一帧的世界几何：
+ *   `scale` = 视口宽 / width（**统一缩放**，宽对齐）；`worldHeight` = 世界总高 × scale（CSS 像素）；
+ *   `minOffset` = 最底的那一关居中时的平移量；`maxOffset` = 最顶的那一关居中时的平移量。
+ * 平移量 T 的定义：世界左上角相对视口左上角的 y 偏移（负值 = 世界被向上推）。
+ */
+export function mapGeometry(viewportWidth, viewportHeight) {
+  const width = Number(viewportWidth) > 0 ? Number(viewportWidth) : MAP.width;
+  const height = Number(viewportHeight) > 0 ? Number(viewportHeight) : MAP.height;
+  const scale = width / MAP.width;
+  const worldHeight = MAP_WORLD_HEIGHT * scale;
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const pos of LEVEL_MAP_POS) {
+    const y = pos.y * worldHeight;
+    if (y < top) top = y;
+    if (y > bottom) bottom = y;
+  }
+  const mid = height / 2;
+  return {
+    viewportWidth: width,
+    viewportHeight: height,
+    scale,
+    worldHeight,
+    top,
+    bottom,
+    minOffset: mid - bottom, // 最底的关居中
+    maxOffset: mid - top, // 最顶的关居中
+    yOf: (levelId) => {
+      const y = worldY(levelId);
+      return y === null ? null : y * worldHeight;
+    }
+  };
+}
+
+/** 平移量夹到「首关 / 末关都能居中」的范围（因此两端都能真的居中，不会差半屏）。 */
+export function clampMapOffset(offset, geometry) {
+  const value = Number(offset);
+  const safe = Number.isFinite(value) ? value : 0;
+  return Math.min(Math.max(safe, geometry.minOffset), geometry.maxOffset);
+}
+
+/** 把某一关放到视口正中所需的平移量（已夹到边界）。 */
+export function centeredOffsetFor(levelId, geometry) {
+  const y = geometry.yOf(levelId);
+  if (y === null) return clampMapOffset(geometry.maxOffset, geometry);
+  return clampMapOffset(geometry.viewportHeight / 2 - y, geometry);
+}
+
+/** 当前平移量下「落在视口内（含节点半径余量）」的关号，按关号升序。 */
+export function visibleLevelIds(offset, geometry) {
+  const margin = (MAP.nodeRadius + 4) * geometry.scale;
+  const ids = [];
+  for (const pos of LEVEL_MAP_POS) {
+    const screenY = pos.y * geometry.worldHeight + offset;
+    if (screenY >= -margin && screenY <= geometry.viewportHeight + margin) ids.push(pos.id);
+  }
+  return ids;
+}
+
+/** 视口正中最近的关号（导航文本显示的就是它 —— 「你正在看哪一关」）。 */
+export function focusedLevelId(offset, geometry) {
+  const mid = geometry.viewportHeight / 2;
+  let best = null;
+  let bestDistance = Infinity;
+  for (const pos of LEVEL_MAP_POS) {
+    const distance = Math.abs(pos.y * geometry.worldHeight + offset - mid);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = pos.id;
+    }
+  }
+  return best;
+}
+
+/**
+ * 视差图层的**净**屏幕位移 = `factor × offset`（factor < 1 比世界慢、> 1 更快/反向）。
+ * 图层是世界的子元素（已经跟着世界走了 `offset`），因此它自己还要补偿 `(factor − 1) × offset`；
+ * 这个补偿量在 SVG 内部是 viewBox 单位，需要除以 `scale` 才是屏幕像素。
+ */
+export function parallaxNetShift(factor, offset) {
+  return factor * offset;
+}
+
+/** 视差图层自身要施加的补偿位移（viewBox 单位 / 也是在 `scale = 1` 时的像素）。 */
+export function parallaxCompensation(factor, offset, scale) {
+  const safeScale = Number(scale) > 0 ? Number(scale) : 1;
+  return ((factor - 1) * offset) / safeScale;
 }
 
 /** 星级规范化：只接受 0–3 的整数（脏数据 → 0），与 3.7 的三星口径一致。 */
@@ -46,17 +159,16 @@ export function clampStars(value) {
 }
 
 /**
- * 节点状态机：`visited`（已通关）/ `attainable`（可玩未通关）/ **`locked`（星数不够，19.3 新增）**。
+ * 节点状态机：`visited`（已通关）/ `attainable`（可玩未通关）/ `locked`（星数不够，19.3 新增）。
  * `unlocked` 由调用方（`app.js`）用 `level.isLevelUnlocked()` 算好后传入 —— **地图层不认识规则**，
- * 它只回答「这一关现在能不能玩」。注意：`visited` 与 `unlocked` 同时成立时取 `visited`（已通关的关卡
- * 永远可玩，这是 19.3 的反锁保护）。
+ * 它只回答「这一关现在能不能玩」。注意：`visited` 与 `unlocked` 同时成立时取 `visited`（19.3 的反锁保护）。
  */
 export function nodeState(earned, unlocked = true) {
   if (clampStars(earned) > 0) return 'visited';
   return unlocked ? 'attainable' : 'locked';
 }
 
-/** mulberry32：小而确定的 PRNG —— 只用于「同种子同路径」，不用于玩法。 */
+/** mulberry32：小而确定的 PRNG —— 只用于「同种子同路径/同星光」，不用于玩法。 */
 export function mulberry32(seed) {
   let state = seed >>> 0;
   return function next() {
@@ -68,20 +180,20 @@ export function mulberry32(seed) {
 }
 
 /**
- * 路径锚点（viewBox 像素）：**只来自 `VINE_MAP_CONFIG.anchors`**，与 `LEVEL_MAP_POS` / 节点无关。
- * 归一化 y 允许略超 1（出口）与小于 1（入口），两页衔接即「延伸出屏」的接口。
+ * 路径锚点（世界 viewBox 像素）：**只来自 `VINE_MAP_CONFIG.anchors`**，与 `LEVEL_MAP_POS` / 节点无关。
+ * 归一化 y 允许略超 1（世界下方）与小于 0（世界上方）—— 两端的漫出量正好被平移极限吃掉。
  */
 export function buildVineAnchors() {
-  return MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP.height) }));
+  return MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP_WORLD_HEIGHT) }));
 }
 
 /**
  * 路径的贝塞尔分段：控制点 = **弦中点分解 + 固定种子抖动**（两类来源，代码里不写死控制点坐标）。
  * 返回 `[{ from, c1, c2, to }]`，与 `buildVinePath` 的 `d` 一一对应（供测试断言「曲线不是直线拼接」）。
  */
-export function buildVineSegments(page) {
+export function buildVineSegments() {
   const anchors = buildVineAnchors();
-  const rng = mulberry32(MAP.seed + clampPage(page, pageCount()));
+  const rng = mulberry32(MAP.seed);
   const jitter = () => (rng() * 2 - 1) * MAP.pathJitter;
   const segments = [];
   for (let i = 1; i < anchors.length; i += 1) {
@@ -98,9 +210,9 @@ export function buildVineSegments(page) {
   return segments;
 }
 
-/** 第 `page` 页的藤蔓 `d`：一条平滑的三次贝塞尔曲线（M → 若干 C）。 */
-export function buildVinePath(page) {
-  const segments = buildVineSegments(page);
+/** 贯穿整个世界的藤蔓 `d`：**一条**平滑的三次贝塞尔曲线（M → 若干 C）。 */
+export function buildVinePath() {
+  const segments = buildVineSegments();
   if (segments.length === 0) return '';
   const { from, c1, c2, to } = segments[0];
   let d = `M ${round1(from.x)} ${round1(from.y)}`;
@@ -124,6 +236,17 @@ export function starPath(cx, cy, size) {
   return `${d}Z`;
 }
 
+/** 导航文本（虚拟世界里的「第 N 关 / 共 M 关」；隐藏关不显示分母，避免剧透天边）。 */
+export function navLabelText(levelId, mainCount = LEVEL_COUNT) {
+  const id = Math.trunc(Number(levelId));
+  if (!Number.isFinite(id) || id <= 0) return `共 ${mainCount} 关`;
+  return id > mainCount ? `第 ${id} 关` : `第 ${id} 关 / 共 ${mainCount} 关`;
+}
+
+// ---------------------------------------------------------------------------
+// 渲染
+// ---------------------------------------------------------------------------
+
 /** 单个节点（`<g data-level data-stars data-state role=listitem tabindex=0 aria-label>`，无内联样式）。 */
 function buildNode(position, stars, current, unlocked, required) {
   const earned = clampStars(stars?.[position.id] ?? stars?.[String(position.id)] ?? 0);
@@ -131,7 +254,7 @@ function buildNode(position, stars, current, unlocked, required) {
   const state = nodeState(earned, !locked);
   const need = Math.max(0, Math.trunc(Number(required?.[position.id] ?? required?.[String(position.id)] ?? 0)));
   const cx = round1(position.x * MAP.width);
-  const cy = round1(position.y * MAP.height);
+  const cy = round1(position.y * MAP_WORLD_HEIGHT);
   const classes = ['vine-node', `vine-node--${state}`];
   if (state === 'visited') classes.push('vine-node--cleared');
   if (position.id === current) classes.push('vine-node--current');
@@ -143,20 +266,19 @@ function buildNode(position, stars, current, unlocked, required) {
     'data-locked': locked ? 'true' : null,
     'data-required': String(need),
     'data-current': position.id === current ? 'true' : null,
+    'data-world-y': String(position.y),
     role: 'listitem',
     tabindex: locked ? '-1' : '0',
     'aria-disabled': locked ? 'true' : null,
-    'aria-label': locked
-      ? `第 ${position.id} 关，未解锁，需要 ${need} 星`
-      : `第 ${position.id} 关，${earned} 星`
+    'aria-label': locked ? `第 ${position.id} 关，未解锁，需要 ${need} 星` : `第 ${position.id} 关，${earned} 星`
   });
   node.appendChild(el('circle', { class: 'vine-node-halo', cx, cy, r: MAP.nodeRadius + 6 }));
   node.appendChild(el('circle', { class: 'vine-node-ring', cx, cy, r: MAP.nodeRadius + 3 }));
   node.appendChild(el('circle', { class: 'vine-node-body', cx, cy, r: MAP.nodeRadius }));
   // 19.4 画风：左上内嵌高光（一颗半透明白点，做「鼓起来」的立体感；不参与任何状态判定）
   node.appendChild(el('circle', { class: 'vine-node-gloss', cx: round1(cx - MAP.nodeRadius * 0.32), cy: round1(cy - MAP.nodeRadius * 0.34), r: round1(MAP.nodeRadius * 0.3) }));
-  node.appendChild(el('text', { class: 'vine-node-label', x: cx, y: cy + 5, 'text-anchor': 'middle' }, String(position.id)));
-  // 19.3：锁定的节点在正下方显示「需要 N 星」；19.4 再补一个小锁形图标（纯 SVG path，无素材）
+  node.appendChild(el('text', { class: 'vine-node-label', x: cx, y: round1(cy + 5), 'text-anchor': 'middle' }, String(position.id)));
+  // 19.3：锁定的节点显示「需要 N 星」+ 19.4 的小锁形图标（纯 SVG path，无素材）
   if (locked) {
     node.appendChild(el('text', { class: 'vine-node-required', x: cx, y: round1(cy + MAP.nodeRadius + 20) }, `${need}⭐`));
     const lockR = MAP.nodeRadius * 0.34;
@@ -177,8 +299,7 @@ function buildNode(position, stars, current, unlocked, required) {
     }));
     node.appendChild(lock);
   }
-  // 19.4：当前关卡上方加一枚**指向它的指针**（对应参考专利里「指向玩家最高关卡的指针」，
-  // 也解决「从下往上」时不易一眼找到自己位置的问题）；纯 SVG path + CSS 轻微上下浮动。
+  // 19.4：当前关卡上方加一枚**指向它的指针**（参考专利里「指向玩家最高关卡的指针」）；纯 SVG path + CSS 浮动
   if (position.id === current) {
     const tip = round1(cy - MAP.nodeRadius - MAP.arrowOffsetY);
     const half = MAP.arrowSize / 2;
@@ -187,7 +308,7 @@ function buildNode(position, stars, current, unlocked, required) {
       d: `M ${cx} ${round1(tip + MAP.arrowSize)} L ${round1(cx - half)} ${tip} L ${round1(cx + half)} ${tip} Z`
     }));
   }
-  // 星星：从节点正下方**移出**到右侧（不再压在藤蔓上），尺寸 = starSize × starScale（比原来大 40%），间距 starGap
+  // 星星：节点右侧（不压在藤蔓上），尺寸 = starSize × starScale，间距 starGap
   const size = MAP.starSize * MAP.starScale;
   const firstX = cx + MAP.nodeRadius + MAP.starGap + size / 2;
   for (let i = 0; i < 3; i += 1) {
@@ -224,121 +345,114 @@ function decorateLeaves(pathEl, svg) {
       'data-along': String(round1(along)),
       'data-angle': String(angle)
     });
-    leaf.appendChild(
-      el('ellipse', { class: 'vine-leaf-blade', cx: round1(MAP.leafSize * 0.9), cy: 0, rx: MAP.leafSize, ry: round1(MAP.leafSize * 0.45) })
-    );
+    leaf.appendChild(el('ellipse', { class: 'vine-leaf-blade', cx: round1(MAP.leafSize * 0.9), cy: 0, rx: MAP.leafSize, ry: round1(MAP.leafSize * 0.45) }));
     svg.appendChild(leaf);
     count += 1;
   }
   return count;
 }
 
-/**
- * 19.4 画风增强之一：**分层背景**（零素材，全部程序化）——
- * 天空渐变（`<linearGradient>`，id 带页码避免跨页冲突）→ 两层远山剪影 → 地面色带。
- * 只是观感层：不参与命中、不改变任何节点/路径坐标，也不引入 `<image>`/`<use>`/`<foreignObject>`。
- */
-function buildBackdrop(page) {
-  const svgNS = SVG_NS;
-  const group = el('g', { class: 'vine-backdrop', 'aria-hidden': 'true' });
-  const defs = document.createElementNS(svgNS, 'defs');
-  const gradient = document.createElementNS(svgNS, 'linearGradient');
-  gradient.setAttribute('id', `vine-sky-${page}`);
-  gradient.setAttribute('x1', '0');
-  gradient.setAttribute('y1', '1'); // 自下而上的天空：底部偏暖、顶部偏冷
-  gradient.setAttribute('x2', '0');
-  gradient.setAttribute('y2', '0');
-  for (const [offset, color] of [['0%', '#25423a'], ['55%', '#1d3330'], ['100%', '#16262a']]) {
-    const stop = document.createElementNS(svgNS, 'stop');
-    stop.setAttribute('offset', offset);
-    stop.setAttribute('stop-color', color);
-    gradient.appendChild(stop);
+/** 19.5：天空底色（世界**底部深绿 → 顶部深空蓝**，见 D047）。 */
+function buildSky() {
+  const defs = el('defs', {});
+  const gradient = el('linearGradient', { id: 'vine-sky', gradientUnits: 'userSpaceOnUse', x1: 0, y1: round1(MAP_WORLD_HEIGHT), x2: 0, y2: 0 });
+  for (const [offset, color] of [['0%', '#2b4a3a'], ['38%', '#1e3833'], ['72%', '#17293a'], ['100%', '#0e1a33']]) {
+    gradient.appendChild(el('stop', { offset, 'stop-color': color }));
   }
   defs.appendChild(gradient);
-  group.appendChild(defs);
-  group.appendChild(el('rect', { class: 'vine-sky', x: 0, y: 0, width: MAP.width, height: MAP.height, fill: `url(#vine-sky-${page})` }));
-  group.appendChild(el('path', {
-    class: 'vine-hill vine-hill--far',
-    d: `M 0 ${round1(MAP.height * 0.34)} Q ${round1(MAP.width * 0.28)} ${round1(MAP.height * 0.22)} ${round1(MAP.width * 0.55)} ${round1(MAP.height * 0.33)} T ${MAP.width} ${round1(MAP.height * 0.26)} V ${MAP.height} H 0 Z`
-  }));
-  group.appendChild(el('path', {
-    class: 'vine-hill vine-hill--near',
-    d: `M 0 ${round1(MAP.height * 0.58)} Q ${round1(MAP.width * 0.32)} ${round1(MAP.height * 0.42)} ${round1(MAP.width * 0.62)} ${round1(MAP.height * 0.56)} T ${MAP.width} ${round1(MAP.height * 0.48)} V ${MAP.height} H 0 Z`
-  }));
-  group.appendChild(el('rect', { class: 'vine-ground', x: 0, y: round1(MAP.height * 0.93), width: MAP.width, height: round1(MAP.height * 0.07) }));
+  return [
+    defs,
+    el('rect', {
+      class: 'vine-sky',
+      x: 0,
+      y: round1(-MAP.backdropBleed),
+      width: MAP.width,
+      height: round1(MAP_WORLD_HEIGHT + MAP.backdropBleed * 2),
+      fill: 'url(#vine-sky)'
+    }),
+    el('rect', {
+      class: 'vine-ground',
+      x: 0,
+      y: round1(MAP_WORLD_HEIGHT - MAP_WORLD_HEIGHT * 0.055),
+      width: MAP.width,
+      height: round1(MAP_WORLD_HEIGHT * 0.055 + MAP.backdropBleed)
+    })
+  ];
+}
+
+/**
+ * 19.5 视差**远景层**：一列远山剪影（每 `FAR_BAND_Y` 一个带，带内带外重叠出层次）+ 少量雾团。
+ * 只是观感层：不参与命中、不改变任何节点/路径坐标（也不引入 `<image>`/`<use>`/`<foreignObject>`）。
+ */
+function buildFarLayer(spanTop, spanBottom) {
+  const group = el('g', { class: 'vine-parallax vine-parallax--far', 'data-parallax': 'far', 'aria-hidden': 'true' });
+  const rng = mulberry32(MAP.seed + 104729);
+  for (let top = spanTop; top < spanBottom; top += FAR_BAND_Y) {
+    const ridge = round1(top + FAR_BAND_Y * (0.4 + rng() * 0.2));
+    const bottom = round1(top + FAR_BAND_Y * 1.35);
+    group.appendChild(el('path', {
+      class: 'vine-ridge',
+      d: [
+        `M 0 ${ridge}`,
+        `C ${round1(MAP.width * 0.26)} ${round1(ridge - FAR_BAND_Y * (0.12 + rng() * 0.1))}`,
+        `${round1(MAP.width * 0.62)} ${round1(ridge + FAR_BAND_Y * (0.04 + rng() * 0.08))}`,
+        `${MAP.width} ${round1(ridge - FAR_BAND_Y * (0.05 + rng() * 0.1))}`,
+        `V ${bottom}`,
+        'H 0 Z'
+      ].join(' ')
+    }));
+    if (rng() > 0.35) {
+      group.appendChild(el('ellipse', {
+        class: 'vine-haze',
+        cx: round1(MAP.width * (0.15 + rng() * 0.7)),
+        cy: round1(top + FAR_BAND_Y * (0.2 + rng() * 0.2)),
+        rx: round1(MAP.width * (0.18 + rng() * 0.16)),
+        ry: round1(FAR_BAND_Y * (0.04 + rng() * 0.03))
+      }));
+    }
+  }
   return group;
 }
 
-/** 一页：`<div data-page><svg role=list><背景><路径（双层）>叶子…节点…云层…</svg></div>`（当前页的路径带 `#vine-path` 供取证）。 */
-function buildPage(page, stars, activePage, current, options) {
-  const wrap = el('div', { class: `vine-page${page === activePage ? ' vine-page--active' : ''}`, 'data-page': String(page) });
-  const svg = el('svg', {
-    class: 'vine-page-svg',
-    viewBox: `0 0 ${MAP.width} ${MAP.height}`,
-    role: 'list',
-    'aria-label': `第 ${page} 页关卡`
-  });
-  svg.appendChild(buildBackdrop(page));
-  const d = buildVinePath(page);
-  // 19.4：藤蔓画**两层**（深色描边 + 亮色核心）—— 同一份 `d`、更粗更「藤」的观感；仍然是确定性路径
-  svg.appendChild(el('path', { class: 'vine-path-under', d }));
-  const path = el('path', {
-    class: 'vine-path',
-    id: page === activePage ? 'vine-path' : null,
-    d
-  });
-  svg.appendChild(path);
-  wrap.dataset.leaves = String(decorateLeaves(path, svg));
-  let hidden = 0;
-  for (const position of positionsOnPage(page)) {
-    // 天边云层未散去时，隐藏关**不渲染**（19.3：云层代替节点，而不是把节点画暗）
-    if (options.revealed?.[position.id] === false || options.revealed?.[String(position.id)] === false) {
-      hidden += 1;
-      continue;
-    }
-    svg.appendChild(buildNode(position, stars, current, options.unlocked, options.required));
+/** 19.5 视差**近景层**：确定性星光点（`particleCount` 个；同种子同位置，闪烁相位由 class 决定）。 */
+function buildNearLayer(spanTop, spanBottom) {
+  const group = el('g', { class: 'vine-parallax vine-parallax--near', 'data-parallax': 'near', 'aria-hidden': 'true' });
+  const rng = mulberry32(MAP.seed + 7907);
+  for (let i = 0; i < MAP.particleCount; i += 1) {
+    const cx = round1(rng() * MAP.width);
+    const cy = round1(spanTop + rng() * (spanBottom - spanTop));
+    const r = round1(0.9 + rng() * 1.6);
+    const phase = Math.floor(rng() * 4);
+    group.appendChild(el('circle', { class: `vine-star vine-star--p${phase}`, cx, cy, r }));
   }
-  if (hidden > 0 && options.tianbian) svg.appendChild(buildCloud(options.tianbian));
-  wrap.dataset.hiddenNodes = String(hidden);
-  wrap.appendChild(svg);
-  return wrap;
+  return group;
 }
 
-// 云层的观感常量（只影响画面，不参与规则；与 buildNode 的 +6 / +3 / +5 同类，见 D013）
-const CLOUD_PUFFS = [
-  [-0.31, 0, 0.24],
-  [0, -0.09, 0.3],
-  [0.33, 0.02, 0.23],
-  [-0.1, 0.08, 0.2],
-  [0.18, 0.09, 0.19]
-];
-
-/** 天边云层（19.3）：隐藏关未揭示时占据这一页，附「还差 N ⭐」提示（纯 SVG，无内联样式）。 */
-function buildCloud(tianbian) {
+/** 天边云层（19.3 的「第 6 页」→ 19.5 的「世界顶部云层带」）：隐藏关未揭示时铺满世界顶端一带。 */
+function buildCloudBand(tianbian) {
   const required = Math.max(0, Math.trunc(Number(tianbian?.required) || 0));
   const stars = Math.max(0, Math.trunc(Number(tianbian?.stars) || 0));
   const missing = Math.max(0, required - stars);
-  const cx = MAP.width / 2;
-  const cy = MAP.height / 2;
-  const base = MAP.width * 0.0016 + MAP.nodeRadius;
+  const bandH = MAP.tianbianBand * MAP_WORLD_HEIGHT;
   const group = el('g', {
     class: 'vine-cloud',
     'data-cloud': 'closed',
     'data-required': String(required),
-    'data-missing': String(missing)
+    'data-missing': String(missing),
+    'data-band': String(round1(bandH))
   });
-  for (const [dx, dy, r] of CLOUD_PUFFS) {
+  for (const [fx, fy, fr] of CLOUD_PUFFS) {
     group.appendChild(
       el('circle', {
         class: 'vine-cloud-puff',
-        cx: round1(cx + dx * MAP.width),
-        cy: round1(cy + dy * MAP.height),
-        r: round1(r * base)
+        cx: round1(fx * MAP.width),
+        cy: round1(bandH * 0.55 + fy * bandH),
+        r: round1(fr * MAP.width)
       })
     );
   }
-  group.appendChild(el('text', { class: 'vine-cloud-text', x: cx, y: round1(cy + 6), 'text-anchor': 'middle' }, `还差 ${missing} ⭐`));
-  group.appendChild(el('text', { class: 'vine-cloud-hint', x: cx, y: round1(cy + 40), 'text-anchor': 'middle' }, `累计 ${required} 星解锁天边关卡`));
+  group.appendChild(el('text', { class: 'vine-cloud-text', x: round1(MAP.width / 2), y: round1(bandH * 0.55 + 9), 'text-anchor': 'middle' }, `还差 ${missing} ⭐`));
+  group.appendChild(el('text', { class: 'vine-cloud-hint', x: round1(MAP.width / 2), y: round1(bandH * 0.55 + 40), 'text-anchor': 'middle' }, `累计 ${required} 星解锁天边关卡`));
   return group;
 }
 
@@ -355,83 +469,217 @@ function buildProgress(earned, totalStars) {
   return bar;
 }
 
-/** 分页控件：`[◀] 第 N / 5 页 [▶]`（按钮，不是滚动容器 —— 5.1 的禁滚动不受影响）。 */
-function buildPager(page, total) {
-  const pager = el('div', { class: 'vine-pager', role: 'group', 'aria-label': '地图分页' });
-  pager.appendChild(
-    el('button', { type: 'button', class: 'vine-pager-button', 'data-pager': 'prev', 'aria-label': '上一页', disabled: page <= 1 ? '' : null }, '◀')
-  );
-  pager.appendChild(el('span', { class: 'vine-pager-label', 'data-pager-label': 'true' }, `第 ${page} / ${total} 页`));
-  pager.appendChild(
-    el('button', { type: 'button', class: 'vine-pager-button', 'data-pager': 'next', 'aria-label': '下一页', disabled: page >= total ? '' : null }, '▶')
-  );
-  return pager;
+/** 导航条：`[▲] 第 N 关 / 共 M 关 [▼]`（19.5 取代左右翻页；按钮，不是滚动容器）。 */
+function buildNav() {
+  const nav = el('div', { class: 'vine-nav', role: 'group', 'aria-label': '地图导航' });
+  nav.appendChild(el('button', { type: 'button', class: 'vine-nav-button', 'data-nav': 'up', 'aria-label': '向上看' }, '▲'));
+  nav.appendChild(el('span', { class: 'vine-nav-label', 'data-nav-label': 'true' }, ''));
+  nav.appendChild(el('button', { type: 'button', class: 'vine-nav-button', 'data-nav': 'down', 'aria-label': '向下看' }, '▼'));
+  return nav;
+}
+
+/** 「回到当前关」悬浮按钮（固定在地图右上角，不随世界平移）。 */
+function buildRecenter(levelId) {
+  const button = el('button', {
+    type: 'button',
+    class: 'vine-recenter',
+    'data-nav': 'current',
+    'aria-label': Number.isFinite(Number(levelId)) ? `回到当前关（第 ${levelId} 关）` : '回到当前关'
+  }, '回到当前关');
+  return button;
 }
 
 /**
  * 把地图画进宿主元素（`index.html` 的 `#map`）。**幂等**：每次调用都重建内容。
- * `fromPage` 用于翻页位移（先落在上一页、再滑到 `page`）；`current` 是当前关卡（呼吸光效高亮）；
- * `totalStars` 是**已获得的总星数**（由调用方用 `storage.getTotalStars()` 派生，地图层不碰存档）。
- * 返回 `{ page, total }`；事件（点节点 / 点分页箭头）由调用方在宿主上做委托 —— 本函数不绑事件。
+ *
+ * `centerOn`（缺省 = `current`，再缺省 = 第 1 关）是**进入地图时居中的那一关**；平移状态记在模块的 WeakMap 上，
+ * 由调用方通过 `panMap` / `setMapOffset` / `centerMapOn` 驱动 —— 本函数**不绑任何事件**。
+ * 返回 `{ offset, geometry, visible, focused, total }`（巡检与日志可用）。
  */
 export function renderMap(host, {
-  page = 1,
-  fromPage = null,
   stars = {},
   current = null,
   totalStars = 0,
-  levelCount = LEVEL_MAP_POS.length,
   unlocked = null, // 19.3：{ 关卡id: 是否可玩 }（由 app.js 用 level.isLevelUnlocked 算好；地图层不认识规则）
   required = null, // 19.3：{ 关卡id: 需要多少星 }（节点上显示，供提示与巡检）
   revealed = null, // 19.3：{ 关卡id: false } = 天边云层未散去、不渲染该节点
-  tianbian = null, // 19.3：{ open, stars, required } —— 云层状态（云层代替未揭示的节点）
-  starTotal = null // 19.3：⭐ n/X 的分母（**主线**满星数，隐藏关不计入）；缺省按节点数 × 3
+  tianbian = null, // 19.3：{ open, stars, required } —— 云层状态（云带代替未揭示的节点）
+  starTotal = null, // 19.3：⭐ n/X 的分母（**主线**满星数，隐藏关不计入）；缺省按节点数 × 3
+  levelCount = LEVEL_MAP_POS.length,
+  centerOn = undefined // 19.5：进入地图时居中的关号
 } = {}) {
-  if (!host) return { page: 1, total: 1 };
-  const total = pageCount(levelCount);
-  const active = clampPage(page, total);
-  const from = fromPage === null ? active : clampPage(fromPage, total);
+  const fallback = { offset: 0, geometry: null, visible: [], focused: null, total: LEVEL_MAP_POS.length };
+  if (!host) return fallback;
   host.textContent = '';
-  // 时长/周期数值归 config，样式仍归 CSS：用自定义属性桥接（见 D040）
+  // 时长/周期数值归 config，样式仍归 CSS：用自定义属性桥接（见 D040 / D047）
   host.style.setProperty('--vine-pulse-ms', `${MAP.pulseMs}ms`);
   host.style.setProperty('--vine-leaf-ms', `${MAP.leafSwayMs}ms`);
-  host.style.setProperty('--vine-slide-ms', `${MAP.pageSlideMs}ms`);
-  host.style.setProperty('--vine-cloud-ms', `${MAP.cloudDriftMs}ms`); // 19.4：云层的缓慢横向漂移周期
+  host.style.setProperty('--vine-scroll-ms', `${MAP.scrollMs}ms`);
+  host.style.setProperty('--vine-cloud-ms', `${MAP.cloudDriftMs}ms`);
+  host.style.setProperty('--vine-world-w', `${MAP.width}px`);
+  host.style.setProperty('--vine-world-h', `${MAP_WORLD_HEIGHT}px`);
 
-  const viewport = el('div', { class: 'vine-viewport' });
-  const track = el('div', { class: 'vine-track', 'data-active-page': String(active) });
-  track.style.setProperty('--vine-pages', String(total)); // 页数来自 config，位移比例仍由 CSS 计算
-  track.style.transform = `translateX(${pageShift(from, total)}%)`;
-  const options = { unlocked, required, revealed, tianbian };
-  for (let p = 1; p <= total; p += 1) track.appendChild(buildPage(p, stars, active, current, options));
-  viewport.appendChild(track);
+  // ---------- ① 先立视口与固定 UI（视口高度受它们影响，因此必须先入 DOM 再量） ----------
+  const viewport = el('div', { class: 'vine-viewport', 'data-vine-viewport': 'true', role: 'region', 'aria-label': '藤蔓关卡地图' });
   host.appendChild(viewport);
-  // 总星数由调用方用 `storage.getTotalStars()` 派生后传入（地图层不碰存档，也不重复实现派生口径）
-  // 19.3：分母是**主线**满星数（隐藏关不计入）—— 由调用方给 `starTotal`，缺省按节点数 × 3
   host.appendChild(buildProgress(totalStars, Number.isFinite(starTotal) ? starTotal : levelCount * 3));
-  host.appendChild(buildPager(active, total));
+  const nav = buildNav();
+  host.appendChild(nav);
+  const anchorId = Number.isFinite(Number(centerOn)) ? Number(centerOn) : Number(current);
+  // 「回到当前关」挂在**视口内**（不是宿主上）：这样它贴着地图列的对齐边，不会越过世界左右边界（19.5 布局体检）
+  viewport.appendChild(buildRecenter(anchorId));
 
-  if (from !== active) {
-    // FLIP 式位移：先提交上一页的位置，再改到目标页 —— CSS 的 transition 才有起点可插值
-    void track.getBoundingClientRect().width;
-    track.style.transform = `translateX(${pageShift(active, total)}%)`;
+  // ---------- ② 量出视口尺寸 → 世界几何 ----------
+  const geometry = mapGeometry(viewport.clientWidth, viewport.clientHeight);
+  const options = { unlocked, required, revealed, tianbian };
+
+  // ---------- ③ 世界：单张 SVG（viewBox = 世界总高，1 单位 = 1px），视差用两个 `<g>` 图层 ----------
+  const world = el('div', { class: 'vine-world', 'data-vine-world': 'true' });
+  const svg = el('svg', {
+    class: 'vine-world-svg',
+    viewBox: `0 0 ${MAP.width} ${MAP_WORLD_HEIGHT}`,
+    preserveAspectRatio: 'none',
+    role: 'list',
+    'aria-label': `藤蔓关卡地图，共 ${LEVEL_MAP_POS.length} 个节点`
+  });
+  for (const node of buildSky()) svg.appendChild(node);
+  const panRange = geometry.maxOffset - geometry.minOffset;
+  const farShift = Math.abs(parallaxCompensation(MAP.parallaxFar, panRange, geometry.scale));
+  const nearShift = Math.abs(parallaxCompensation(MAP.parallaxNear, panRange, geometry.scale));
+  const far = buildFarLayer(-farShift - FAR_BAND_Y, MAP_WORLD_HEIGHT + farShift + FAR_BAND_Y);
+  far.setAttribute('data-parallax-factor', String(MAP.parallaxFar));
+  svg.appendChild(far);
+  // 藤蔓画**两层**（深色垫层 + 亮色芯）—— 同一份 `d`、更粗更「藤」的观感；仍然是确定性路径
+  const d = buildVinePath();
+  svg.appendChild(el('path', { class: 'vine-path-under', d }));
+  const path = el('path', { class: 'vine-path', id: 'vine-path', d });
+  svg.appendChild(path);
+  const vines = el('g', { class: 'vine-nodes' });
+  let hidden = 0;
+  for (const position of LEVEL_MAP_POS) {
+    // 天边云层未散去时，隐藏关**不渲染**（19.3：云带代替节点，而不是把节点画暗）
+    if (options.revealed?.[position.id] === false || options.revealed?.[String(position.id)] === false) {
+      hidden += 1;
+      continue;
+    }
+    vines.appendChild(buildNode(position, stars, current, options.unlocked, options.required));
   }
-  // 路径生长观感：下一帧加 `.grown`（`stroke-dashoffset` 4000 → 0）；不依赖 JS 逐帧
+  svg.appendChild(vines);
+  if (hidden > 0 && options.tianbian) svg.appendChild(buildCloudBand(options.tianbian));
+  const near = buildNearLayer(-nearShift, MAP_WORLD_HEIGHT + nearShift);
+  near.setAttribute('data-parallax-factor', String(MAP.parallaxNear));
+  svg.appendChild(near);
+  world.appendChild(svg);
+  viewport.appendChild(world);
+  world.dataset.leaves = String(decorateLeaves(path, svg));
+  world.dataset.hiddenNodes = String(hidden);
+  viewport.dataset.worldHeight = String(round1(geometry.worldHeight));
+  viewport.dataset.scale = String(round3(geometry.scale));
+  viewport.dataset.visibleNodes = String(visibleLevelIds(0, geometry).length);
+
+  WORLDS.set(host, { geometry, world, far, near, nav, viewport, current, offset: 0, animating: 0 });
+  applyOffset(host, centeredOffsetFor(anchorId, geometry), { animate: false });
+  // 路径生长观感：下一帧加 `.grown`（`stroke-dashoffset` 9000 → 0）；不依赖 JS 逐帧
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {
-      for (const path of host.querySelectorAll('.vine-path')) path.classList.add('grown');
+      if (WORLDS.get(host)?.world !== world) return; // 期间又重画过：不要给旧节点加类
+      for (const p of host.querySelectorAll('.vine-path')) p.classList.add('grown');
     });
   }
-  return { page: active, total };
+  return mapSnapshot(host);
 }
 
-/** 归一化页码 → 轨道位移百分比（每页 = 100 / total %）。 */
-function pageShift(page, total) {
-  return round1((-(page - 1) * 100) / Math.max(total, 1));
+/** 把平移量写进世界与两个视差图层（唯一的写点）。 */
+function applyOffset(host, offset, { animate = false } = {}) {
+  const state = WORLDS.get(host);
+  if (!state) return null;
+  const next = clampMapOffset(offset, state.geometry);
+  state.offset = next;
+  state.world.classList.toggle('vine-world--instant', !animate);
+  state.world.style.transform = `translateY(${round1(next)}px) scale(${round3(state.geometry.scale)})`;
+  state.world.dataset.offset = String(round1(next));
+  // 视差：图层已经跟着世界走了 `offset`，这里补上 (factor − 1) × offset（净位移 = factor × offset）
+  for (const [layer, factor] of [[state.far, MAP.parallaxFar], [state.near, MAP.parallaxNear]]) {
+    const compensation = parallaxCompensation(factor, next, state.geometry.scale);
+    layer.setAttribute('transform', `translate(0 ${round1(compensation)})`);
+    layer.dataset.parallaxShift = String(round1(compensation));
+    layer.dataset.parallaxNet = String(round1(parallaxNetShift(factor, next)));
+  }
+  if (state.viewport) state.viewport.dataset.visibleNodes = String(visibleLevelIds(next, state.geometry).length);
+  updateNav(host);
+  return next;
 }
 
-function clampPage(page, total) {
-  return Math.min(Math.max(Math.trunc(Number(page)) || 1, 1), total);
+/** 导航条与「回到当前关」的可用性 / 文本（每次平移后刷新）。 */
+function updateNav(host) {
+  const state = WORLDS.get(host);
+  if (!state?.nav) return;
+  const focused = focusedLevelId(state.offset, state.geometry);
+  const label = state.nav.querySelector('[data-nav-label]');
+  if (label) label.textContent = navLabelText(focused, LEVEL_COUNT);
+  state.nav.dataset.focusedLevel = String(focused ?? '');
+  const atTop = state.offset >= state.geometry.maxOffset - 0.5;
+  const atBottom = state.offset <= state.geometry.minOffset + 0.5;
+  const up = state.nav.querySelector('[data-nav="up"]');
+  const down = state.nav.querySelector('[data-nav="down"]');
+  if (up) up.disabled = atTop;
+  if (down) down.disabled = atBottom;
+  state.atTop = atTop;
+  state.atBottom = atBottom;
+}
+
+/** 只读快照（给 app.js / 巡检用；不暴露内部 DOM 状态对象）。 */
+export function mapSnapshot(host) {
+  const state = WORLDS.get(host);
+  if (!state) return null;
+  return {
+    offset: state.offset,
+    minOffset: state.geometry.minOffset,
+    maxOffset: state.geometry.maxOffset,
+    viewportHeight: state.geometry.viewportHeight,
+    viewportWidth: state.geometry.viewportWidth,
+    scale: state.geometry.scale,
+    worldHeight: state.geometry.worldHeight,
+    focused: focusedLevelId(state.offset, state.geometry),
+    visible: visibleLevelIds(state.offset, state.geometry),
+    atTop: state.offset >= state.geometry.maxOffset - 0.5,
+    atBottom: state.offset <= state.geometry.minOffset + 0.5,
+    current: state.current
+  };
+}
+
+/** 平移世界（拖拽/惯性用；`animate` 时走 CSS 过渡，见 `.vine-world`）。 */
+export function panMap(host, delta, { animate = false } = {}) {
+  const state = WORLDS.get(host);
+  if (!state) return null;
+  return applyOffset(host, state.offset + Number(delta || 0), { animate });
+}
+
+/** 直接把世界平移到某个偏移（已夹到边界）。 */
+export function setMapOffset(host, offset, { animate = false } = {}) {
+  const state = WORLDS.get(host);
+  if (!state) return null;
+  return applyOffset(host, offset, { animate });
+}
+
+/** 把某一关放到视口正中（进入地图与「回到当前关」用）。 */
+export function centerMapOn(host, levelId, { animate = false } = {}) {
+  const state = WORLDS.get(host);
+  if (!state) return null;
+  return applyOffset(host, centeredOffsetFor(levelId, state.geometry), { animate });
+}
+
+/** 视口尺寸变化后重算几何（保持「当前关居中」的语义，避免旋转屏幕后世界跑偏）。 */
+export function relayoutMap(host, { centerOn = undefined } = {}) {
+  const state = WORLDS.get(host);
+  if (!state?.viewport) return null;
+  const geometry = mapGeometry(state.viewport.clientWidth, state.viewport.clientHeight);
+  state.geometry = geometry;
+  state.viewport.dataset.worldHeight = String(round1(geometry.worldHeight));
+  state.viewport.dataset.scale = String(round3(geometry.scale));
+  const anchorId = Number.isFinite(Number(centerOn)) ? Number(centerOn) : Number(state.current);
+  applyOffset(host, centeredOffsetFor(anchorId, geometry), { animate: false });
+  return mapSnapshot(host);
 }
 
 /** 建元素：SVG 标签走 SVG 命名空间，其余走 HTML（`null` 属性不写）。 */

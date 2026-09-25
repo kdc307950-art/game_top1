@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-09-25（Step 19.5 **收口**：四个浏览器套件改写 + Gate 0.1 第十六轮 —— 完成）
+
+紧接下面那条「原型阶段」：用户看完成绩后选择「**先收口 19.5，再开 UI 步**」，本轮把 19.5 的**规则变更式改写**做完，并跑完第十六轮门禁。
+
+**一、四个套件改写（分页 → 世界口径）**
+
+| 套件 | 改了什么 | 结果 |
+|---|---|---|
+| `_build/verify-step19-2.mjs` | 快照加世界字段（`worldHeight`/`scale`/`offset`/`visibleLevels`/`currentCenteredDelta`/`navLabel`/`upDisabled`/`downDisabled`/`cloud`/`parallaxLayers`…）；`clickPage` → `clickNav` + `navToEnd`；12 条分页循环断言 → 8 条世界断言（进图当前关居中、`▲`/`▼` 各 0.9 视口高、两端禁用、回中、云带在世界顶、页面不滚动）；叶子从「每页 ≥5 片」→「单条世界路径 ≥40 片」；`.vine-backdrop` → `.vine-sky`/`.vine-ground`/`.vine-ridge`/`.vine-node-gloss` | **PASS 48/0** |
+| `_build/verify-step12b.mjs` | 「可见」判定补上纵向；「当前页 10 个」→「世界 4160 + 当前关居中」；**新增 3 条真实触摸滑动断言**（卡片点名的「模拟滑动并断言视口变换」）：Δ=181px **1:1 跟手**、页面不滚动、拖过不误进关 | **PASS 21/0**（18 → 21） |
+| `_build/verify-step19-3.mjs` | `gotoPage` → `scrollToTop`/`scrollToBottom`；「第 6 页云层」→「世界顶部云带」（`hiddenNodes=3`、`data-required=120`、「还差 120 ⭐」）；满星后云带消失 + 51–53 在世界里可见且在世界顶可见。**解锁矩阵、反锁保护、`pickLevel` 拒绝、toast、不写解锁存档全部原样保留** | **PASS 46/0**（43 → 46） |
+| `_build/verify-step19-4.mjs` | 4 条「按页」断言追平世界口径（路径首末点 → 世界下方/上方之外；`.vine-backdrop` + 两层远山 → `.vine-sky` + `.vine-ridge`(11 带) + `.vine-haze` + `.vine-ground`） | **PASS 18/0** |
+| `_build/shot-map-194.mjs`、`_build/s19-2-probe.mjs` | **退役**（前者被 `shot-map-195.mjs` 取代；后者点的是早已不存在的 `[data-pager="3"]`） | 已删除 |
+
+**二、Gate 0.1 第十六轮**：驱动脚本 `_build/gate16.ps1` 是**新写**的 —— **第十五轮的驱动从未入库**（`_build/` 被 gitignore，只留下 `g15-summary.txt` + 36 个日志），因此按 `gate12c.ps1` 的 ASCII 模板重建，并**沿用同样的 24 套件 + 8 次复跑计划**，便于逐行对照。结果：`_build/g16-summary.txt`。
+
+- **主轮 24 套件：22 PASS**。两处红：`verify-step17`（「静止后粒子全部回收」→ 9 颗残留）与 `verify-step19-4`（4 条旧断言）。
+- **复跑 8 次**：`verify-step19-2-2` / `verify-step19-3-2` / `verify-step12b-2` / `verify-step17-2` / `verify-step20-2`（45/45）PASS；`verify-step19-4-2` 仍红（**确定性**，等改写）；`verify-step4-2` 新出现 1 条红（「再次有效交换后剩余步数为 26」）。
+- **收口处理**：19-4 的 4 条旧断言改写后复跑 **2 次全绿**；`verify-step17`、`verify-step4` 各复跑 **2 次全绿** → 两者判定为**时序抖动**（与第十五轮 P3-I/P3-J 同类），**不是产品缺陷**。日志 `_build/g16-*-rerun1/2.log`。
+- **静态一半（自动回归 + L0）**：`node tests/run-all.js` → **12 文件 / 263 用例 / 3334 断言 / 0 失败 / exit 0**；`python _build/consistency_check.py` **全部通过**；`check-vine-map.mjs` / `check-level-table.mjs` / `lint-levels.mjs` 全 PASS；`rt-snapshot` **门禁前后 drift: none**（期间没有任何产品文件被改）。
+- 环境：Windows + `python -m http.server 8000` + **私有** headless Chrome `153.0.8010.53`（`--headless=new --disable-gpu --force-color-profile=srgb`，CDP **9356**、独立 profile）—— 刻意**不用** `launch-chrome-pinned.ps1`，因为它会 `Stop-Process` 掉用户正在用的浏览器。
+- **登记为 P3（不阻塞）**：**P3-K** = `verify-step17` 的「粒子静止后回收」与 **P3-L** = `verify-step4` 的「无效交换不扣步」在复跑中**偶发红**（时序敏感，各 2 次复跑全绿）；二者都与本步改动无关（本步只动地图层）。另记一条**口径说明**（非缺陷）：`verify-step19-2` 的断言条数 51 → 48，是分页循环里 12 条「第 N 页恰好 10 个节点」被 8 条世界断言**按构造取代**，不是覆盖收缩。
+
+**结论**：Step 19.5 **收口完成**，P0/P1 = 0，允许进入下一步（用户已批准的**对局 UI 视觉升级**）。回滚点仍是 `gate-0.1-step19.4-pass`。
+
+---
+
+## 2026-09-25（Step 19.5：世界坐标 + 视口内纵向平移 —— **原型阶段完成，等用户确认观感**）
+
+用户口径（本轮）：「把『左右翻页』换成『藤蔓向上蔓延』—— 地图是一整块世界，视口固定、内部纵向平移；进去自动定位当前关；加「回到当前关」；藤蔓改成一条贯穿全局的曲线；两层视差 + 粒子；先做一版原型，**截图看效果**」。
+
+**开工前的两件澄清（都已向用户确认）**：
+
+1. **口径冲突 → 用户拍板「保留 19.3」**：用户方案「不做」一栏的三项（不加 `unlockStars` / 不加云层 / 不加隐藏关）与「50 关 / 5 页」都是 **19.3 交付之前**的旧口径 —— 这三项已在 19.3 落地并过第十五轮门禁。本轮**只换导航方式**，云层从「第 6 页」改成「世界顶部云带」。
+2. **本轮交付到哪 → 用户选择「原型 + 三张截图，停下等看效果」**：因此 `verify-step19-2/12b/19-3` 与 `shot-map-194` 的分页断言**本轮不改写**（它们现在必然红，这是约定状态，不是缺陷）。
+
+**改了什么（玩法零改动）**：
+
+- **世界坐标**：`LEVEL_MAP_POS` 由 `{id,page,x,y}` 改为 `{id,x,y}`（世界归一化，y 相对世界总高）；世界总高 = `height × worldHeightRatio` = 640 × 6.5 = **4160**；53 关 = **27 行 × 2**；`nodeMarginY` 0.11、`nodeStaggerY` 0.01；`y` 随关号**严格单调**（第 1 关在世界最底）。生成器与巡检同步改写，`LEVELS.md` §9 表头改「关 / x / y」。
+- **交互**：视口固定 + 世界 `translateY`（页面不滚动）；进入地图**当前关自动居中**；拖拽（触摸 + 鼠标，`dragThreshold` 8px）+ 惯性（`scrollInertia` 0.94，reduced-motion 不做惯性）；`▲`/`▼`（`navStepRatio` 0.9）替代分页；**「回到当前关」**悬浮按钮；键盘 ↑/↓/Home；窗口尺寸变化时 `relayoutMap` 重算几何。**`input.js` 一行未改**。
+- **视觉**：世界一张 SVG（1 单位 = 1px）+ 外层**统一缩放**（节点是正圆）；**一条贯穿世界**的贝塞尔（10 个锚点跨越整个世界）；天空渐变随世界高度（底深绿 → 顶深空蓝）+ `backdropBleed`；**两层视差**（远山 0.25× / 150 个确定性星光 1.45×）；`tianbianBand` 0.155 **云带**取代「第 6 页」；19.3/19.4 的三态节点、锁形、指针、星星、叶子、呼吸环全部保留。
+- **布局体检抓到并修掉的两个真缺陷**：云团被视口两侧硬切（重排 `CLOUD_PUFFS`）；「回到当前关」越出地图列右边缘（改挂到视口内）。
+
+**证据**：
+
+| 等级 | 命令 / 夹具 | 结果 |
+|---|---|---|
+| L1 | `node tests/run-all.js` | **12 文件 / 263 用例 / 3334 断言 / 0 失败 / exit 0**（vine-map 的分页断言全部退役，改为世界几何 7 组纯函数） |
+| L0 | `python _build/consistency_check.py` | **全部通过**（v1.30、附录 B ↔ config.js：删 3 键 / 增 11 键） |
+| L0 | `node _build/check-vine-map.mjs` | **PASS 20/20**（世界不变量 + 云带覆盖隐藏关 + 锚点跨世界） |
+| L2/L3 | `$env:XXL_CDP_PORT='9355'; node _build/shot-map-195.mjs` | **35 项 PASS**：居中 0.00px、触摸拖 900px → Δ=901px 且无残余惯性、第 26 关精确居中 1.00px、鼠标拖 −260px → Δ=−260px、爬顶 `▲` 禁用 / 隐藏关 0 渲染 / 第 50 关可见、满星 150 → 云带散 + 51–53 全露出、**页面 `scrollY` 恒 0 且 `scrollHeight === clientHeight`**、视差净位移比例精确 0.25 / 1.45、节点正圆 / 无横向裁切 / 天空铺满 / 固定 UI 不压世界、0 控制台错误 / 0 异常 |
+| 截图 | `_build/step195-map-{bottom,mid}-stars39.png`、`_build/step195-map-top-cloud-stars39.png`、`_build/step195-map-top-revealed-stars150.png` | 人工核对用（**Agent 本机无视觉模型，确实看不到**，见 D047 的「未验证」） |
+
+环境：Windows + `python -m http.server 8000` + 无头 Chrome `153.0.8010.53`（`--headless=new --disable-gpu --force-color-profile=srgb`，CDP 9355，独立 profile —— **没有**用会杀进程的 `launch-chrome-pinned.ps1`，以免关掉用户正在用的浏览器）。
+
+**下一步（等用户看完截图再动）**：`verify-step19-2.mjs`（分页断言 → 世界平移/自动居中/导航/回中）、`verify-step12b.mjs`（补「模拟滑动 + 断言视口变换」）、`verify-step19-3.mjs`（第 6 页云层 → 世界顶部云带）、`shot-map-194.mjs`（退役或改写）；然后是 Gate 0.1 第十六轮 + 文档收口 + 提交。回滚点 = `gate-0.1-step19.4-pass`。
+
+---
+
 ## 2026-09-25（Step 19.5 执行卡：把「左右翻页」换成「藤蔓向上蔓延」（世界坐标 + 纵向平移）—— **待开工**）
 
 > 用户口径（本轮）：把分页换成**纵向自由平移**的向上蔓延；地图区域是固定视口，移动内部世界；进入地图自动定位当前关；加「回到当前关」悬浮按钮；藤蔓改为**一条贯穿全局的曲线**；节点三态、星星放大、固定进度条、**两层视差背景 + 粒子**；验收清单八项（见下）。**用户明确要求：先做一版纵向平移的原型，截图看效果。**

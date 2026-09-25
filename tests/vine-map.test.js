@@ -1,101 +1,149 @@
-// tests/vine-map.test.js — vine-map.js（藤蔓地图）的单元测试。见 AGENTS.md 7.1 与 19.2 v2 / DECISIONS D040。
+// tests/vine-map.test.js — vine-map.js（藤蔓地图）的单元测试。见 AGENTS.md 7.1 与 DECISIONS D040 / **D047（19.5 世界纵向平移）**。
 //
-// 只测**纯函数**（分页、归一化坐标、确定性路径、节点状态机、星级规范化）—— DOM 渲染部分由
-// `_build/verify-step19-2.mjs` 在真实浏览器里取证（L2/L3），坐标表 ↔ LEVELS.md 的一致性由 `_build/check-vine-map.mjs` 巡检。
+// 只测**纯函数**（世界坐标、视口几何、平移夹取与居中、视口内关号、视差补偿、确定性路径、导航文本、
+// 节点状态机、星级规范化）—— DOM 渲染与真实拖拽由浏览器套件取证（L2/L3），
+// 坐标表 ↔ LEVELS.md 的一致性由 `_build/check-vine-map.mjs` 巡检。
 //
-// 19.2 v2 的关键改写：**节点坐标不再参与路径计算**（用户方案），因此删掉了第一版的「每个节点都在路径上」，
-// 改为「路径只由 `VINE_MAP_CONFIG.anchors` + 固定种子决定、与节点坐标无关」。
+// 19.5 的关键改写：**删掉全部分页断言**（`pageCount`/`pageOf`/`positionsOnPage`/`MAP_PAGE_SIZE` 已随
+// 「左右翻页」一起退役），改为「世界 + 视口平移」的不变量：
+//   · 世界是一整块（`MAP_WORLD_HEIGHT`），第 1 关在世界最底、y 随关号严格单调；
+//   · 平移量把某一关放到视口正中 = `视口高/2 − 该关的世界 y`，并夹到「首/末关刚好居中」的边界；
+//   · 视差图层的**净**位移 = `factor × 平移量`（图层自身补偿 `(factor − 1) × 平移量 / scale`）。
 
 import { test, assertEqual, assertTrue, assertFalse, assertDeepEqual, summarize } from './assert.js';
 import { CONFIG } from '../config.js';
 import { HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS } from '../level.js';
 import {
-  MAP_PAGE_SIZE,
+  MAP_NAV_STEP_RATIO,
+  MAP_PARALLAX,
+  MAP_WORLD_HEIGHT,
   buildVineAnchors,
   buildVinePath,
   buildVineSegments,
+  centerMapOn,
+  clampMapOffset,
   clampStars,
+  centeredOffsetFor,
+  focusedLevelId,
+  mapGeometry,
+  mapSnapshot,
   mulberry32,
+  navLabelText,
   nodeState,
-  pageCount,
-  pageOf,
-  positionsOnPage,
+  panMap,
+  parallaxCompensation,
+  parallaxNetShift,
   renderMap,
-  starPath
+  setMapOffset,
+  starPath,
+  visibleLevelIds,
+  worldX,
+  worldY
 } from '../vine-map.js';
 
 const MAP = CONFIG.VINE_MAP_CONFIG;
-const round3 = (value) => Math.round(value * 1000) / 1000;
 const round1 = (value) => Math.round(value * 10) / 10;
+const round3 = (value) => Math.round(value * 1000) / 1000;
+const VIEW = { w: 360, h: 760 }; // 一个常见的手机地图视口（逻辑像素）
 
-test('分页：每页 pageSize 关、共 6 页（5 页主线 + 1 页天边），页号 = ⌈关号 / 每页关数⌉', () => {
-  assertEqual(MAP_PAGE_SIZE, MAP.pageSize, '导出的每页关数与配置一致');
-  assertEqual(pageCount(), Math.ceil(LEVEL_MAP_POS.length / MAP.pageSize), '页数');
-  assertEqual(pageCount(), 6, '50 关主线 + 3 关天边 = 53 个节点 / 每页 10 = 6 页');
-  assertEqual(pageOf(1), 1, '第 1 关在第 1 页');
-  assertEqual(pageOf(10), 1, '第 10 关在第 1 页');
-  assertEqual(pageOf(11), 2, '第 11 关在第 2 页');
-  assertEqual(pageOf(50), 5, '第 50 关在第 5 页');
-  assertEqual(pageOf(51), 6, '第 51 关（天边第一关）在第 6 页');
-  assertEqual(pageOf(0), 1, '非法关号夹到第 1 页');
-  assertEqual(pageOf(999), 6, '越界关号夹到最后一页');
-});
-
-test('positionsOnPage：前 5 页各 10 关、第 6 页是天边 3 关；越界页被夹住', () => {
-  const mainPages = Math.ceil(LEVEL_COUNT / MAP.pageSize);
-  for (let page = 1; page <= mainPages; page += 1) {
-    const positions = positionsOnPage(page);
-    assertEqual(positions.length, MAP.pageSize, `第 ${page} 页的关数`);
-    const ids = positions.map((pos) => pos.id);
-    assertDeepEqual(ids, Array.from({ length: MAP.pageSize }, (_, i) => (page - 1) * MAP.pageSize + i + 1), `第 ${page} 页的关号`);
-    assertTrue(positions.every((pos) => pos.page === page), `第 ${page} 页的 page 字段`);
-  }
-  const tianbian = positionsOnPage(6);
-  assertDeepEqual(tianbian.map((pos) => pos.id), HIDDEN_LEVEL_IDS, '第 6 页只放隐藏关');
-  assertTrue(tianbian.every((pos) => pos.page === 6), '隐藏关都属于第 6 页');
-  assertEqual(positionsOnPage(0)[0].id, 1, '第 0 页夹到第 1 页');
-  assertEqual(positionsOnPage(99)[0].id, HIDDEN_LEVEL_IDS[0], '第 99 页夹到最后一页（天边）');
-});
-
-test('LEVEL_MAP_POS：主线 50 + 天边 3、关号连续、坐标是归一化值、X 轴 ≥3 个水平位置', () => {
+test('世界坐标：53 个节点、y 随关号严格单调（第 1 关在世界最底）、x 落在 nodeColumns 且 ≥3 列', () => {
   const total = LEVEL_COUNT + HIDDEN_LEVEL_IDS.length;
   assertEqual(LEVEL_MAP_POS.length, total, '坐标条数 = 主线 + 隐藏关');
-  assertDeepEqual(
-    LEVEL_MAP_POS.filter((pos) => pos.id <= LEVEL_COUNT).map((pos) => pos.id),
-    Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1),
-    '主线关号 1..50 连续'
-  );
-  assertDeepEqual(LEVEL_MAP_POS.filter((pos) => pos.id > LEVEL_COUNT).map((pos) => pos.id), HIDDEN_LEVEL_IDS, '天边关号 = HIDDEN_LEVEL_IDS');
   assertTrue(LEVEL_MAP_POS.every((pos) => pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1), '坐标都是 0–1 的归一化值');
-  assertTrue(
-    LEVEL_MAP_POS.every((pos) => MAP.nodeColumns.includes(pos.x)),
-    `x 都落在 nodeColumns（${MAP.nodeColumns.join(' / ')}）之一`
-  );
+  assertTrue(LEVEL_MAP_POS.every((pos) => MAP.nodeColumns.includes(pos.x)), `x 都落在 nodeColumns（${MAP.nodeColumns.join(' / ')}）之一`);
   assertTrue(new Set(LEVEL_MAP_POS.map((pos) => pos.x)).size >= 3, 'X 轴至少 3 个不同水平位置（打破两列对齐）');
-  for (let page = 1; page <= pageCount(); page += 1) {
-    const columns = new Set(positionsOnPage(page).map((pos) => pos.x));
-    assertTrue(columns.size >= 3, `第 ${page} 页也有 ≥3 个不同 X 水平位置`);
-  }
-  // 页内是 5 行 × 2 个：Y 由公式给出，行内两个节点一高一低（±nodeStaggerY）形成错落。
-  // 19.4（用户口径「从下往上」）：climbDirection = 'up' 时页内**自下而上** —— y = 1 − 自上而下的位置。
-  const spanY = (1 - MAP.nodeMarginY * 2) / (MAP.nodeRows - 1);
+  // 19.5：不再有「页」，取而代之的是「世界」—— y 相对世界总高，且关号越大越靠上
   const climbUp = MAP.climbDirection !== 'down';
-  const yExact = LEVEL_MAP_POS.every((pos) => {
-    const index = (pos.id - 1) % MAP.pageSize;
-    const descent = MAP.nodeMarginY + Math.floor(index / 2) * spanY + (index % 2 === 0 ? -MAP.nodeStaggerY : MAP.nodeStaggerY);
-    const expected = round3(climbUp ? 1 - descent : descent);
-    return pos.y === expected;
-  });
-  assertTrue(yExact, 'y 与「每页 5 行 + ±错落」的公式一致（含攀爬方向）');
-  // 朝向硬指标：同一页里「关号越大越靠上」（y 越小）
-  const pageOne = LEVEL_MAP_POS.filter((pos) => pos.page === 1);
-  if (climbUp) {
-    assertTrue(pageOne[0].y > pageOne[1].y, `第 1 关在第 2 关下方（${pageOne[0].y} > ${pageOne[1].y}）`);
-    assertTrue(pageOne[0].y > pageOne[pageOne.length - 1].y, `第 1 关在第 10 关下方（${pageOne[0].y} > ${pageOne[pageOne.length - 1].y}）`);
-  } else {
-    assertTrue(pageOne[0].y < pageOne[1].y, '自上而下时第 1 关在上方');
+  const ordered = [...LEVEL_MAP_POS].sort((a, b) => a.id - b.id);
+  for (let i = 1; i < ordered.length; i += 1) {
+    const ok = climbUp ? ordered[i - 1].y > ordered[i].y : ordered[i - 1].y < ordered[i].y;
+    assertTrue(ok, `第 ${ordered[i].id} 关与第 ${ordered[i - 1].id} 关的上下关系正确（climbDirection = ${MAP.climbDirection}）`);
   }
-  assertEqual(new Set(LEVEL_MAP_POS.map((pos) => `${pos.page},${pos.x},${pos.y}`)).size, total, '没有两个节点落在同一页的同一坐标');
+  if (climbUp) {
+    assertEqual(worldY(1), Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)), '第 1 关在世界最底（y 最大）');
+    assertEqual(worldY(HIDDEN_LEVEL_IDS[HIDDEN_LEVEL_IDS.length - 1]), Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)), '最后一个隐藏关在世界最顶（y 最小）');
+  }
+  assertEqual(worldX(3), MAP.nodeColumns[2], '第 3 个节点的 x 取第 3 列（轮换打破对齐）');
+  assertEqual(worldY(999), null, '未知关号 → null（不猜）');
+  assertEqual(worldX(0), null, '非法关号 → null');
+  // 世界总高 = height × worldHeightRatio（配置一改，几何与巡检一起改）
+  assertEqual(MAP_WORLD_HEIGHT, MAP.height * MAP.worldHeightRatio, '世界总高 = height × worldHeightRatio');
+  assertTrue(MAP_WORLD_HEIGHT > MAP.height * 5, `世界比「一个屏」高得多（${MAP_WORLD_HEIGHT}），才谈得上「向上蔓延」`);
+  // 行距 > 2 × 错落：相邻两行不会塌成同一高度（巡检的同一口径）
+  const rows = Math.ceil(total / MAP.nodesPerRow);
+  const spanY = (1 - MAP.nodeMarginY * 2) / (rows - 1);
+  assertTrue(spanY > 2 * MAP.nodeStaggerY, `行距 ${round3(spanY)} > 2 × 错落 ${2 * MAP.nodeStaggerY}`);
+});
+
+test('mapGeometry：scale = 视口宽 / width（统一缩放）、worldHeight = 世界总高 × scale', () => {
+  const g = mapGeometry(VIEW.w, VIEW.h);
+  assertEqual(g.scale, 1, '360 宽的视口 → scale = 1（1 个 viewBox 单位 = 1px，节点不会被压成椭圆）');
+  assertEqual(g.worldHeight, MAP_WORLD_HEIGHT, '世界高度（CSS 像素）= 世界总高 × scale');
+  const narrow = mapGeometry(320, 700);
+  assertEqual(round3(narrow.scale), round3(320 / MAP.width), '窄屏按宽等比缩小');
+  assertEqual(round1(narrow.worldHeight), round1(MAP_WORLD_HEIGHT * narrow.scale), '窄屏世界高度同步缩小');
+  assertEqual(round1(g.top), round1(Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)) * MAP_WORLD_HEIGHT), 'top = 最顶的关');
+  assertEqual(round1(g.bottom), round1(Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)) * MAP_WORLD_HEIGHT), 'bottom = 最底的关');
+  assertTrue(g.minOffset < g.maxOffset, '平移区间非空（能爬）');
+  assertEqual(mapGeometry(0, 0).scale, 1, '量不到尺寸时回落到 width/height 兜底值');
+});
+
+test('平移：centeredOffsetFor 把节点放到视口正中，且首/末关刚好等于边界（两端都能真居中）', () => {
+  const g = mapGeometry(VIEW.w, VIEW.h);
+  const bottomId = 1;
+  const topId = LEVEL_MAP_POS[LEVEL_MAP_POS.length - 1].id;
+  assertEqual(centeredOffsetFor(bottomId, g), g.minOffset, '最底的那一关居中 = 平移下限');
+  assertEqual(centeredOffsetFor(topId, g), g.maxOffset, '最顶的那一关居中 = 平移上限');
+  for (const id of [1, 7, 26, 50, 53]) {
+    const offset = centeredOffsetFor(id, g);
+    const screenY = worldY(id) * g.worldHeight + offset;
+    assertTrue(Math.abs(screenY - VIEW.h / 2) <= 0.001, `第 ${id} 关落在视口正中（y = ${round3(screenY)}）`);
+  }
+  assertEqual(clampMapOffset(-999999, g), g.minOffset, '往回滑到底 → 夹到下限');
+  assertEqual(clampMapOffset(999999, g), g.maxOffset, '往上滑到顶 → 夹到上限');
+  assertEqual(clampMapOffset(Number.NaN, g), g.maxOffset, '脏值（NaN）→ 落到上限（世界顶部）');
+  const centered = centeredOffsetFor(13, g);
+  assertEqual(clampMapOffset(centered, g), centered, '居中值本来就在区间内，夹取不改变它');
+});
+
+test('visibleLevelIds / focusedLevelId：视口内的关号按升序、正中那一关就是「你正在看」的关', () => {
+  const g = mapGeometry(VIEW.w, VIEW.h);
+  const offset = centeredOffsetFor(26, g);
+  assertEqual(focusedLevelId(offset, g), 26, '把第 26 关居中后，焦点关就是 26');
+  const visible = visibleLevelIds(offset, g);
+  assertTrue(visible.length >= 3, `一屏能看到多个节点（实得 ${visible.length} 个：${visible.join(',')}）`);
+  assertDeepEqual(visible, [...visible].sort((a, b) => a - b), '按关号升序');
+  assertTrue(visible.includes(26), '居中的那一关一定在视口里');
+  for (const id of visible) {
+    const screenY = worldY(id) * g.worldHeight + offset;
+    assertTrue(screenY >= -40 && screenY <= VIEW.h + 40, `第 ${id} 关在视口范围内（y = ${round3(screenY)}）`);
+  }
+  // 爬到世界两端时，视口里仍然有节点（不会滑到空白区）
+  assertTrue(visibleLevelIds(g.minOffset, g).includes(1), '滑到底时第 1 关可见');
+  assertTrue(visibleLevelIds(g.maxOffset, g).includes(LEVEL_MAP_POS[LEVEL_MAP_POS.length - 1].id), '滑到顶时最后一个隐藏关可见');
+  assertTrue(focusedLevelId(g.maxOffset, g) !== focusedLevelId(g.minOffset, g), '两端看到的不是同一关');
+});
+
+test('视差：图层的净位移 = factor × 平移量；图层自身只补 (factor − 1) × 平移量 / scale', () => {
+  assertEqual(MAP_PARALLAX.far, MAP.parallaxFar, '导出的远景比例与配置一致');
+  assertEqual(MAP_PARALLAX.near, MAP.parallaxNear, '导出的近景比例与配置一致');
+  assertTrue(MAP.parallaxFar < 1 && MAP.parallaxNear > 1, '远景比世界慢（<1）、近景比世界快（>1）');
+  for (const offset of [-2500, -1200, 0]) {
+    assertEqual(parallaxNetShift(MAP.parallaxFar, offset), MAP.parallaxFar * offset, `远景净位移 = ${MAP.parallaxFar} × 平移量`);
+    assertEqual(parallaxNetShift(MAP.parallaxNear, offset), MAP.parallaxNear * offset, `近景净位移 = ${MAP.parallaxNear} × 平移量`);
+  }
+  assertEqual(parallaxCompensation(MAP.parallaxFar, -1000, 1), 750, '远景自身要往回补 +750（(0.25 − 1) × −1000），净位移才只剩 0.25 倍');
+  assertEqual(round1(parallaxCompensation(MAP.parallaxNear, -1000, 1)), -450, '近景自身再快一步（(1.45 − 1) × −1000），净位移达到 1.45 倍');
+  assertEqual(parallaxCompensation(MAP.parallaxFar, -1000, 0.5), 1500, '缩放过半时，同样的屏幕位移在 SVG 内部要放大一倍（750 / 0.5）');
+  assertEqual(parallaxCompensation(MAP.parallaxFar, -1000, 0), 750, '脏 scale（0）按 1 处理，不产生 Infinity');
+});
+
+test('导航文本：主线显示「第 N 关 / 共 50 关」，隐藏关只显示关号（不剧透天边）', () => {
+  assertEqual(navLabelText(1), `第 1 关 / 共 ${LEVEL_COUNT} 关`, '第 1 关');
+  assertEqual(navLabelText(50), `第 50 关 / 共 ${LEVEL_COUNT} 关`, '第 50 关');
+  assertEqual(navLabelText(52), '第 52 关', '隐藏关不显示分母');
+  assertEqual(navLabelText(Number.NaN), `共 ${LEVEL_COUNT} 关`, '脏值 → 只显示总数');
+  assertTrue(MAP_NAV_STEP_RATIO > 0 && MAP_NAV_STEP_RATIO < 2, `▲/▼ 一次移动 ${MAP_NAV_STEP_RATIO} 个视口高（不越界、也不只挪一点点）`);
 });
 
 test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRNG，不用于玩法）', () => {
@@ -110,51 +158,41 @@ test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRN
   assertTrue(seqA1.every((v) => v >= 0 && v < 1), '取值落在 [0,1)');
 });
 
-test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × viewBox），与节点坐标无关', () => {
+test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × 世界总高），跨越整个世界', () => {
   const anchors = buildVineAnchors();
   assertDeepEqual(
     anchors,
-    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP.height) })),
-    '锚点 = config 的归一化锚点 × viewBox 宽高'
+    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP_WORLD_HEIGHT) })),
+    '锚点 = config 的归一化锚点 × (width, 世界总高)'
   );
   assertTrue(anchors.length >= 4, '锚点至少 4 个');
-  // 19.4「从下往上」：入口贴在**页内底部**、出口探到**页外上方**；自上而下时相反（方向由 config 决定）
   const climbUp = MAP.climbDirection !== 'down';
   if (climbUp) {
-    assertTrue(anchors[0].y < MAP.height && anchors[0].y > MAP.height * 0.5, '入口在页内底部（0.5 < y < 1）');
-    assertTrue(anchors[anchors.length - 1].y < 0, '出口探出页顶（y < 0，跨屏接口）');
+    assertTrue(anchors[0].y > MAP_WORLD_HEIGHT, '入口在**世界下方之外**（y > 世界总高）');
+    assertTrue(anchors[anchors.length - 1].y < 0, '出口在**世界上方之外**（y < 0）');
   } else {
-    assertTrue(anchors[0].y < MAP.height, '入口在页内（y < 1）');
-    assertTrue(anchors[anchors.length - 1].y > MAP.height, '出口略超出页底（y > 1，跨屏接口）');
+    assertTrue(anchors[0].y < MAP_WORLD_HEIGHT && anchors[anchors.length - 1].y > MAP_WORLD_HEIGHT, '自上而下时入口在世界内、出口在世界下方之外');
   }
-  // 跨屏衔接：入口 y − 1 屏高 = 出口 y（自下而上）；自上而下时是 出口 y − 1 屏高 = 入口 y
-  const seam = climbUp
-    ? Math.abs(MAP.anchors[0].y - 1 - MAP.anchors[MAP.anchors.length - 1].y)
-    : Math.abs(MAP.anchors[MAP.anchors.length - 1].y - 1 - MAP.anchors[0].y);
-  assertTrue(seam < 1e-9, '跨屏（上下页）在 Y 轴上衔接');
-  const nodePoints = positionsOnPage(1).map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(pos.y * MAP.height) }));
+  const span = Math.max(...anchors.map((a) => a.y)) - Math.min(...anchors.map((a) => a.y));
+  assertTrue(span > MAP_WORLD_HEIGHT, `锚点跨越整个世界（跨度 ${round1(span)} > ${MAP_WORLD_HEIGHT}）`);
+  const nodePoints = LEVEL_MAP_POS.map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(pos.y * MAP_WORLD_HEIGHT) }));
   assertTrue(
     anchors.every((anchor) => !nodePoints.some((point) => point.x === anchor.x && point.y === anchor.y)),
     '锚点与节点坐标不重合（路径不经过节点）'
   );
 });
 
-test('buildVinePath：同页永远同一条 d（设计期派生）、是曲线而不是直线拼接、且与节点坐标无关', () => {
-  const first = buildVinePath(1);
-  assertEqual(first, buildVinePath(1), '同一页两次结果相同');
+test('buildVinePath：**一条**贯穿世界的 d、设计期派生、是曲线而不是直线拼接、且与节点坐标无关', () => {
+  const first = buildVinePath();
+  assertEqual(first, buildVinePath(), '两次结果完全相同（19.5 起只有一条路径，不再逐页）');
   assertTrue(first.startsWith('M '), '以 M 开头');
   assertEqual(first.split('C').length - 1, buildVineAnchors().length - 1, '每两个锚点之间一段三次贝塞尔');
-  assertFalse(buildVinePath(1) === buildVinePath(2), '不同页的路径不同（种子随页变化）');
-
-  // 节点坐标是显式的、**不参与路径计算**（19.2 v2 的用户方案取舍，见 D040）：
-  // 因此路径里不应出现任何节点坐标。
-  positionsOnPage(1).forEach((node) => {
-    const point = `${round1(node.x * MAP.width)} ${round1(node.y * MAP.height)}`;
+  // 节点坐标是显式的、**不参与路径计算**（D040 的取舍在 19.5 仍然成立）：路径里不应出现任何节点坐标
+  LEVEL_MAP_POS.slice(0, 12).forEach((node) => {
+    const point = `${round1(node.x * MAP.width)} ${round1(node.y * MAP_WORLD_HEIGHT)}`;
     assertFalse(first.includes(` ${point}`), `第 ${node.id} 关的坐标不出现在路径 d 里`);
   });
-
-  // 「曲线而不是直线拼接」：每段的控制点都偏离弦（直线时垂距为 0），且整体确实弯了
-  const segments = buildVineSegments(1);
+  const segments = buildVineSegments();
   assertEqual(segments.length, buildVineAnchors().length - 1, '分段数 = 锚点数 − 1');
   const deviations = segments.map((seg) => {
     const dx = seg.to.x - seg.from.x;
@@ -197,8 +235,13 @@ test('clampStars：星级只接受 0–3 的整数（脏数据 → 0）', () => 
   assertEqual(clampStars(undefined), 0, '缺省 → 0');
 });
 
-test('renderMap：没有宿主元素时安全返回（不在 Node 里碰 DOM）', () => {
-  assertDeepEqual(renderMap(null, { page: 1 }), { page: 1, total: 1 }, '无宿主 → 不抛错，返回兜底值');
+test('renderMap / 平移 API：没有宿主元素时安全返回（不在 Node 里碰 DOM）', () => {
+  const empty = renderMap(null, {});
+  assertDeepEqual(empty, { offset: 0, geometry: null, visible: [], focused: null, total: LEVEL_MAP_POS.length }, '无宿主 → 不抛错，返回兜底快照');
+  assertEqual(mapSnapshot(null), null, '没有世界状态时快照为 null');
+  assertEqual(panMap(null, 100), null, '没有世界状态时平移是空操作');
+  assertEqual(setMapOffset(null, 10), null, '没有世界状态时设置偏移是空操作');
+  assertEqual(centerMapOn(null, 5), null, '没有世界状态时回中是空操作');
 });
 
 if (!globalThis.__XXL_TEST_BUNDLE__) await summarize();

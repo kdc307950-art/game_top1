@@ -24,7 +24,7 @@ import { activeParticles, clearParticles, createParticleSystem, spawnBurst, upda
 import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
 import { describeGoal, hudScoreAt } from './hud.js'; // v1.16：目标文案与回放分数插值属信息层
 import { DEMO_LEVEL_IDS, HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS, getLevelConfig, isLevelUnlocked, isTianbianOpen, isTimeLevel, unlockStarsFor } from './level.js';
-import { pageCount, pageOf, renderMap } from './vine-map.js'; // Step 19.2：藤蔓关卡地图（画布外的 SVG 层）
+import { centerMapOn, MAP_NAV_STEP_RATIO, mapSnapshot, panMap, relayoutMap, renderMap } from './vine-map.js'; // Step 19.5：藤蔓关卡地图（画布外的 SVG 层 + 视口内纵向平移）
 import { createStorage, getTotalStars } from './storage.js';
 import { buildPhases, createTimeline, motionDurations } from './timeline.js';
 
@@ -63,7 +63,9 @@ const view = {
   levelId: demoLevelRequested(), // 当前关卡 id（Step 12.2 的选关与「下一关」流转；`?demo=` 进演示关）
   screen: 'playing', // 'playing' | 'select'：对局界面与藤蔓地图（19.2 起地图是画布外的 DOM 层）
   levelStars: {}, // 每关最佳星级（localStorage 存档，键为关卡 id）
-  mapPage: 1, // 地图当前页（19.2：5 页 × 每页 10 关，页序 = 50 关表的顺序）
+  mapDrag: null, // 19.5：地图拖拽的临时状态（{ startY, startOffset, lastY, lastT, velocity, moved }）
+  mapInertia: 0, // 19.5：松手后惯性滑动的 rAF id（0 = 没有在滑）
+  mapDragged: false, // 19.5：这一轮手势是「拖拽」而不是「点按」—— 用来抑制随后那次 click
   nextRect: null, // 结束面板的「下一关」
   selectRect: null, // 结束面板的「选关」
   sizePx: 0,
@@ -223,6 +225,8 @@ function applyLayout() {
   if (view.canvas.height !== backing) view.canvas.height = backing;
   view.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   renderer.prepare(size, dpr, view.layout); // 静态图层 + 糖果精灵图集
+  // 19.5：地图打开时视口尺寸变了要重算世界几何（并让当前关重新居中），否则转屏后世界会停在错误的偏移上
+  if (view.screen === 'select') relayoutMap(document.getElementById('map'), { centerOn: view.levelId });
   drawFrame();
 }
 
@@ -645,15 +649,18 @@ function boosterLabel(kind) {
 }
 
 // ---------------------------------------------------------------------------
-// 藤蔓关卡地图（Step 19.2，v1.23；AGENTS.md 2.3 / 5.1）
+// 藤蔓关卡地图（Step 19.2 建层 / **Step 19.5 换成世界纵向平移**；AGENTS.md 2.3 / 5.1，口径见 D047）
 //
-// 地图是**画布外的绝对定位 SVG 层**（结构在 index.html、样式在 vine-map.css、绘制在 vine-map.js）：
+// 地图是**画布外的绝对定位 SVG 层**（结构在 index.html、样式在 vine-map.css、绘制与平移在 vine-map.js）：
 //   · 不参与 `computeBoardSize`，因此既有像素取证不受影响；
-//   · 分页是按钮而不是滚动容器，5.1 的「禁滚动/缩放」依旧成立；
-//   · **只画不拦**：不加任何解锁判断，点哪关进哪关（19.3 的硬门槛未批准）。
+//   · **页面本身不滚动**（5.1）：视口固定 + `overflow: hidden`，平移的是世界自己的 `transform: translateY`；
+//   · 手势与游戏内手势**天然隔离**：input.js 的 `bindInput` 绑在 canvas 上，而地图打开时 canvas 是隐藏的；
+//     document 级的 `bindViewportGuards` 只 `preventDefault`（挡默认行为），不阻断投递，因此地图元素上的
+//     监听照常收到 `touchmove` —— **不需要改 input.js**（19.5 开工前的侦察结论，见 PROGRESS 的 19.5 执行卡）。
 // 事件用委托绑一次（节点每次渲染都会重建），因此不需要在 vine-map.js 里认识 app。
 // ---------------------------------------------------------------------------
 
+/** 地图事件的一次性绑定：点按节点 / 导航按钮 / 回中 / 拖拽 + 惯性 / 键盘。 */
 function bindMap() {
   const host = document.getElementById('map');
   if (!host) {
@@ -661,64 +668,196 @@ function bindMap() {
     return;
   }
   host.addEventListener('click', (event) => {
-    const pager = event.target.closest?.('[data-pager]');
-    if (pager) {
-      turnMapPage(pager.dataset.pager === 'next' ? 1 : -1);
+    const nav = event.target.closest?.('[data-nav]');
+    if (nav) {
+      handleMapNav(nav.dataset.nav);
+      return;
+    }
+    // 19.5：刚刚拖过世界 → 这一下 click 不算「点节点」（否则松手时误进关卡）
+    if (view.mapDragged) {
+      view.mapDragged = false;
       return;
     }
     const node = event.target.closest?.('[data-level]');
     if (node) pickLevel(Number(node.dataset.level));
   });
-  // 键盘可达：Enter/Space 落在节点上等同于点击
+  // 键盘可达：Enter/Space 落在节点上等同于点击；↑/↓ 平移世界；Home 回到当前关
   host.addEventListener('keydown', (event) => {
+    if (!host.hidden && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      navigateMap(event.key === 'ArrowUp' ? 1 : -1);
+      return;
+    }
+    if (!host.hidden && event.key === 'Home') {
+      event.preventDefault();
+      recenterMap();
+      return;
+    }
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const node = event.target.closest?.('[data-level]');
     if (!node) return;
     event.preventDefault();
     pickLevel(Number(node.dataset.level));
   });
+  // 拖拽：触摸与鼠标各一套（5.3 的主交互是触摸；桌面用鼠标同一套逻辑）
+  host.addEventListener('touchstart', (event) => beginMapDrag(eventPoint(event)), { passive: true });
+  host.addEventListener('touchmove', (event) => moveMapDrag(eventPoint(event)), { passive: true });
+  host.addEventListener('touchend', endMapDrag, { passive: true });
+  host.addEventListener('touchcancel', endMapDrag, { passive: true });
+  host.addEventListener('mousedown', (event) => beginMapDrag({ y: event.clientY, target: event.target }));
+  host.addEventListener('mousemove', (event) => moveMapDrag({ y: event.clientY }));
+  host.addEventListener('mouseup', endMapDrag);
+  host.addEventListener('mouseleave', endMapDrag);
 }
 
-/** 打开地图（`view.screen = 'select'`）：隐藏画布、按当前页渲染节点与星级。 */
+/** 触摸/鼠标事件 → 统一的 `{ y }` 取值（只关心纵向）。 */
+function eventPoint(event) {
+  const touch = event?.touches?.[0] ?? event?.changedTouches?.[0];
+  if (touch) return { y: touch.clientY, target: event.target };
+  if (Number.isFinite(event?.clientY)) return { y: event.clientY, target: event.target };
+  return null;
+}
+
+/** 导航按钮：▲/▼ 各移动一个 `navStepRatio` 视口高；「回到当前关」把当前关重新居中。 */
+function handleMapNav(kind) {
+  if (kind === 'current') {
+    recenterMap();
+    return;
+  }
+  navigateMap(kind === 'up' ? 1 : -1);
+}
+
+/** 把世界平移一个视口比例（+1 = 看向世界更上方）。动画时长走 CSS（`--vine-scroll-ms`）。 */
+function navigateMap(step) {
+  const host = document.getElementById('map');
+  const before = mapSnapshot(host);
+  if (!before) return;
+  stopMapInertia();
+  const delta = MAP_NAV_STEP_RATIO * before.viewportHeight * (step > 0 ? 1 : -1);
+  panMap(host, delta, { animate: true });
+  log('info', `地图平移：向${step > 0 ? '上' : '下'} ${Math.round(Math.abs(delta))}px（第 ${before.focused} 关 → 偏移 ${before.offset.toFixed(0)}→${(before.offset + delta).toFixed(0)}）`);
+}
+
+/** 「回到当前关」：把当前关卡重新放到视口正中（用户口径里的防迷路机制）。 */
+function recenterMap() {
+  const host = document.getElementById('map');
+  if (!host) return;
+  const before = mapSnapshot(host);
+  if (!before) return;
+  stopMapInertia();
+  centerMapOn(host, view.levelId, { animate: true });
+  const after = mapSnapshot(host);
+  log('info', `地图回中：第 ${view.levelId} 关居中（偏移 ${before.offset.toFixed(0)}→${after ? after.offset.toFixed(0) : '?'}）`);
+}
+
+/** 开始一次拖拽（只在视口区域内；越过 `dragThreshold` 才真正开始平移）。 */
+function beginMapDrag(point) {
+  const host = document.getElementById('map');
+  if (!host || host.hidden || !point) return;
+  if (!point.target?.closest?.('.vine-viewport')) return;
+  const snapshot = mapSnapshot(host);
+  if (!snapshot) return;
+  stopMapInertia();
+  view.mapDrag = {
+    startY: point.y,
+    startOffset: snapshot.offset,
+    lastY: point.y,
+    lastT: nowMs(),
+    velocity: 0,
+    moved: false
+  };
+}
+
+/** 拖拽中：世界跟手（`offset = 起始偏移 + 手指位移`），并记录瞬时速度供惯性使用。 */
+function moveMapDrag(point) {
+  const drag = view.mapDrag;
+  const host = document.getElementById('map');
+  if (!drag || !host || !point) return;
+  const delta = point.y - drag.startY;
+  if (!drag.moved) {
+    if (Math.abs(delta) < CONFIG.VINE_MAP_CONFIG.dragThreshold) return;
+    drag.moved = true;
+    host.dataset.dragging = 'true';
+  }
+  const now = nowMs();
+  const dt = Math.max(1, now - drag.lastT);
+  drag.velocity = (point.y - drag.lastY) / dt; // px/ms（向下拖为正 = 看向世界更下方）
+  drag.lastY = point.y;
+  drag.lastT = now;
+  panMap(host, drag.startOffset + delta - (mapSnapshot(host)?.offset ?? 0), { animate: false });
+}
+
+/** 松手：把这一轮标记为「拖拽」（抑制随后的 click），并按速度起一段惯性滑动。 */
+function endMapDrag() {
+  const host = document.getElementById('map');
+  const drag = view.mapDrag;
+  view.mapDrag = null;
+  if (host) host.dataset.dragging = 'false';
+  if (!drag || !drag.moved || !host) return;
+  view.mapDragged = true;
+  // 5.4：系统「减少动效」时不做惯性（少动效优先于手感）
+  if (view.systemReducedMotion || Math.abs(drag.velocity) < 0.05) return;
+  startMapInertia(host, drag.velocity);
+}
+
+/** 惯性滑动：按 `scrollInertia` 逐帧衰减，触到边界或速度足够小就停。 */
+function startMapInertia(host, velocity) {
+  const decay = CONFIG.VINE_MAP_CONFIG.scrollInertia;
+  let speed = velocity;
+  let last = nowMs();
+  const step = () => {
+    view.mapInertia = 0;
+    const snapshot = mapSnapshot(host);
+    if (!snapshot) return;
+    const now = nowMs();
+    const dt = Math.min(64, Math.max(1, now - last));
+    last = now;
+    const next = panMap(host, speed * dt, { animate: false });
+    if (next === null || next === snapshot.offset) return; // 已到首/末关，停下
+    speed *= Math.pow(decay, dt / 16.67);
+    if (Math.abs(speed) < 0.02) return;
+    view.mapInertia = window.requestAnimationFrame(step);
+  };
+  view.mapInertia = window.requestAnimationFrame(step);
+}
+
+/** 停止惯性滑动（切页/回中/收起地图时都要停，避免和新的动画打架）。 */
+function stopMapInertia() {
+  if (view.mapInertia) window.cancelAnimationFrame(view.mapInertia);
+  view.mapInertia = 0;
+  view.mapDrag = null;
+  const host = document.getElementById('map');
+  if (host) host.dataset.dragging = 'false';
+}
+
+/** 打开地图（`view.screen = 'select'`）：隐藏画布、按当前关**自动居中**渲染世界。 */
 function showMap() {
   const host = document.getElementById('map');
   if (!host) return;
   view.screen = 'select';
   view.selected = null;
-  view.mapPage = Math.min(Math.max(view.mapPage, 1), pageCount());
   host.hidden = false;
   if (view.canvas) view.canvas.hidden = true;
-  drawMap();
-  log('info', `进入选关地图：第 ${view.mapPage} 页（共 ${pageCount()} 页：5 页主线 + 1 页天边）`);
+  const snapshot = drawMap();
+  log('info', `进入选关地图：第 ${view.levelId} 关居中，视口内 ${snapshot ? snapshot.visible.length : 0} 个节点（世界平移，页面不滚动）`);
 }
 
 function hideMap() {
+  stopMapInertia(); // 19.5：收起地图要停掉惯性，否则 rAF 会继续改已隐藏的世界
   const host = document.getElementById('map');
   if (host) host.hidden = true;
   if (view.canvas) view.canvas.hidden = false;
 }
 
 /**
- * 翻页（19.2 v2 的分页箭头；19.3 起共 6 页：5 页主线 + 1 页天边云层）：夹到 [1, 页数]，从 `from` 滑到新页。
- * 分页是**按钮**而不是滚动容器 —— 5.1 的「禁滚动/缩放」不受影响；触摸手势仍归 input.js。
- */
-function turnMapPage(step) {
-  const from = view.mapPage;
-  const total = pageCount();
-  view.mapPage = Math.min(Math.max(from + step, 1), total);
-  if (view.mapPage === from) return;
-  drawMap(from);
-  log('info', `地图翻页：第 ${from} 页 → 第 ${view.mapPage} 页（共 ${total} 页）`);
-}
-
-/**
- * 重画地图（翻页或从对局回来时调用）；星级与总星数从存档读，地图层自己不碰存储。
+ * 重画地图（打开地图或视口尺寸变化时调用）；星级与总星数从存档读，地图层自己不碰存储。
  * 19.3：解锁状态是**派生量** —— 这里用 `level.isLevelUnlocked` 逐关算好（含反锁保护），
  * 把 `unlocked` / `required` 两张表与天边云层状态一起交给地图层；地图层只负责画。
+ * 19.5：`centerOn` 让**当前关进图即居中**（用户口径的「自动定位」）。
  */
-function drawMap(fromPage = view.mapPage) {
+function drawMap() {
   const host = document.getElementById('map');
-  if (!host) return;
+  if (!host) return null;
   const totalStars = getTotalStars(view.levelStars); // 总星数是派生量（v1.21 口径），只读不写
   const unlocked = {};
   const required = {};
@@ -732,14 +871,13 @@ function drawMap(fromPage = view.mapPage) {
   const tianbianOpen = isTianbianOpen(totalStars);
   const tianbianStars = unlockStarsFor(HIDDEN_LEVEL_IDS[0]);
   if (!tianbianOpen) {
-    // 云层未散去：隐藏关**不渲染**（地图层用 revealed=false 跳过它们，并画出云层）
+    // 云层未散去：隐藏关**不渲染**（地图层用 revealed=false 跳过它们，并画出世界顶部的云带）
     for (const id of HIDDEN_LEVEL_IDS) revealed[id] = false;
   }
   renderMap(host, {
-    page: view.mapPage,
-    fromPage,
     stars: view.levelStars,
     current: view.levelId,
+    centerOn: view.levelId,
     totalStars,
     unlocked,
     required,
@@ -749,6 +887,7 @@ function drawMap(fromPage = view.mapPage) {
   });
   view.mapLocked = unlocked; // 供 pickLevel 判定；只读快照，不进存档
   view.mapRequired = required;
+  return mapSnapshot(host);
 }
 
 /** 点某一关：19.3 起**锁定的关卡不放行**，只弹一条提示；进入关卡时不写任何存档。 */

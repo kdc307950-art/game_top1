@@ -14,6 +14,30 @@
 
 ---
 
+## D047：Step 19.5 —— 把「左右翻页」换成「藤蔓向上蔓延」（世界坐标 + 视口内纵向平移）
+
+- 日期：2026-09-25
+- 状态：**已落地（收口完成）**（**玩法零改动**：解锁门槛、天边云层、隐藏关、50 关表、存档格式、所有逻辑模块一行未动；四个浏览器套件已完成**规则变更式改写**，Gate 0.1 第十六轮已跑完）
+- 背景：用户口径「把『左右翻页』换成『藤蔓向上蔓延』—— 地图是一整块世界，视口固定、内部纵向平移」。19.2–19.4 交付的地图是**分页**的（6 页 × 左右箭头 + `translateX`），与「向上攀爬」的直觉不符。**一处口径冲突已在开工前向用户确认并拍板**：用户方案「不做」一栏的三项（不加 `unlockStars`、不加云层、不加隐藏关）与「50 关 / 5 页」都是 **19.3 交付之前**的旧口径 —— 这三项已在 19.3 落地并过 Gate 0.1 第十五轮，因此本轮**保留 19.3，只换导航方式**（用户选择「保留 19.3，只换导航方式」）。
+- 决定：
+  1. **地图从「页」变成「世界」**：`LEVEL_MAP_POS` 由 `{ id, page, x, y }` 改为 **`{ id, x, y }`**（世界归一化：x 相对 `width`、y 相对**世界总高**；0 = 世界顶部、1 = 世界底部）。世界总高 = `height × worldHeightRatio`（**6.5** = 4160 viewBox 单位）。**53 关 = 27 行**（`nodesPerRow = 2`），行距 = `(1 − 2 × nodeMarginY) / (行数 − 1)`，`climbDirection = 'up'` 时 `y = 1 − (nodeMarginY + row × spanY ± nodeStaggerY)`，**y 随关号严格单调递减**。`nodeMarginY` 0.08 → **0.11**（让首/末关都能被视口真正居中）、`nodeStaggerY` 0.015 → **0.01**（保证「行距 > 2 × 错落」）。
+  2. **交互 = 视口固定 + 世界平移**：视口 `overflow: hidden`，`translateY` 加在**世界自己**身上 —— **页面不滚动**（`scrollX/scrollY` 恒 0、`scrollHeight === clientHeight`），所以 5.1 的「禁止页面滚动/缩放」**不需要开例外**。进入地图按 `centerOn` **把当前关居中**；拖拽 = `touchstart/move/end` + `mousedown/move/up`（`dragThreshold` 8px 之内仍按「点按节点」处理，避免误进关；松手按 `scrollInertia` 0.94 做惯性，**reduced-motion 下不做惯性**）；`▲`/`▼` 各移动 `navStepRatio`(0.9) 个视口高并**取代左右翻页**；**「回到当前关」**悬浮按钮做防迷路；导航文本 =「第 N 关 / 共 50 关」（焦点取**视口正中最近的那一关**，隐藏关不显示分母）。**`input.js` 一行未改**（开工前侦察：`bindInput` 绑 canvas、地图打开时 canvas 隐藏；`bindViewportGuards` 只在 document 上 `preventDefault`，挡默认行为但不阻断投递）。
+  3. **渲染 = 一张 SVG + 统一缩放**：世界 = 单张 `viewBox="0 0 360 4160"`（1 单位 = 1px），外层 `.vine-world` 用 `scale = 视口宽 / width` **统一缩放**并按视口宽对齐 —— 因此节点是**正圆**而不是椭圆（布局体检断言「宽高差 ≤ 1.5px」）。**单条贯穿世界**的贝塞尔路径：10 个锚点跨越整个世界（入口 y = 1.06 在世界下方之外、出口 y = −0.06 在世界上方之外），控制点仍只由「锚点 + `mulberry32(seed)`」决定、**与节点坐标无关**（D040 的取舍不变，**不使用运行时随机**）。
+  4. **两层视差 + 随世界高度变化的天空**：远景（远山带 + 雾）与近景（**150 个确定性星光点**，闪烁相位用 class 而不是内联样式）都是世界的子图层，各自补 `(factor − 1) × 平移量 / scale`，于是**净位移 = `parallaxFar`(0.25) × 平移量** 与 **`parallaxNear`(1.45) × 平移量**。天空 `linearGradient` 用 `userSpaceOnUse` 铺满世界（底部深绿 → 顶部深空蓝），并靠 `backdropBleed`(800px) 上下出血，**平移到位也不露白**。远山带高 1024、云团布局是模块内本地常量（D013）。
+  5. **19.3 的天边语义平移到世界里**：`tianbianBand`(**0.155**) = **世界顶部云层带**（取代「第 6 页」）—— 云层未散时隐藏关 51–53 **不渲染**、只画云带与「还差 N ⭐」；`tianbianBand` 的取值被巡检**卡死**在「最内侧隐藏关 y（0.15）」与「第 50 关 y（0.16）」之间（云要盖住 51–53、又不能盖住已解锁的主线末关）。**云团半径/位置也按「不被视口两侧硬切」重排**（见下条缺陷）。
+  6. **布局体检（代替「肉眼看图」）抓到并修掉两个真缺陷**：① 云团圆心太靠边 + 半径过大，被视口 `overflow: hidden` **从左右两侧各切一刀**（首末云团的包围盒 −6.3 / 394.4 超出视口 15–375）→ 重排 `CLOUD_PUFFS` 使其满足 `fx × width ± fr × width ∓ cloudDrift ∈ [0, width]`；② 「回到当前关」原本挂在 `#map` 上，右边缘（382）**越出地图列**（375）→ 改挂在**视口内**，贴地图列对齐边。
+  7. **不做**：不给地图加音效/粒子系统（那些属其他 Step，本步的星光只是地图背景）；不引入素材或依赖；不改玩法数值；**不回退 19.3**；不改 `input.js`；不把 `--booster-bar-h` 之外的布局变量动掉。
+- 依据与证据：
+  - **L1**：`node tests/run-all.js` → **12 文件 / 263 用例 / 3334 断言 / 0 失败 / exit 0**（`tests/vine-map.test.js` 的**全部分页断言退役**，改为世界几何：`mapGeometry` / `clampMapOffset` / `centeredOffsetFor` / `visibleLevelIds` / `focusedLevelId` / `parallaxCompensation` / `navLabelText`）。
+  - **L0**：`python _build/consistency_check.py` **全部通过**（附录 B 与 `config.js` 键位逐项对齐：删 3 键、增 11 键）；`node _build/check-vine-map.mjs` → **PASS 20/20**（世界不变量：y 严格单调、行距 > 2 × 错落、任意连续 2 行覆盖 3 列、云带覆盖隐藏关且不盖住第 50 关、锚点跨越整个世界）。
+  - **L2/L3**：新增 `_build/shot-map-195.mjs` → **35 项 PASS**（进入地图当前关居中偏差 **0.00px**；触摸拖 900px → 世界 **1:1 跟手**（Δ=901px，含末段 1px）且**松手后无残余惯性**；精确拖拽让第 26 关居中偏差 **1.00px**；鼠标拖 −260px → Δ=−260px；爬到顶 `▲` 禁用、云带在、隐藏关 0 个渲染、第 50 关仍可见；满星 150 → 云带消失、51–53 全露出；**页面 `scrollY` 恒 0 且 `scrollHeight === clientHeight`**；两层视差净位移比例精确 = 0.25 / 1.45；节点是正圆、无横向裁切、天空铺满、固定 UI 不压世界；控制台 0 错误 / 0 异常）。截图四张：`_build/step195-map-bottom-stars39.png`、`step195-map-mid-stars39.png`、`step195-map-top-cloud-stars39.png`、`step195-map-top-revealed-stars150.png`。
+  - **环境**：Windows + `python -m http.server 8000` + 无头 Chrome `153.0.8010.53`（`--headless=new --disable-gpu --force-color-profile=srgb`，CDP 端口 9355，profile 独立）。
+  - 门禁（**Gate 0.1 第十六轮**，`_build/gate16.ps1` → `_build/g16-summary.txt`）：**主轮 24 套件 22 PASS** + 8 次复跑；两处红已收口 —— `verify-step19-4` 的 4 条「按页」断言改写后复跑 2 次全绿（**确定性**），`verify-step17`（粒子回收）与复跑里的 `verify-step4`（无效交换计步）各复跑 2 次全绿（**时序抖动**，登记 **P3-K / P3-L**，与本步改动无关）；`rt-snapshot` 门禁前后 **drift: none**。四个改写后的套件：`verify-step19-2` **48/0**、`verify-step12b` **21/0**（18→21，含 3 条真实触摸滑动断言：**Δ=181px 1:1 跟手** + 页面不滚动 + 不误进关）、`verify-step19-3` **46/0**（43→46，解锁矩阵与反锁保护原样保留）、`verify-step19-4` **18/0**。
+  - 环境：Windows + `python -m http.server 8000` + **私有** headless Chrome `153.0.8010.53`（`--headless=new --disable-gpu --force-color-profile=srgb`，CDP 9356、独立 profile）；**刻意不用** `launch-chrome-pinned.ps1`（它会 Stop-Process 掉用户正在用的浏览器）。
+- 影响：`config.js`（`VINE_MAP_CONFIG` 世界模型）、`_build/gen-vine-map.mjs`、`_build/check-vine-map.mjs`、`level.js`（`LEVEL_MAP_POS` 由生成器写入）、`LEVELS.md`（§9 表头改「关 / x / y」）、`vine-map.js`、`vine-map.css`、`app.js`（地图手势/惯性/导航/回中/自动居中 + `relayoutMap`）、`tests/vine-map.test.js`、`_build/verify-step19-2.mjs`、`_build/verify-step12b.mjs`、`_build/verify-step19-3.mjs`、`_build/verify-step19-4.mjs`、`AGENTS.md` v1.30、`ROADMAP.md` v1.30、`prompts.md`、`PROGRESS.md`。
+- 替代方案：① 让整个网页滚动、用 `overflow-y: auto`（否决：**违反 5.1**，也会把地址栏/下拉刷新等浏览器行为带回来）；② 保留分页但把箭头改成上下（否决：用户要的是「连续蔓延」，一页一页跳仍然不是蔓）；③ `preserveAspectRatio="none"` 直接把世界高拉满视口（否决：非等比拉伸会把节点压成椭圆，实测宽高比会差 ~19%）；④ 把视差做成逐元素动画（否决：几十上百个 DOM 的逐帧 transform 会掉帧，改成**两个图层容器**的 transform + 单个 `<g>` 里的 150 个圆点）；⑤ 让 `renderMap` 自己绑拖拽事件（否决：违反 2.3「地图层不绑全局事件」，事件仍留在 `app.js`，地图层只导出 `panMap`/`setMapOffset`/`centerMapOn`/`relayoutMap`）；⑥ 直接回退 19.3 去凑用户方案里的「50 关」（否决：那是**规则回退**，与已过门禁的 19.3 冲突，用户已明确选择保留）。
+- 未验证（如实）：① **观感的人工核对** —— 本机**没有配置视觉模型**（`read_image` 的视觉引擎失败、`modlens` 报 `No vision provider is set up`），Agent **确实看不到这四张截图**，只能用结构性证据（元素/计算样式/几何包围盒/比例断言）代替；观感请以四张 PNG 为准；② 真机上的平移流畅度与低端机性能（世界是单张 SVG，平移只改 3 个 transform；未在真机量过 fps）；③ 极窄视口（<320px）下 `arrowOffsetY` 与星行的可读性；④ `verify-step19-2/12b/19-3` 与 `shot-map-194` 仍是旧分页口径、当前**必然红**（这是本步「原型先行」的约定状态，不是缺陷）。
+
 ## D046：Step 19.4 —— 藤蔓地图「从下往上」+ 画风增强（参考其他消消乐源码）
 
 - 日期：2026-09-25

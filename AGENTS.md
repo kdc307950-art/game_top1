@@ -1,9 +1,23 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.29
+> 版本：v1.30
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.29 → v1.30 关键变更）
+
+本次修订按**用户口径**落地 **Step 19.5：把「左右翻页」换成「藤蔓向上蔓延」（世界坐标 + 视口内纵向平移）**。**玩法零改动**（解锁门槛、天边云层、隐藏关、50 关表、存档格式、所有逻辑模块一律不动；用户明确拍板**保留 19.3**，本步只换导航方式），口径记入 `DECISIONS.md` **D047**。
+
+1. **地图从「页」变成「世界」（2.3）**：`LEVEL_MAP_POS` 由 `{ id, page, x, y }`（页内归一化）改为 **`{ id, x, y }`（世界归一化）** —— x 相对 `width`、y 相对**世界总高**（0 = 世界顶部、1 = 世界底部）；`climbDirection = 'up'` 时**第 1 关在世界最底**、关号越大越靠上，且 **y 随关号严格单调**。世界总高 = `height × worldHeightRatio`（默认 **6.5**，标定到与 19.4 相近的密度：53 关 = 27 行 ≈ 每屏 5.9 行）。**坐标三件套依旧成立**：`LEVELS.md` §9（真相源，表头改为「关 / x / y」）↔ `LEVEL_MAP_POS` ↔ `_build/check-vine-map.mjs`（反向巡检改写为世界不变量：y 严格单调、行距 > 2 × 错落、任意连续 2 行覆盖全部 3 列、**云层带必须覆盖全部隐藏关且不盖住第 50 关**、锚点跨越整个世界）。`_build/gen-vine-map.mjs` 仍是**唯一写入方**。
+2. **交互：视口固定 + 世界平移（5.1 不受影响）**：视口 `overflow: hidden`，平移的是世界自己的 `transform: translateY`，**页面本身一个像素都不滚**（`scrollX/scrollY` 恒为 0、`scrollHeight === clientHeight`）。进入地图**自动把当前关居中**（`centerOn`），**「回到当前关」悬浮按钮**做防迷路，`▲`/`▼` 各移动 `navStepRatio`（0.9）个视口高并替代左右翻页，导航文本是「第 N 关 / 共 50 关」（焦点 = 视口正中最近的那一关，隐藏关不显示分母）。拖拽 = `touchstart/move/end` + `mousedown/move/up`（`dragThreshold` 8px 之内仍按「点按节点」处理；松手按 `scrollInertia` 0.94 做惯性，**reduced-motion 下不做惯性**）。**`input.js` 一行未改** —— 侦察确认：`bindInput` 绑的是 canvas（地图打开时 canvas 隐藏），`bindViewportGuards` 只在 document 上 `preventDefault`（挡默认行为、不阻断投递），因此地图手势与游戏内手势天然隔离。
+3. **渲染：统一缩放 + 单条全球曲线 + 分层视差**：世界用**一张** SVG（`viewBox = 0 0 width 世界总高`，1 单位 = 1px），外层按 `scale = 视口宽 / width` **统一缩放**（节点是正圆，不会被拉成椭圆；巡检为此加了「宽高差 ≤ 1.5px」的体检）。路径改为**一条贯穿世界的**平滑贝塞尔（锚点 10 个、跨越整个世界：入口在世界下方之外、出口在世界上方之外），控制点仍只由「锚点 + 固定种子」决定、**与节点坐标无关**（D040 的取舍不变，仍不使用运行时随机）。**两层视差**：远景（远山剪影 + 雾）净位移 = `parallaxFar`(0.25) × 平移量、近景（`particleCount` 150 个确定性星光点）净位移 = `parallaxNear`(1.45) × 平移量 —— 图层自身补 `(factor − 1) × 平移量 / scale`，这样「图层跟着世界走」与「不同速度的视差」同时成立。天空渐变**随世界高度**由底部深绿到顶部深空蓝；`backdropBleed`(800px) 让天空/地面出血，平移到位也不露白。
+4. **19.3 的天边语义平移到世界里**：`tianbianBand`(0.155) = **世界顶部云层带**（取代「第 6 页」）—— 云层未散时隐藏关 51–53 **不渲染**、只画云带与「还差 N ⭐」；达标后照旧露出。云带的取值被巡检**卡死**在「最内侧隐藏关 y（0.15）」与「第 50 关 y（0.16）」之间（云要盖住 51–53、又不能盖住已解锁的主线末关）。云团半径与位置也按「不被视口从两侧硬切」重排（布局体检抓到的缺陷）。
+5. **固定 UI 归位**：进度条 `⭐ n/150` 固定在**世界之外的视口底部**（不随平移），下面才是 `▲ / 第 N 关 / ▼` 导航条；「回到当前关」挂在**视口内**的右上角（贴地图列的对齐边）。
+6. **附录 B（`VINE_MAP_CONFIG`）**：**删除** `pageSize` / `nodeRows` / `pageSlideMs`；**新增** `worldHeightRatio` / `nodesPerRow` / `scrollMs` / `dragThreshold` / `scrollInertia` / `navStepRatio` / `parallaxFar` / `parallaxNear` / `particleCount` / `tianbianBand` / `backdropBleed`；`anchors` 改为 10 个「跨越整个世界」的锚点；`nodeMarginY` 0.08 → **0.11**、`nodeStaggerY` 0.015 → **0.01**（两者共同保证「行距 > 2 × 错落」与「首/末关都能被视口真正居中」）。
+7. **验证**：`tests/vine-map.test.js` 的**全部分页断言退役**，改为世界几何（`mapGeometry` / `clampMapOffset` / `centeredOffsetFor` / `visibleLevelIds` / `focusedLevelId` / `parallaxCompensation` / `navLabelText`）——**263 用例 / 3334 断言 / 0 失败**；`_build/check-vine-map.mjs` 改写为世界不变量（**20 项 PASS**）；`_build/shot-map-195.mjs`（原型探针）**35 项 PASS** + 四张截图。**收口（4 个浏览器套件按「规则变更式改写」追平世界口径）**：`verify-step19-2` **48/0**（12 条分页循环断言 → 8 条世界断言：进图当前关居中、`▲`/`▼` 各 0.9 视口高、两端禁用、回中、云带在世界顶、页面不滚动）、`verify-step12b` **21/0**（18 → 21：新增**真实触摸滑动**断言 —— Δ=181px **1:1 跟手**、页面不滚动、拖过不误进关）、`verify-step19-3` **46/0**（43 → 46：第 6 页云层 → **世界顶部云带**；解锁矩阵 / 反锁保护 / `pickLevel` 拒绝 / toast **原样保留**）、`verify-step19-4` **18/0**（4 条「按页」断言追平：路径首末点在世界之外、`.vine-sky`+`.vine-ridge`+`.vine-haze`+`.vine-ground`）；`shot-map-194.mjs` 与 `s19-2-probe.mjs` **退役**。**Gate 0.1 第十六轮**（`_build/gate16.ps1` → `_build/g16-summary.txt`，**24 套件 + 8 次复跑**）主轮 **22 PASS**，两处红按「改写过时断言 + 复跑时序抖动」收口（登记 **P3-K**（粒子回收）/ **P3-L**（无效交换计步）两项偶发，均与本步改动无关），`rt-snapshot` 门禁前后 **drift: none**。
 
 ---
 
@@ -488,8 +502,8 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
   level.js         # 关卡目标、步数限制、三星评分
   settlement.js    # 结算阶段：余步 → 递增奖励分 + 随机特殊糖果 → 连锁引爆（纯逻辑，固定种子 PRNG，v1.25）
   particles.js     # 粒子动画的纯逻辑：固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照（v1.27）
-  vine-map.js      # 藤蔓关卡地图：SVG 渲染 + 分页 + 归一化坐标 + 确定性路径（不读状态、不写存档，v1.24）
-  vine-map.css     # 藤蔓地图样式：节点状态 / 星星 / 叶子 / 翻页位移（画布外的绝对定位层，v1.24）
+  vine-map.js      # 藤蔓关卡地图：**世界坐标 + 视口内纵向平移** + 单条确定性路径 + 视差/星光/云带 + 导航（不读状态、不写存档，v1.30）
+  vine-map.css     # 藤蔓地图样式：视口/世界/视差图层/星光/云带/导航/回中/节点三态（画布外的绝对定位层，v1.30）
   app.js           # 应用编排：视图状态、调用游戏逻辑、动画起播（localStorage 读写已移交 storage.js，v1.16）
   storage.js       # 本地存档读写与容错：最高分、每关星级、道具数量、音效/震动偏好（唯一允许读写 localStorage 的模块，v1.16）
   audio.js         # 音效合成与震动反馈：Web Audio 合成、震动模式（唯一允许创建 AudioContext 的模块，v1.22）
@@ -536,11 +550,11 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - `special.js`：根据匹配形状生成特殊元素，处理激活和组合。
 - `score.js`：基础分、特效倍数、连消倍数计算。
 - `obstacles.js`：障碍物创建、消除、层数管理。
-- `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**归一化 0–1**，v1.24）。
+- `level.js`：关卡配置、目标追踪、步数与时间的消耗/恢复、三星判定（`computeStarThresholds`，v1.25 起为**统一动态派生**）、地图坐标表（`LEVEL_MAP_POS`，**世界**归一化 0–1：x 相对 `width`、y 相对世界总高（0 = 世界顶部、1 = 世界底部），v1.24 / v1.30）。
 - `settlement.js`：**结算阶段**的纯逻辑（v1.25）：固定种子 PRNG（`mulberry32`）、递增奖励分（`settlementStepsScore`）、星级阈值用的结算期望分（`estimateSettlementScore`）、转化计划（`conversionPlan`，只落**朴素动物格**）、引爆顺序（`detonationOrder`，**从棋盘底部到顶部**）、按 `cell.id` 追踪格子（`findCellById`）。它**不认识 `GameState`、不碰 DOM/存档、不实现消除规则** —— 转化与引爆的落地由 `game.js` 调用它完成，因此每个函数都能在 Node 里单测。**不使用运行时随机**：种子 = `SETTLEMENT_CONFIG.seed + 关卡id`（同一关每次结算完全一致）。
 - `particles.js`：**粒子动画的纯逻辑**（v1.27）：固定容量环形池（`capacity`）、按 `dt` 的积分与回收、按事件种类（`PARTICLE_KIND`）的**生成计划**（`planBurst`）、确定性 PRNG（`mulberry32` + 事件键）以及给渲染层的**只读快照**（`activeParticles`，最多 `maxPerFrame` 项）。它**不认识棋盘 / `GameState` / DOM / Canvas / 存档**，也不实现任何游戏规则 —— 生成与推进由 `app.js` 在动画时间线上调用，贴图只在 `render.js`；因此池有界、生命周期、确定性与 `dt` 边界都能在 Node 里逐项测。**不使用运行时随机**：种子 = `PARTICLE_CONFIG.seed ⊕ hashKey("关卡id:级联层:cell.id:种类")`（同输入同粒子，像素巡检可复现）。坐标以**棋盘格**为单位（1.0 = 一格），渲染时乘 `cellPx`。
-- `vine-map.js`：藤蔓关卡地图（分页、节点、确定性路径、叶子点缀、**天边云层**、**双层藤蔓与分层背景**）。只接收「坐标表 + 星级表 + 当前关 + 总星数 + **解锁表**（`unlocked`/`required`，由调用方算好）+ **天边状态**（`tianbian`）+ ⭐ 分母（`starTotal`）」，**不读游戏状态、不写存档、不绑全局事件**；DOM 渲染与纯函数分离（分页/路径/星级规范化/节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，渲染时乘 viewBox 宽高；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**。**攀爬方向（v1.29）**由 `VINE_MAP_CONFIG.climbDirection` 决定：默认 `'up'` = 每页**最下方是页内第 1 个节点**、关号越大越靠上，锚点入口在页内底部（y≈0.95）、出口探出页顶（y≈−0.05），跨屏衔接条件是 `入口 y − 1 ≈ 出口 y`。节点状态机由 v1.24 的两态扩为**三态**（v1.28）：`visited`/`attainable`/**`locked`** —— `nodeState(earned, unlocked)` 仍是纯函数，**地图层不认识解锁规则**（`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 算好后传入）。共 **6 页**：前 5 页各 10 个主线节点，第 6 页是天边（3 个隐藏关；云层未散去时隐藏关**不渲染**、只画云层与「还差 N ⭐」）。**观感（v1.29）**：分层背景（天空渐变 + 两层远山 + 地面）、双层藤蔓（深色垫层 + 亮色芯，共用一条 `d`）、节点内嵌高光、锁定节点的锁形图标、**当前关指针**（节点上方箭头）、云层错峰漂移 —— 全部零素材程序化，纯造型比例按 D013 留在模块内的本地常量。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**分页是按钮而不是滚动容器**，因此 5.1 的「禁滚动/缩放」依旧成立（v1.24 / v1.28 / v1.29，见 D040 / D045 / D046）。
-- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托**（点节点进关 / 点翻页箭头，v1.24）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
+- `vine-map.js`：藤蔓关卡地图（**世界坐标 + 视口内纵向平移**、节点、确定性路径、叶子点缀、天边云层带、双层藤蔓、分层视差、导航与回中）。只接收「世界坐标表 + 星级表 + 当前关 + **居中目标**（`centerOn`）+ 总星数 + **解锁表**（`unlocked`/`required`，由调用方算好）+ **天边状态**（`tianbian`）+ ⭐ 分母（`starTotal`）」，**不读游戏状态、不写存档、不绑全局事件**（拖拽/导航/键盘事件由 `app.js` 绑在宿主上，再调用本模块导出的 `panMap` / `setMapOffset` / `centerMapOn` / `relayoutMap`）；DOM 渲染与纯函数分离（`mapGeometry` / `clampMapOffset` / `centeredOffsetFor` / `visibleLevelIds` / `focusedLevelId` / `parallaxCompensation` / `navLabelText` / 路径 / 星级规范化 / 节点状态机都可在 Node 里测）。坐标（`LEVEL_MAP_POS` 与 `VINE_MAP_CONFIG.anchors`）是**归一化 0–1**，x 乘 `width`、y 乘**世界总高**（`height × worldHeightRatio`）；路径只由 `anchors` + 固定种子 PRNG 决定、**与节点坐标无关**。**攀爬方向**由 `VINE_MAP_CONFIG.climbDirection` 决定：默认 `'up'` = **第 1 关在世界最底**、关号越大越靠上（y 严格单调递减），锚点入口在**世界下方之外**（y > 1）、出口在**世界上方之外**（y < 0）。节点状态机是**三态**（v1.28）：`visited`/`attainable`/**`locked`** —— `nodeState(earned, unlocked)` 是纯函数，**地图层不认识解锁规则**（`unlocked` 由 `app.js` 用 `level.isLevelUnlocked()` 算好后传入）。**19.3 的天边语义（v1.30）**：`tianbianBand` 是**世界顶部云层带**，云层未散时隐藏关 51–53 **不渲染**、只画云带与「还差 N ⭐」。**观感**：分层背景（天空渐变随世界高度 + 远山剪影与雾 + 地面）、双层藤蔓（深色垫层 + 亮色芯，共用一条 `d`）、节点内嵌高光、锁定节点的锁形图标、**当前关指针**、**两层视差**（远景 0.25×、近景星光 150 点 1.45×）、云层错峰漂移 —— 全部零素材程序化，纯造型比例按 D013 留在模块内的本地常量。它画在**画布外**的绝对定位层上，不参与 `computeBoardSize`；**视口固定、平移的是世界自己的 `transform: translateY`**，页面本身仍然禁止滚动/缩放，因此 5.1 不需要开例外（v1.24 / v1.28 / v1.29 / **v1.30**，见 D040 / D045 / D046 / **D047**）。
+- `app.js`：应用编排——持有视图状态、调用游戏逻辑、按时间线起播动画、**地图的 DOM 事件委托与手势编排**（点节点进关 / 拖拽平移 / 惯性 / `▲`·`▼` 导航 / 「回到当前关」/ 键盘 ↑↓·Home，19.2 v1.24 / **19.5 v1.30**）。**不再直接读写 `localStorage`**（v1.16 起统一经 `storage.js`）。
 - `storage.js`：本地存档读写与容错（最高分、每关星级、道具数量），是**唯一**允许碰存储的模块（v1.16 / v1.21 / v1.26）。内部通过**可注入的 backend** 访问介质（默认 `localStorageBackend`），业务代码只认 `createStorage(logger, backend)` 的接口；星级存档带**格式版本**并能就地迁移旧格式（见附录 B 的 `STORAGE_CONFIG.schemaVersion`）。它不认识棋盘、不碰 DOM、不实现游戏规则，日志经注入的 logger 输出（因此 Node 里也能测）。**v1.26（Step 20.4）**：星级存档升级到 **v2**（`levels` 的值是 `{ stars, rainbow }`，为彩星预留字段）；`readLevelStars()` 仍返回展平的星级表、`recordLevelStars` 仍返回 `{ best, updated }`，彩星走新增的 `readLevelRecords()` / `writeLevelRecords()` / `readTotalRainbows()`，且**彩星不计入总星数**（`⭐ n/150` 只数星级）。
 - `audio.js`：音效合成与震动反馈（`resolveTone`/`resolveHaptic` 纯函数 + `createAudio`/`createHaptics` 工厂），是**唯一允许创建 `AudioContext` 的模块**（v1.22）。只接收「事件名 + 序号」，不读游戏状态、不绑定事件、不碰存档；开关经注入的 `isEnabled()` 判断，因此关掉偏好时连音频上下文都不会创建。
 - `render.js`：棋盘层绘制与几何计算（画布尺寸与 DPR、棋盘布局、静态图层烘焙、每帧贴图与几何命中）。只接收「场景描述」对象，不读游戏状态、不绑定事件、不碰存档；单向依赖 `hud.js` 取布局常量、`candy.js` 取糖果精灵。
@@ -1505,15 +1519,24 @@ const LEVEL_3 = {
 | `BOOSTER_CONFIG.extraSteps`        | 加五步在步数关增加的步数 | 5        | 3.9 v1.20 |
 | `BOOSTER_CONFIG.extraSeconds`      | 加五步在时间关增加的秒数 | 10       | 3.9 v1.20 |
 | `BOOSTER_CONFIG.hammerCells`       | 小木锤一次消除的格数 | 1           | 3.9 v1.20 |
-| `VINE_MAP_CONFIG.seed`             | 藤蔓路径的固定种子（用户方案的 `VINE_SEED`，抖动确定性） | 20260922 | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.pageSize`         | 地图每页关卡数     | 10                   | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.width`            | 地图 viewBox 宽（归一化 x 的换算基准） | 360            | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.height`           | 地图 viewBox 高（归一化 y 的换算基准） | 640            | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.anchors`          | 路径锚点（归一化 0–1；出口略超 1 形成跨屏接口） | 6 个锚点，见 2.3 | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.seed`             | 藤蔓路径与星光的固定种子（用户方案的 `VINE_SEED`，抖动确定性） | 20260922 | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.width`            | 世界 viewBox 宽（归一化 x 的换算基准） | 360            | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.height`           | 一个「旧屏」的高度（viewBox 单位；**世界总高 = height × worldHeightRatio**） | 640 | 19.2 v1.24 / 19.5 v1.30 |
+| `VINE_MAP_CONFIG.worldHeightRatio` | 世界总高倍率（19.5 起取代「每页 10 关」；6.5 时 53 关 ≈ 每屏 5.9 行，密度与 19.4 相当） | 6.5 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.anchors`          | 路径锚点（归一化 0–1，**跨越整个世界**：入口在世界下方之外、出口在世界上方之外） | 10 个锚点，见 2.3 | 19.2 v1.24 / 19.5 v1.30 |
 | `VINE_MAP_CONFIG.nodeColumns`      | 节点 X 列（归一化，≥3 列打破两列对齐） | `[0.2, 0.48, 0.76]` | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.nodeRows`         | 每页节点行数（每行 2 个 → 每页 10 关） | 5               | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.nodeMarginY`      | 节点区上下边距（归一化） | 0.08           | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.nodeStaggerY`     | 节点 Y 的错落幅度（归一化） | 0.015        | 19.2 v1.24 |
+| `VINE_MAP_CONFIG.nodesPerRow`      | 每行节点数（行沿世界自下而上推进；2 个/行 → 53 关 = 27 行） | 2 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.nodeMarginY`      | 节点区上下边距（归一化到**世界**高；同时保证首/末关都能被视口真正居中） | 0.11 | 19.2 v1.24 / 19.5 v1.30 |
+| `VINE_MAP_CONFIG.nodeStaggerY`     | 节点 Y 的错落幅度（归一化；须 < 行距/2，否则相邻两行会塌成同一高度） | 0.01 | 19.2 v1.24 / 19.5 v1.30 |
+| `VINE_MAP_CONFIG.scrollMs`         | 世界平移 / 回中的动画时长（ms；19.5 取代 `pageSlideMs`） | 420 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.dragThreshold`    | 判定「拖拽」的最小手指位移（px；之内仍按「点按节点」处理） | 8 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.scrollInertia`    | 松手后每帧的速度衰减（1 = 不衰减；reduced-motion 下不使用惯性） | 0.94 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.navStepRatio`     | `▲`/`▼` 一次移动的视口高比例 | 0.9 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.parallaxFar`      | 远景（远山 + 雾）图层的**净**位移比例（<1 = 比世界慢） | 0.25 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.parallaxNear`     | 近景（星光）图层的**净**位移比例（>1 = 比世界快） | 1.45 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.particleCount`    | 星光点数（确定性，**不使用运行时随机**） | 150 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.tianbianBand`     | 世界**顶部**云层带的高度比例（须覆盖全部隐藏关、且不盖住第 50 关） | 0.155 | 2.3 v1.30 |
+| `VINE_MAP_CONFIG.backdropBleed`    | 天空/地面超出世界上下边缘的出血量（px；保证平移到位也不露白） | 800 | 2.3 v1.30 |
 | `VINE_MAP_CONFIG.pathJitter`       | 路径控制点抖动量（px，只影响曲线形状） | 26       | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.nodeRadius`       | 节点半径（px）     | 16                   | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.starSize`         | 星星基准尺寸（px，= 第一版 `★` 字形的 11px） | 11    | 19.2 v1.24 |
@@ -1523,7 +1546,6 @@ const LEVEL_3 = {
 | `VINE_MAP_CONFIG.leafSize`         | 叶片长度（px）     | 7                    | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.pulseMs`          | 呼吸光效周期（ms，当前关卡高亮） | 2000        | 19.2 v1.24 |
 | `VINE_MAP_CONFIG.leafSwayMs`       | 叶片摇曳周期（ms） | 3600                 | 19.2 v1.24 |
-| `VINE_MAP_CONFIG.pageSlideMs`      | 翻页位移时长（ms） | 320                  | 19.2 v1.24 |
 | `AUDIO_CONFIG.masterGain`          | 音效总音量（0-1）  | 0.16                 | 5.6 v1.22 |
 | `AUDIO_CONFIG.events`              | 音效事件表（波形 / 起止频率 / 时长 / 增益 / 升调倍率） | 见 5.6 | 5.6 v1.22 |
 | `HAPTIC_CONFIG.events`             | 震动事件表（毫秒模式） | 见 5.6            | 5.6 v1.22 |
@@ -1563,7 +1585,7 @@ const LEVEL_3 = {
 | `UNLOCK_CONFIG.starsPerLevel`      | 每关递增的星数门槛（解锁曲线的唯一旋钮） | 1.2 | 3.6 v1.28 |
 | `UNLOCK_CONFIG.tianbianStars`      | 天边云层的解锁门槛（累计星数） | 120 | 3.6 v1.28 |
 | `UNLOCK_CONFIG.hiddenLevelIds`     | 天边云层后露出的隐藏关 id 列表（不计入 ⭐ 分母） | `[51, 52, 53]` | 3.6 v1.28 |
-| `VINE_MAP_CONFIG.climbDirection`    | 页内攀爬方向（`up` = 最下方是页内第 1 个节点） | `'up'` | 2.3 v1.29 |
+| `VINE_MAP_CONFIG.climbDirection`    | 攀爬方向（`up` = **第 1 关在世界最底**、关号越大越靠上） | `'up'` | 2.3 v1.29 / v1.30 |
 | `VINE_MAP_CONFIG.arrowSize`         | 当前关指针（箭头）的边长（px） | 13 | 2.3 v1.29 |
 | `VINE_MAP_CONFIG.arrowOffsetY`      | 指针相对节点圆心的垂直偏移（px） | 26 | 2.3 v1.29 |
 | `VINE_MAP_CONFIG.cloudDriftMs`      | 云层横向漂移周期（ms；reduced-motion 时关闭） | 9000 | 2.3 v1.29 |

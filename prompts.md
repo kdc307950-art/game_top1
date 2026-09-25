@@ -385,6 +385,32 @@
 
 ---
 
+## Step 19.5：把「左右翻页」换成「藤蔓向上蔓延」（世界坐标 + 视口内纵向平移）
+
+```text
+任务：按 ROADMAP.md §4.1 的 Step 19.5 推进「世界坐标 + 视口内纵向平移」（用户口径，见 DECISIONS D047）
+开始前：
+1. 阅读 AGENTS.md（2.3 / 5.1 / 6 / 附录 B）、ROADMAP.md §4.1、PROGRESS.md 的 19.5 执行卡与完成记录、DECISIONS.md D040 / D045 / D046 / **D047**。
+2. 口径（**已向用户确认**）：**保留 19.3**（解锁门槛 / 天边云层 / 隐藏关、53 个节点），只把「分页」换成「世界纵向平移」；
+   用户方案「不做」一栏的三项是 19.3 交付前的旧口径，回退它们属规则回退，需单独批准。
+范围：
+- config.js：`VINE_MAP_CONFIG` 世界模型（`worldHeightRatio` / `nodesPerRow` / `scrollMs` / `dragThreshold` / `scrollInertia` /
+  `navStepRatio` / `parallaxFar` / `parallaxNear` / `particleCount` / `tianbianBand` / `backdropBleed`；删 `pageSize`/`nodeRows`/`pageSlideMs`）；
+  `LEVEL_MAP_POS` 改世界归一化坐标（生成器仍是唯一写入方；LEVELS.md §9 表头改「关 / x / y」）。
+- _build/gen-vine-map.mjs 与 _build/check-vine-map.mjs：世界不变量（y 严格单调、行距 > 2 × 错落、任意连续 2 行覆盖 3 列、
+  **云带覆盖全部隐藏关且不盖住第 50 关**、锚点跨越整个世界）。
+- vine-map.js / vine-map.css / app.js：视口固定 + `translateY` 平移、自动居中、「回到当前关」、▲▼、单条贯穿世界的贝塞尔、
+  两层视差（0.25× / 1.45×）+ 确定性星光、云带、`relayoutMap`；**事件仍由 app.js 委托，地图层不绑事件**。
+验收：node tests/run-all.js 0 失败；python _build/consistency_check.py 全绿；node _build/check-vine-map.mjs PASS；
+      浏览器里「进入当前关居中、拖拽跟手、松手无残余惯性、页面不滚动（scrollY 恒 0）、云带覆盖隐藏关、满星后 51–53 露出」。
+禁止：改玩法规则与数值（解锁 / 星级 / 关卡表一律不动）；改 input.js（侦察结论：不需要）；引入素材或依赖；
+      让页面本身滚动或缩放（5.1）；把「分页」的旧断言留在 verify 套件里不管（要改写，且属**规则变更式改写**，须在 PROGRESS 明写）。
+前置依赖：Step 19.4 已验收（tag step19.4-done）+ Gate 0.1 第十五轮通过；用户对「保留 19.3 / 本轮只做原型」的确认。
+参考：用户提案（把左右翻页换成向上蔓延）、DECISIONS.md D047
+```
+
+---
+
 ## Step 20：结算阶段与星级统一动态调整
 
 ```text
