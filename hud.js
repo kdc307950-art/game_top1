@@ -12,7 +12,12 @@
 
 import { CONFIG } from './config.js';
 
-export const HUD_RATIO = 0.13; // HUD 带高度 / 画布边长（render.js 据此切分棋盘区）
+/**
+ * **Step 23：HUD 带高 / 画布高**（原来是「HUD 带高 / 棋盘边长」）。
+ * 配比口径从「被棋盘宽度卡住」改成「跟着屏高走」：390×844 上画布高 744 ⇒ HUD **123px（14.6% 屏高）**，
+ * 与真实竖屏手游的顶部 HUD（15–20%）同一档；原来只有 47px（5.6%）。
+ */
+export const HUD_RATIO = 0.165;
 // 低步数 / 低时间的**阈值**：`heartbeatScale` 与 `drawHud` 共用这两个常量，避免两处判定漂移。
 export const HUD_LOW_STEPS = 5; // 剩余步数 ≤ 此值：**红色警告 + 心跳**（P0-2，用户 2026-09-26）
 export const HUD_LOW_TIME = 10; // 剩余秒数 ≤ 此值：同一条警告路径（3.6 v1.18 的时间关）
@@ -45,11 +50,12 @@ const FLOAT_OUTLINE = 'rgba(28, 22, 48, 0.85)';
 const COMBO_TEXTS = ['太棒了！', '干得好！', '不可思议！'];
 const COMBO_FROM_LEVEL = 2; // 级联层下标 ≥ 2（= 第 3 层）起显示连击文案
 
-/** HUD 四个信息格的位置（静态图层与文字共用，避免两处各算一遍）。v1.14：3 格 → 4 格（5.5）。 */
-export function hudCells(sizePx, hudHeight) {
+/** HUD 四个信息格的位置（静态图层与文字共用，避免两处各算一遍）。v1.14：3 格 → 4 格（5.5）。
+ *  Step 23：横向按**画布宽**（满宽 HUD 带）、纵向按**HUD 带高**摊开 —— 卡片因此接近正方形。 */
+export function hudCells(canvasW, hudHeight) {
   const pad = hudHeight * 0.18;
   const gap = hudHeight * 0.08;
-  const w = (sizePx - pad * 2 - gap * 3) / 4;
+  const w = (canvasW - pad * 2 - gap * 3) / 4;
   const h = hudHeight - pad * 2;
   return [0, 1, 2, 3].map((index) => ({ x: pad + index * (w + gap), y: pad, w, h }));
 }
@@ -134,8 +140,8 @@ export function comboText(levelIndex) {
  *  v1.19：时间关**没有步数**，第二格改显示剩余时间（3.6 第 8 条 + 5.5）。
  *  Step 21.1（D048）：目标格加**进度条**（含达标闪烁）、步数/时间低值时**心跳缩放**；
  *  `nowMs` 只驱动这两个动效（不参与任何判定，缺省 0 也能画出静止态）。 */
-export function drawHud(ctx, { sizePx, hudHeight, hud, nowMs = 0 }) {
-  const boxes = hudCells(sizePx, hudHeight);
+export function drawHud(ctx, { canvasW, hudHeight, hud, nowMs = 0 }) {
+  const boxes = hudCells(canvasW, hudHeight);
   const timed = Number.isFinite(hud.timeLimit) && hud.timeLimit > 0;
   const low = timed ? (hud.remainingTime ?? 0) <= HUD_LOW_TIME : hud.steps <= HUD_LOW_STEPS;
   const pulse = heartbeatScale(hud.steps, hud.remainingTime, hud.timeLimit, nowMs);
@@ -149,31 +155,52 @@ export function drawHud(ctx, { sizePx, hudHeight, hud, nowMs = 0 }) {
   ];
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  // Step 23：HUD 带由 47px 涨到 ~123px，字号不再写死比例，而是「先按带高给目标字号、
+  // 再用 `fitSize` 压到卡片宽度以内」—— 分数/最高分是 4~7 位数，放不下时必须缩，不许溢出卡片。
+  const labelWant = Math.max(10, Math.round(hudHeight * 0.17));
+  const valueWant = Math.max(13, Math.round(hudHeight * 0.3));
   boxes.forEach((box, index) => {
     const stat = stats[index];
     const cx = box.x + box.w / 2;
-    ctx.font = `500 ${Math.max(9, Math.round(hudHeight * 0.2))}px ${FONT_STACK}`;
+    ctx.font = `500 ${fitSize(ctx, stat.label, box.w * 0.92, labelWant, 500)}px ${FONT_STACK}`;
     ctx.fillStyle = HUD_LABEL_COLOR;
-    ctx.fillText(stat.label, cx, box.y + box.h * (stat.lines ? 0.18 : 0.32));
+    ctx.fillText(stat.label, cx, box.y + box.h * (stat.lines ? 0.17 : 0.25));
 
     if (stat.lines) {
-      // 目标格最多两行（v1.14 的 5.5 口径）+ 底部进度条（21.1）
-      ctx.font = `700 ${Math.max(9, Math.round(hudHeight * 0.24))}px ${FONT_STACK}`;
+      // 目标格最多两行（v1.14 的 5.5 口径）+ 底部进度条（21.1）。
+      // Step 23：文本区的上下界与行距**按卡片高算**（原来用固定比例，HUD 一加高两行就会互相压住、
+      // 也会压到底部进度条），行号间均分，字号再取「行距 × 0.78」与「带高比例」的较小者。
+      const lineCount = stat.lines.length;
+      const barH = Math.max(3, Math.round(hudHeight * CONFIG.HUD_CONFIG.progressBarH));
+      const textTop = box.y + box.h * 0.28;
+      const textBottom = box.y + box.h - (stat.bar?.has ? barH + hudHeight * 0.12 : box.h * 0.08);
+      const step = (textBottom - textTop) / lineCount;
+      const want = Math.max(9, Math.round(Math.min(hudHeight * 0.26, step * 0.78)));
       stat.lines.forEach((line, i) => {
+        ctx.font = `700 ${fitSize(ctx, line.text, box.w * 0.94, want, 700)}px ${FONT_STACK}`;
         ctx.fillStyle = line.done ? GOAL_DONE_COLOR : HUD_VALUE_COLOR;
-        ctx.fillText(line.text, cx, box.y + box.h * (stat.lines.length === 1 ? 0.5 : 0.44 + i * 0.22));
+        ctx.fillText(line.text, cx, textTop + step * (i + 0.5));
       });
       if (stat.bar?.has) drawProgressBar(ctx, box, stat.bar, hudHeight, nowMs);
       return;
     }
-    const base = Math.max(12, Math.round(hudHeight * 0.36));
-    ctx.font = `700 ${Math.max(12, Math.round(base * (stat.pulse ?? 1)))}px ${FONT_STACK}`;
+    const base = Math.max(12, Math.round(valueWant * (stat.pulse ?? 1)));
+    ctx.font = `700 ${fitSize(ctx, stat.value, box.w * 0.94, base, 700)}px ${FONT_STACK}`;
     ctx.fillStyle = stat.warn ? HUD_WARN_COLOR : HUD_VALUE_COLOR;
-    ctx.fillText(stat.value, cx, box.y + box.h * 0.68);
+    ctx.fillText(stat.value, cx, box.y + box.h * 0.65);
     // P0-2：低步数时**在步数格外套一圈红框 + 一圈随心跳扩散的描边**（纯几何、1–2 次描边，
     // 零模糊、零每帧渐变）。心跳波形与字号缩放**同源**（都来自 `heartbeatScale` 的同一 phase）。
     if (stat.warn) drawWarnFrame(ctx, box, hudHeight, stat.pulse ?? 1);
   });
+}
+
+/** Step 23：把字号压到「这段文本恰好放得进 `maxWidth`」（只量一次：按宽度比线性缩放，不循环）。 */
+function fitSize(ctx, text, maxWidth, want, weight) {
+  const size = Math.max(8, Math.round(want));
+  ctx.font = `${weight} ${size}px ${FONT_STACK}`;
+  const measured = ctx.measureText(text).width;
+  if (!(measured > maxWidth) || measured <= 0) return size;
+  return Math.max(8, Math.floor((size * maxWidth) / measured));
 }
 
 /** 低步数/低时间的警示框（P0-2）：`pulse`（1 → lowStepsScale）越大，外圈越远、越淡。 */

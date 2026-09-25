@@ -21,7 +21,7 @@ import {
 import { bindInput, bindViewportGuards, prefersReducedMotion } from './input.js';
 // Step 17（v1.27）：粒子系统的纯逻辑（池/生命周期/确定性生成）；本文件只负责在时间线上生成与推进
 import { activeParticles, clearParticles, createParticleSystem, spawnBurst, update as updateParticles } from './particles.js';
-import { boardRect, cellAt, computeBoardSize, createRenderer, hitTest } from './render.js';
+import { boardRect, cellAt, computeCanvasSize, createRenderer, hitTest } from './render.js';
 import { advanceFloats, comboText, describeGoal, hudScoreAt, spawnFloat } from './hud.js'; // v1.16 信息层文案与回放插值；21.1 飘字池与连击文案
 import { DEMO_LEVEL_IDS, HIDDEN_LEVEL_IDS, LEVEL_COUNT, LEVEL_MAP_POS, getLevelConfig, isLevelUnlocked, isTianbianOpen, isTimeLevel, unlockStarsFor } from './level.js';
 import { centerMapOn, MAP_NAV_STEP_RATIO, mapSnapshot, panMap, relayoutMap, renderMap } from './vine-map.js'; // Step 19.5：藤蔓关卡地图（画布外的 SVG 层 + 视口内纵向平移）
@@ -78,9 +78,9 @@ const view = {
   mapDragged: false, // 19.5：这一轮手势是「拖拽」而不是「点按」—— 用来抑制随后那次 click
   nextRect: null, // 结束面板的「下一关」
   selectRect: null, // 结束面板的「选关」
-  sizePx: 0,
+  canvasSize: null, // Step 23：{w,h}（满屏竖版画布）
   dpr: 1,
-  layout: null, // render.js 的 boardRect(sizePx) 结果（prepare 时复用）
+  layout: null, // render.js 的 boardRect(canvasSize) 结果（prepare 时复用）
   selected: null, // 点击两次交换的后备方案中已选中的格子
   firstGroups: [], // 本次交换第 1 层识别出的匹配（仅用于高亮）
   endReason: 'steps', // 结束原因：'steps'（步数用尽）/ 'stuck'（死局重排超限，3.8 约束 4）
@@ -224,28 +224,29 @@ function startNewGame() {
   log('info', `新一局开始：第 ${snapshot.levelId} 关 ${snapshot.rows}×${snapshot.cols}，${timing}，最高分 ${view.best}`);
   startClock(); // 3.6 第 8 条：时间关由真实时间驱动倒计时；其它关卡不启动
   updateBoosterBar();
-  if (view.sizePx > 0) drawFrame();
+  if (view.canvasSize) drawFrame();
 }
 
 // 4.4 的 LevelConfig 由 level.js 提供（2.3：关卡配置属 level.js 的职责；
 // Step 11 加障碍物后 app.js 越过第 6 节的 300 行，配置表因此回到 level.js）。
 
-/** 应用尺寸（5.2：后备缓冲按 DPR 适配，棋盘保持正方形）。 */
+/** 应用尺寸（5.2：后备缓冲按 DPR 适配，棋盘保持正方形；Step 23：画布是**满屏竖版**）。 */
 function applyLayout() {
-  const size = computeBoardSize();
+  const canvas = computeCanvasSize(); // { w, h }
   const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-  const backing = Math.round(size * dpr);
 
-  view.sizePx = size;
+  view.canvasSize = canvas;
   view.dpr = dpr;
-  view.layout = boardRect(size);
-  view.canvas.style.width = `${size}px`;
-  view.canvas.style.height = `${size}px`;
+  view.layout = boardRect(canvas);
+  view.canvas.style.width = `${canvas.w}px`;
+  view.canvas.style.height = `${canvas.h}px`;
   // 先改后备缓冲尺寸（该赋值会重置变换并清空画布），再设变换、再重建离屏缓存与绘制
-  if (view.canvas.width !== backing) view.canvas.width = backing;
-  if (view.canvas.height !== backing) view.canvas.height = backing;
+  const backingW = Math.round(canvas.w * dpr);
+  const backingH = Math.round(canvas.h * dpr);
+  if (view.canvas.width !== backingW) view.canvas.width = backingW;
+  if (view.canvas.height !== backingH) view.canvas.height = backingH;
   view.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  renderer.prepare(size, dpr, view.layout); // 静态图层 + 糖果精灵图集
+  renderer.prepare(canvas, dpr, view.layout); // 静态图层 + 糖果精灵图集
   // 19.5：地图打开时视口尺寸变了要重算世界几何（并让当前关重新居中），否则转屏后世界会停在错误的偏移上
   if (view.screen === 'select') relayoutMap(document.getElementById('map'), { centerOn: view.levelId });
   drawFrame();
@@ -330,7 +331,7 @@ function nowMs() {
 
 function onSwipe({ x0, y0, step }) {
   view.audio?.unlock(); // 5.6：浏览器要求音频上下文在用户手势里创建/恢复
-  const from = cellAt(view.canvas, x0, y0, view.sizePx);
+  const from = cellAt(view.canvas, x0, y0, view.canvasSize);
   if (!from) return;
   attemptSwap(from, { r: from.r + step.r, c: from.c + step.c });
 }
@@ -353,7 +354,7 @@ function onTap({ x1, y1 }) {
     else log('info', '本局已结束：点按「再来一局」开始新一局');
     return;
   }
-  const cell = cellAt(view.canvas, x1, y1, view.sizePx);
+  const cell = cellAt(view.canvas, x1, y1, view.canvasSize);
   // 3.9（v1.20）：小木锤是两步式交互 —— 已就绪时这一下点在格子上而不是做选中/交换
   if (cell && view.hammerArmed) {
     tryHammer(cell);
@@ -696,7 +697,7 @@ function boosterLabel(kind) {
 // 藤蔓关卡地图（Step 19.2 建层 / **Step 19.5 换成世界纵向平移**；AGENTS.md 2.3 / 5.1，口径见 D047）
 //
 // 地图是**画布外的绝对定位 SVG 层**（结构在 index.html、样式在 vine-map.css、绘制与平移在 vine-map.js）：
-//   · 不参与 `computeBoardSize`，因此既有像素取证不受影响；
+//   · 不参与画布几何（`computeCanvasSize`），因此既有像素取证不受影响；
 //   · **页面本身不滚动**（5.1）：视口固定 + `overflow: hidden`，平移的是世界自己的 `transform: translateY`；
 //   · 手势与游戏内手势**天然隔离**：input.js 的 `bindInput` 绑在 canvas 上，而地图打开时 canvas 是隐藏的；
 //     document 级的 `bindViewportGuards` 只 `preventDefault`（挡默认行为），不阻断投递，因此地图元素上的
@@ -1031,9 +1032,9 @@ function feedback(event, index = 0) {
 // ---------------------------------------------------------------------------
 
 function drawFrame(entry = null, progress = 1) {
-  if (view.sizePx === 0) return;
+  if (!view.canvasSize) return;
   const scene = {
-    sizePx: view.sizePx,
+    canvas: view.canvasSize, // Step 23：{w,h}（满屏竖版）
     board: entry ? entry.board : view.game.board,
     matched: entry && entry.phase === 'clear' && entry.levelIndex === 0 ? view.firstGroups : [],
     selected: entry ? null : view.selected,

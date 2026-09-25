@@ -41,12 +41,11 @@ body {
 #board {
   display: block;
   touch-action: none; /* AGENTS.md 5.1：禁止滚动与手势缩放 */
-  /* 精确尺寸由 app.js 按 devicePixelRatio 与可用视口计算并写为行内 px（保持正方形，AGENTS.md 5.2）。
-     下面的规则是 app.js 生效前的兜底：保证首帧仍是正方形可见区域，且短视口（横屏）不溢出。
-     v1.20 起还要扣除道具条高度，否则兜底尺寸会与 app.js 算出的尺寸差一截。 */
-  width: min(100%, calc(100vh - 32px - var(--booster-bar-h) - var(--safe-top) - var(--safe-bottom)));
-  height: auto;
-  aspect-ratio: 1 / 1;
+  /* 精确尺寸由 app.js 按 devicePixelRatio 与可用视口计算并写为行内 px（Step 23：**满屏竖版** ——
+     宽 = 屏宽，高 = 屏高 − 道具条；棋盘区仍是正方形，见 AGENTS.md 5.2）。
+     下面的规则是 app.js 生效前的兜底：铺满安全区以内、扣除道具条，短视口（横屏）也不溢出。 */
+  width: 100%;
+  height: calc(100vh - var(--safe-top) - var(--safe-bottom) - var(--booster-bar-h));
   max-width: 720px;
   border-radius: 14px;
   background: #1b1830;

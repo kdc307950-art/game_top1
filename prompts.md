@@ -500,6 +500,38 @@
 
 ---
 
+## Step 23：对局页「满屏竖版」配比（对齐真实竖屏手游）
+
+```text
+任务：实现 Step 23 对局页「满屏竖版」配比（对齐真实竖屏手游的纵向配比）
+开始前：读 AGENTS.md（2.3 / 5.1 / 5.2 / 5.5 / 15）、ROADMAP.md §4.5、DECISIONS.md D051、PROGRESS.md 最近的配比实测记录
+背景：用户问「目前游戏的页面配比符不符合手机游戏的实际配比，《开心消消乐》是多少×多少，要不要改一下」，
+      并在三选一（只做快赢 / 一步到位 / 暂不改）里选了「一步到位」。实测旧版 iPhone 14 上 HUD 只有 47px（5.6% 屏高）、
+      棋盘区 311px（格边长 38.9px）、纵向只有 54.3% 被内容占用（上下各 193px 空白），而地图层 #map 本就是满屏层。
+落地：
+- render.js：computeBoardSize 删除 → computeCanvasSize() 返回 {w,h}（宽 = 屏宽，高 = 屏高 − 安全区 − --booster-bar-h）；
+  boardRect({w,h}) 给出「满宽 HUD 带 + 正方形棋盘区 + 底部台面」；buildChrome 新增棋盘台面（含 1px 上沿高光）与底部暖光带；
+  P2 的暖色环境光从「只罩棋盘区」扩到整块画布。全部仍是布局期烘焙一次的几何填充。
+- hud.js：HUD_RATIO 0.13 → 0.165（语义改成「/画布高」）；hudCells(canvasW, hudHeight) / drawHud({ canvasW, ... })；
+  字号不再写死比例，改为「按带高给目标字号 → fitSize 压到卡片宽度内」，长分数绝不溢出卡片。
+- app.js：applyLayout 用 computeCanvasSize + boardRect，画布 style/backing 按 w×h；场景描述 sizePx → canvas: {w,h}；
+  cellAt 传 canvasSize。styles.css 的 #board 兜底尺寸改成满屏竖版（不再 aspect-ratio 1/1）。
+- _build：23 个探针里各自内联的旧几何（hudCss = round(sizeCss*0.13)、sideCss = sizeCss − hudCss、
+  以 hudCss 当棋盘顶边 y）统一改成调用 render.js 的真实几何，并把棋盘取样点从「HUD 底边」改成「棋盘区顶边」；
+  含 await import 的页面表达式全部改成 async IIFE（evaluate 的 awaitPromise 已为 true）。
+验收：node tests/run-all.js 与 python _build/consistency_check.py 全绿；node _build/check-canvas23.mjs 12 项 PASS；
+      node _build/measure-layout.mjs 6 视口「上下留白 0、滚动 OK、HUD 13–18% 屏高、格边长 ≥42px」；
+      受影响的浏览器套件（verify-step4–20、verify-step19-2/3/4、audit-gate-step7–11、shot-hud-*、
+      shot-candy-21、shot-booster-21）全部复跑通过；出截图交用户确认（本机没有视觉模型，附 png-stats 像素统计）。
+禁止：改玩法数值或规则；破坏 5.1（禁滚动/缩放）与 5.2（棋盘必须正方形）；改 --booster-bar-h 的契约语义；
+      引入素材或依赖（D009）；每帧 shadowBlur 或每帧新建渐变（D043/D044）；把 HUD 挪出 canvas（2.3）。
+前置依赖：step21.3-done、step22.2-done、用户选定「一步到位」。
+参考：用户对页面配比的追问与选择；行业通用的「设计分辨率 + 高度适配」口径（750×1334 / 720×1280，
+      更高的屏把多出来的高度给装饰而不是留黑边）；DECISIONS.md D051。
+```
+
+---
+
 ## 待补充的提示词模式（随实战积累）
 
 - 报错排查类：`先把完整的报错栈贴出来` + 复现步骤 + 预期行为 三段式。

@@ -17,10 +17,13 @@ import { HUD_RATIO, drawBanner, drawFloats, drawGameOver, drawHud, hudCardStyle,
 
 // 渲染常量：只影响观感，不参与游戏规则（归属取舍见 D013）
 const MAX_DPR = 3; // 后备缓冲上限：高 DPR 机型不做无意义的 4× 过度绘制
-const BOARD_MARGIN = 16; // px；画布与安全区内容边缘之间的呼吸空间（两侧各一份）
-const MIN_BOARD_PX = 220; // 极窄视口下的可读下限
+// Step 23（满屏竖版配比）：`BOARD_MARGIN` 的语义从「画布到屏幕边缘」改成「**棋盘到画布两侧**」，
+// 并由 16 → 10 —— 棋盘因此能吃掉更多屏宽（390px 宽上 370px，格边长 38.9 → 46.25px，+19%）。
+const BOARD_MARGIN = 10;
 const MAX_BOARD_PX = 720; // 平板/桌面上不让棋盘无限放大
-const BACKDROP_RADIUS_RATIO = 0.03; // 画布圆角 / 边长
+// Step 23：HUD 与棋盘之间的留白，占「棋盘下方剩余空间」的比例（其余留给底部托盘）。
+const BOARD_TOP_SHARE = 0.3;
+const BACKDROP_RADIUS_RATIO = 0.035; // 画布圆角 / 画布较短边
 const FIELD_RADIUS_RATIO = 0.03; // 棋盘区圆角 / 棋盘边长
 const SLOT_INSET_RATIO = 0.06; // 格位槽相对格子的内缩比例
 const SLOT_RADIUS_RATIO = 0.18; // 格位槽圆角 / 格子边长
@@ -29,40 +32,63 @@ const SELECT_RING_RATIO = 0.43; // 选中环半径 / 格子边长
 const BACKDROP_COLOR = '#1b1830';
 const FIELD_COLOR = '#221d38';
 const SLOT_COLOR = 'rgba(255, 255, 255, 0.045)'; // 格位槽底色（红线 3：≤ 0.1 的修饰性底色）
+// Step 23：棋盘底下的「托盘」与底部装饰带 —— 把原本属于空白的下半个屏幕变成有结构的底座。
+// 两者都是**布局期烘焙一次的几何填充**（零素材、零模糊、零每帧渐变）。
+const TRAY_PAD_RATIO = 0.03; // 托盘相对棋盘边长的外扩
+const TRAY_COLOR = 'rgba(255, 255, 255, 0.035)';
+const TRAY_EDGE_COLOR = 'rgba(255, 255, 255, 0.07)'; // 台面上沿的 1px 高光（几何描边）
+const BOTTOM_BAND_TOP = 'rgba(255, 196, 140, 0.06)'; // 棋盘下方落下的暖光（自棋盘底边向下渐隐）
+const BOTTOM_BAND_BOTTOM = 'rgba(255, 196, 140, 0)';
 const MATCH_RING_COLOR = 'rgba(255, 246, 180, 0.95)';
 const SELECT_RING_COLOR = 'rgba(255, 255, 255, 0.85)';
 // Step 17（v1.27）：粒子种类 → 精灵形状（外观方案 A：三类强度由颗数与形状共同表达）
 const PARTICLE_SHAPE_OF = { clear: 'dot', striped: 'shard', wrapped: 'star', magic: 'star', combo: 'star' };
 
-/** 画布边长（CSS 像素）：取可用宽高中的较小者，扣除安全区、留白与棋盘下方的道具条（5.1 / 3.9）。 */
-export function computeBoardSize() {
+/**
+ * **Step 23：画布尺寸（CSS 像素）—— 满屏竖版。**
+ * 宽 = 视口宽（扣掉左右安全区），高 = 视口高（扣掉上下安全区与画布外的道具条）。
+ * 这样「对局页」和「藤蔓地图页（`#map` 是 `inset: 0` 的绝对定位层）」一样铺满整屏，
+ * 不再是浮在屏幕正中的一块正方形卡片；棋盘区仍是正方形（5.2），它只是画布里的一块 —— 见 `boardRect`。
+ */
+export function computeCanvasSize() {
   const root = document.documentElement;
   const viewportW = root.clientWidth || window.innerWidth;
   const viewportH = root.clientHeight || window.innerHeight;
-  const availW = viewportW - readSafeInset('left') - readSafeInset('right') - BOARD_MARGIN * 2;
-  // Step 15（v1.20 / 3.9）：道具条占掉棋盘下方的一条高度，可用高度必须把它扣掉，
-  // 否则短视口下画布会与道具条重叠（道具条是画布外的 DOM 元素，改不了它）。
-  const availH =
-    viewportH - readSafeInset('top') - readSafeInset('bottom') - BOARD_MARGIN * 2 - readCssPx('--booster-bar-h');
-  const available = Math.min(availW, availH);
-  if (available <= 0) return 1;
-  // 220px 是可读性目标；更窄的设备必须服从实际可用空间，避免棋盘横向溢出。
-  const target = available < MIN_BOARD_PX ? available : Math.min(available, MAX_BOARD_PX);
-  return Math.max(1, Math.floor(target));
+  const w = viewportW - readSafeInset('left') - readSafeInset('right');
+  // Step 15（v1.20 / 3.9）：道具条是画布外的 DOM 元素，它的高度必须从画布高度里扣掉，
+  // 否则画布会与道具条重叠（`--booster-bar-h` 是两边唯一的真相源）。
+  const h = viewportH - readSafeInset('top') - readSafeInset('bottom') - readCssPx('--booster-bar-h');
+  return { w: Math.max(1, Math.floor(w)), h: Math.max(1, Math.floor(h)) };
 }
 
-/** 画布内的分区几何：顶部 HUD 带 + 正方形棋盘区（5.2 棋盘必须是正方形）。 */
-export function boardRect(sizePx) {
-  const hudHeight = Math.round(sizePx * HUD_RATIO);
-  const side = sizePx - hudHeight;
-  return { hudHeight, field: { x: (sizePx - side) / 2, y: hudHeight, side } };
+/**
+ * **Step 23：画布内的分区几何** —— 顶部**满宽 HUD 带** + **正方形棋盘区** + 底部托盘留白。
+ * `hudHeight` 现在是**画布高**的比例（`HUD_RATIO`），不再是棋盘边长的比例：
+ * HUD 从「被棋盘宽度卡住的一条 47px」变成「跟着屏高走的 ~123px」，这才放得下目标与进度条。
+ * 棋盘区取「可用宽 / 可用高 / `MAX_BOARD_PX`」的较小者 —— 手机上仍是**宽度受限**（370px），
+ * 剩下的纵向余量按 `BOARD_TOP_SHARE` 分给 HUD 下方与底部托盘。
+ */
+export function boardRect(canvas) {
+  const hudHeight = Math.round(canvas.h * HUD_RATIO);
+  const availW = canvas.w - BOARD_MARGIN * 2;
+  const availH = canvas.h - hudHeight - BOARD_MARGIN * 2;
+  const side = Math.max(1, Math.min(availW, availH, MAX_BOARD_PX));
+  const slack = Math.max(0, availH - side);
+  return {
+    hudHeight,
+    field: {
+      x: Math.round((canvas.w - side) / 2),
+      y: Math.round(hudHeight + BOARD_MARGIN + slack * BOARD_TOP_SHARE),
+      side
+    }
+  };
 }
 
 /** 屏幕坐标 → 棋盘格；落在棋盘区外返回 null。 */
-export function cellAt(canvas, clientX, clientY, sizePx) {
+export function cellAt(canvas, clientX, clientY, canvasSize) {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  const area = boardRect(sizePx).field;
+  const area = boardRect(canvasSize).field;
   const cols = CONFIG.BOARD_SIZE;
   const c = Math.floor(((clientX - rect.left - area.x) / area.side) * cols);
   const r = Math.floor(((clientY - rect.top - area.y) / area.side) * cols);
@@ -86,12 +112,12 @@ export function hitTest(canvas, clientX, clientY, box) {
 export function createRenderer() {
   let cache = null;
 
-  function prepare(sizePx, dpr, layout) {
+  function prepare(canvas, dpr, layout) {
     cache = {
-      sizePx,
+      canvas,
       layout,
       cellCss: layout.field.side / CONFIG.BOARD_SIZE,
-      chrome: buildChrome(sizePx, dpr, layout),
+      chrome: buildChrome(canvas, dpr, layout),
       sprites: buildSpriteAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr),
       obstacles: buildObstacleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr), // Step 11：冰块/雪块
       collectibles: buildCollectibleAtlas(layout.field.side / CONFIG.BOARD_SIZE, dpr), // Step 14：水果/金豆荚
@@ -101,10 +127,11 @@ export function createRenderer() {
 
   function draw(ctx, scene) {
     const empty = { restartRect: null, nextRect: null, selectRect: null };
-    if (!cache || cache.sizePx !== scene.sizePx) return empty;
+    const size = scene.canvas; // Step 23：{w,h}（满屏竖版），不再是单个正方形边长
+    if (!cache || !size || cache.canvas.w !== size.w || cache.canvas.h !== size.h) return empty;
     const { field } = cache.layout;
-    ctx.clearRect(0, 0, scene.sizePx, scene.sizePx);
-    ctx.drawImage(cache.chrome, 0, 0, scene.sizePx, scene.sizePx); // 静态图层：1 次 drawImage
+    ctx.clearRect(0, 0, size.w, size.h);
+    ctx.drawImage(cache.chrome, 0, 0, size.w, size.h); // 静态图层：1 次 drawImage
 
     drawCandies(ctx, cache, scene, field);
     drawCollectibles(ctx, cache, scene, field); // 3.6（v1.19）：水果/金豆荚占格、独立于糖果绘制
@@ -113,7 +140,7 @@ export function createRenderer() {
     drawRings(ctx, scene, field);
     if (scene.banner) drawBanner(ctx, field, scene.banner); // 5.5：死局重排前的提示 / 21.1 的连击文案
     if (scene.floats?.length) drawFloats(ctx, field, scene.floats, scene.nowMs ?? 0); // 21.1：分数飘字
-    drawHud(ctx, { sizePx: scene.sizePx, hudHeight: cache.layout.hudHeight, hud: scene.hud, nowMs: scene.nowMs ?? 0 });
+    drawHud(ctx, { canvasW: size.w, hudHeight: cache.layout.hudHeight, hud: scene.hud, nowMs: scene.nowMs ?? 0 });
     return { ...empty, ...(scene.overlay ? drawGameOver(ctx, field, scene.overlay) : null) };
   }
 
@@ -130,21 +157,26 @@ const AMBIENT_LIGHT_TOP = 'rgba(255, 178, 108, 0.085)';
 const AMBIENT_LIGHT_MID = 'rgba(255, 172, 100, 0.05)';
 const AMBIENT_LIGHT_BOTTOM = 'rgba(255, 166, 94, 0.03)';
 
-/** 静态图层：背景 + HUD 底 + 棋盘区底。一帧内不变，烘焙后每帧只 drawImage 一次（红线 2）。 */
-function buildChrome(sizePx, dpr, layout) {
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(sizePx * dpr);
-  canvas.height = Math.round(sizePx * dpr);
-  const ctx = canvas.getContext('2d');
+/** 静态图层：整屏底板 + 满宽 HUD 卡片 + 棋盘托盘 + 棋盘区底 + 64 个格位槽 + 暖色环境光 + 底部装饰带。
+ *  一帧内不变，烘焙后每帧只 drawImage 一次（红线 2；Step 23 起画布是**满屏竖版**）。 */
+function buildChrome(canvas, dpr, layout) {
+  const out = document.createElement('canvas');
+  out.width = Math.round(canvas.w * dpr);
+  out.height = Math.round(canvas.h * dpr);
+  const ctx = out.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  roundRectPath(ctx, 0, 0, sizePx, sizePx, sizePx * BACKDROP_RADIUS_RATIO);
+  // Step 23：整块画布裁剪在圆角内 —— 台面与底部装饰带会铺到画布边缘，必须被同一个圆角裁掉
+  ctx.save();
+  roundRectPath(ctx, 0, 0, canvas.w, canvas.h, Math.min(canvas.w, canvas.h) * BACKDROP_RADIUS_RATIO);
+  ctx.clip();
+  // ① 整屏底板（画布本身就是游戏屏幕）
   ctx.fillStyle = BACKDROP_COLOR;
   ctx.fill();
   // 21.1（D048）：HUD **卡片化** —— 投影 + 卡片渐变 + 顶部内嵌高光。
   // 全部只在**布局期**烘焙一次；运行期依旧零阴影模糊类 API（`shadow*` 系列）、零渐变（15 节红线 / D043 / D044）。
   const card = hudCardStyle();
-  for (const box of hudCells(sizePx, layout.hudHeight)) {
+  for (const box of hudCells(canvas.w, layout.hudHeight)) {
     const radius = box.h * card.radiusRatio;
     roundRectPath(ctx, box.x, box.y + box.h * 0.06, box.w, box.h, radius);
     ctx.fillStyle = CARD_SHADOW_COLOR;
@@ -160,6 +192,22 @@ function buildChrome(sizePx, dpr, layout) {
     ctx.fill();
   }
   const { x, y, side } = layout.field;
+  // ② Step 23：**棋盘台面** —— 从棋盘上方一点一直铺到画布底部的一块浅色圆角台面，棋盘坐在它上面。
+  //    这样「HUD 之下、棋盘左右与下方」的那 ~20% 屏高是**有结构的地面**，而不是一片空白；
+  //    底部刻意多铺 24px，让下沿的两个圆角落在画布之外（只露上沿圆角）。
+  const trayPad = side * TRAY_PAD_RATIO;
+  const platformTop = y - trayPad;
+  roundRectPath(ctx, 0, platformTop, canvas.w, canvas.h - platformTop + 24, side * (FIELD_RADIUS_RATIO + 0.012));
+  ctx.fillStyle = TRAY_COLOR;
+  ctx.fill();
+  // 台面上沿的一道细高光（纯几何描边 1px；零模糊、零阴影）
+  ctx.beginPath();
+  ctx.moveTo(0, platformTop + 0.5);
+  ctx.lineTo(canvas.w, platformTop + 0.5);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = TRAY_EDGE_COLOR;
+  ctx.stroke();
+  // ③ 棋盘区底
   roundRectPath(ctx, x, y, side, side, side * FIELD_RADIUS_RATIO);
   ctx.fillStyle = FIELD_COLOR;
   ctx.fill();
@@ -174,23 +222,31 @@ function buildChrome(sizePx, dpr, layout) {
       ctx.fill();
     }
   }
-  // P2（用户评审「深色棋盘看久了累」）：**极淡的暖色环境光**。
-  // 一盏「室内暖灯」从棋盘上方落下来（竖直渐变 + **加色混合**），给偏冷的暗紫底盘补上一点环境暖色；
-  // 用加色而不是覆盖，格位槽自己的层次一分不减；渐变压在 HUD 与糖果**之下**，只在空隙里看得见。
-  // 整块只在**布局期**烘焙一次（红线 2：零每帧渐变），纯几何渐变、**不含任何模糊滤镜**（D043/D044）；
-  // 裁剪在棋盘圆角内，绝不会溢到 HUD 或道具条。
-  ctx.save();
-  roundRectPath(ctx, x, y, side, side, side * FIELD_RADIUS_RATIO);
-  ctx.clip();
+  // ④ P2（用户评审「深色棋盘看久了累」）：**极淡的暖色环境光**，从画布顶部洒下来。
+  // 一盏「室内暖灯」从棋盘上方落下来（竖直渐变 + **加色混合**），给偏冷的暗紫台面补上一点环境暖色；
+  // 用加色而不是覆盖，格位槽自己的层次一分不减。Step 23 起它的跨度是**整块画布**（不再只罩棋盘区），
+  // 于是 HUD 与底部台面也一并带上环境色。整块只在**布局期**烘焙一次（红线 2：零每帧渐变），
+  // 纯几何渐变、**不含任何模糊滤镜**（D043/D044）；外面已经裁剪在画布圆角内。
   ctx.globalCompositeOperation = 'lighter';
-  const warm = ctx.createLinearGradient(0, y, 0, y + side);
+  const warm = ctx.createLinearGradient(0, 0, 0, canvas.h);
   warm.addColorStop(0, AMBIENT_LIGHT_TOP);
   warm.addColorStop(0.55, AMBIENT_LIGHT_MID);
   warm.addColorStop(1, AMBIENT_LIGHT_BOTTOM);
   ctx.fillStyle = warm;
-  ctx.fillRect(x, y, side, side);
+  ctx.fillRect(0, 0, canvas.w, canvas.h);
+  // ⑤ Step 23：**底部暖光带** —— 棋盘下沿往下渐隐的一条暖光，暗示「下面是台面/道具区」，
+  //    和画布外的道具条视觉相接。同一条烘焙原则：纯几何渐变、只画一次。
+  const bandTop = platformTop + side + trayPad * 2;
+  if (bandTop < canvas.h - 1) {
+    const band = ctx.createLinearGradient(0, bandTop, 0, canvas.h);
+    band.addColorStop(0, BOTTOM_BAND_TOP);
+    band.addColorStop(1, BOTTOM_BAND_BOTTOM);
+    ctx.fillStyle = band;
+    ctx.fillRect(0, bandTop, canvas.w, canvas.h - bandTop);
+  }
+  ctx.globalCompositeOperation = 'source-over';
   ctx.restore();
-  return canvas;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
