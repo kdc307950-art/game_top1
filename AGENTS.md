@@ -1,9 +1,22 @@
 # AGENTS.md — 手机版消消乐项目 Agent 宪法（开心消消乐规则版）
 
-> 版本：v1.31
+> 版本：v1.32
 > 适用范围：本项目所有 AI Agent 会话
 > 修订原则：只增不改，改动必须记入第 11 节修订记录
 > 配套文件：`ROADMAP.md`（路线图）、`REFERENCES.md`（外部参考与逐 Step 借鉴方案）、`PROGRESS.md`（进度日志）、`DECISIONS.md`（决策记录）、`prompts.md`（提示词库）
+
+---
+
+## 修订说明（v1.31 → v1.32 关键变更）
+
+本版落地 **Step 21 的第二片：21.2 道具栏与设置齿轮**（21.3 棋子拟人化待开工）。**玩法零改动**：道具的数量、消耗与判定全部沿用 3.9，音效/震动的行为与存档键一行未改，只改**画布外 DOM/CSS 的外观与收纳**；口径仍记在 `DECISIONS.md` **D048**。
+
+1. **道具键改成糖果质感（纯 CSS 静态材质）**：`.booster` 用 `linear-gradient` 背景 + 四层 `box-shadow`（顶部内嵌高光 / 底部内嵌暗边 / **厚底边** / 外投影）+ 14px 大圆角；按下时 `translateY(3px)` 并把厚底边收短，做出「压下去」的弹性手感。**这些都在 CSS 里、不在 canvas 的每帧绘制路径上** —— 15 节红线（零 `shadowBlur`、零每帧渐变）只针对那 6 个 canvas 绘制模块（探针实测按下时 `transform: matrix(1,0,0,1,0,3)`）。
+2. **零素材图标 + 红色圆形徽章**：三个键各带一枚**内联 SVG** 图标（刷新 / 加步 / 木锤，纯 path，不引入任何图片或 `<use>`，延续 D009）；数量改成**右上角悬出 8px 的红色径向渐变徽章**（一位数是 26×26 正圆、两位数自然变胶囊），**徽章数字恒等于存档里的数量**（探针做了「用掉一次 → 徽章 −1 → 落盘」的闭环断言）；数量为 0 的键**自动 `disabled`** 并整体退成灰色（含灰徽章），与可用态形成对照。
+3. **音效/震动收进设置齿轮的浮层**：道具行右端新增 `#settings-toggle`（⚙，带 `aria-controls="settings"` / `aria-expanded`），音效与震动两个开关移进 `#settings` 浮层。**浮层是绝对定位的**，所以 `#controls` 的高度**仍然等于 `--booster-bar-h`**（100px）—— `render.js` 扣的就是这一个值，`computeBoardSize` / `boardRect` 与 21.2 之前逐像素一致（`verify-step12` / `verify-step12b` 复跑为证）。
+4. **本步抓到的两个真缺陷**：① 徽章被撑成 **34×26 的椭圆** —— 项目里没有全局 `box-sizing: border-box`，`min-width` 与左右内边距在 content-box 下是**相加**的，补上 `box-sizing: border-box` 后一位数才是正圆；② 设置浮层原本「向上飘到道具条上方」（`bottom: calc(safe + 100px − 6px)`），而棋盘底边在 390×844 下只有 **551px** —— 展开时会盖住棋盘**约 155px**（近两行棋子）。改为**贴在道具条自己这一带**（`bottom: calc(safe + 6px)`、左 12px / 右 56px）后，浮层永远在棋盘下方、不盖棋盘，右端还留出齿轮的位置，因此**齿轮仍可点**（否则展开后就关不掉了）。两条都写进了探针与 `verify-step16` 的断言。
+5. **`verify-step16` 的「开关区在画布下方」按新口径重写**（规则变更式改写，非放宽）：原断言量的是 `#settings` 自身在画布下方，开关搬进浮层后它默认 `hidden`（`getBoundingClientRect()` 全 0）、必然失败；改为更强的三条 —— 常驻**齿轮**在画布下方、**展开的浮层**也完整在画布下方、且浮层不盖住齿轮。
+6. **验证**：新增 `_build/shot-booster-21.mjs`（**27 项 PASS** + 两张截图），覆盖糖果材质 / 徽章几何与颜色 / 按下位移 / 用光变灰 / 齿轮开合与 `aria-expanded` / **不盖棋盘、不盖齿轮** / `--booster-bar-h` 契约 / 徽章↔存档闭环 / 偏好翻转 / 5.1 与控制台；复跑 `verify-step15` / `verify-step16` / `verify-step12` / `verify-step12b` 均 **0 失败**；L1 `node tests/run-all.js` **13 文件 / 271 用例 / 3402 断言 / 0 失败**，`consistency_check.py` 全部通过。**如实说明**：本机没有视觉模型，观感请以 `_build/step21-booster-closed.png` 与 `_build/step21-booster-settings.png` 为准。
 
 ---
 
@@ -745,7 +758,7 @@ H5 本体的零依赖约束持续有效。只有完成 0.1 Bug Audit Gate、固�
 - **加五步（`addSteps`）**：步数关 `剩余步数 += BOOSTER_CONFIG.extraSteps`（默认 5）；**时间关没有步数**（3.6 第 8 条），改为 `剩余时间 += BOOSTER_CONFIG.extraSeconds`（默认 10 秒）。
 - **小木锤（`hammer`）**：消除 `BOOSTER_CONFIG.hammerCells`（默认 1）个格子。**只有含动物的格子可以作为目标** —— 空格、纯障碍（雪块/巧克力）、收集物（水果/金豆荚）一律无效且**不扣除数量**。消除后照常结算得分与关卡目标（3.5 / 3.6），被点名的特殊元素按 4.3.8 优先激活。
 - **数量**：每种道具的初始数量为 `BOOSTER_CONFIG.initialCount`（默认 3）；用掉一次减 1，为 0 时不可使用。**本步不含获取途径**（商店 / 奖励 / 每日赠送）。
-- **UI（5.5 的补充）**：道具条是**画布外的页面元素**（结构在 `index.html`、样式在 `styles.css`），不占用 HUD 四格、也不改变 `boardRect`；`render.js` 的可用高度扣除 `--booster-bar-h`，保证短视口下不遮挡棋盘。
+- **UI（5.5 的补充）**：道具条是**画布外的页面元素**（结构在 `index.html`、样式在 `styles.css`），不占用 HUD 四格、也不改变 `boardRect`；`render.js` 的可用高度扣除 `--booster-bar-h`，保证短视口下不遮挡棋盘。**数量与设置入口（v1.32）**：每个道具键带一枚**悬出右上角的红色圆形徽章**显示剩余数量（数字恒等于存档值，为 0 时整键 `disabled` 变灰），音效/震动两个开关收进道具行右端的**设置齿轮浮层**；徽章与浮层都是**绝对定位的纯 CSS 装饰**，因此 `--booster-bar-h` 仍是 100px，浮层贴在本带内（不盖棋盘、也不盖齿轮）。
 
 ---
 
@@ -1244,6 +1257,9 @@ node tests/integration.test.js
 | v1.17 | 2026-09-20 | Agent（用户批准） | Step 13（藤蔓、巧克力）的口径与计分：3.4 补藤蔓「不能被交换（判定在 `shuffle.isCellMovable`，`trySwap` 拒绝且不扣步）、动物照常匹配、**藤蔓本身永不被清除**」与巧克力「占格、单层、被相邻消除或特效波及即整块消除」；3.5 补「巧克力每块 1000 分、藤蔓不计分」；附录 B 新增 `SCORE_CONFIG.chocPerLayer`（1000）；50 关表不变 | 3.4、3.5、11、附录 B、`config.js`、`obstacles.js`、`board.js` |
 | v1.18 | 2026-09-20 | Agent（用户批准） | Step 14（关卡类型）的规则口径：3.6 新增水果关（水果占格、不参与匹配、随重力下落、不可被消除，落到底部出口计数）、时间关（**倒计时替代步数**，时间归零未达目标即失败）、金豆荚关（可掉落收集物、**每次消除只下落 1 格**）与对应目标类型；明确收集物与障碍物的边界；数据结构契约（4.1/4.4/附录 B）随 14.1 的代码在同一版本内补齐 | 3.6、第 1 节、11、`ROADMAP.md` |
 | v1.15 | 2026-09-20 | Agent（用户批准） | Step 12 的两条玩法规则：3.6 新增「步数由难度派生」（`computeStepBudget` + `STEP_BUDGET` 系数）与「本局结束前引爆特殊方块再结算」（链式引爆，成果计入目标判定与分数）；4.2 补 `level.computeStepBudget`；附录 B 新增 `STEP_BUDGET` 10 键与 `ENDGAME_CONFIG.maxDetonationRounds`；`LEVELS.md` 的步数列改为公式输出 | 3.6、4.2、附录 B、11、`LEVELS.md` |
+| v1.32 | 2026-09-26 | Agent（用户批准：Step 21 三片全做） | **Step 21.2 道具栏与设置齿轮**（玩法零改动、全在 DOM/CSS）：3.9 的 UI 补「红色圆形计数徽章（悬出右上角、恒等于存档值、为 0 时整键 `disabled` 变灰）+ 内联 SVG 图标 + 糖果质感四层 `box-shadow`」；音效/震动两个开关从常驻一行收进道具行右端的**设置齿轮浮层**（`aria-controls` / `aria-expanded`，绝对定位）；**抓两个真缺陷**：徽章因缺 `box-sizing: border-box` 被撑成 34×26 椭圆、设置浮层原「向上飘」会盖住棋盘约 155px（棋盘底边仅 551px）—— 改为贴在本带内且不盖齿轮；`verify-step16` 的「开关区在画布下方」按新口径**重写为更强的三条**；新增 `_build/shot-booster-21.mjs`（27 项 PASS + 两张截图） | 3.9、5.5 的补充、11、`config.js`（无新增键）、`index.html`、`styles.css`、`app.js`、`ROADMAP.md`、`PROGRESS.md`、`prompts.md`、`_build/verify-step16.mjs` |
+| v1.31 | 2026-09-26 | Agent（用户批准：完整方案） | **Step 21.1 HUD 果汁化**（玩法零改动）：HUD 留在 canvas（用户方案的「DOM 进度条 / `.warning` 类」按 2.3 的分工工程性修正）；新增 `HUD_CONFIG` 9 键与 `hud.js` 的五条纯函数（`goalEntries` / `goalProgress` / `heartbeatScale` / `flashFactor` / `comboText`）+ 有界飘字池（不引入第四份 PRNG）；`render.js` 的卡片材质只在布局期烘焙（单帧 85 次绘制调用、0 新建渐变）；`app.js` 的飘字 ticker 只在有飘字时存在；修掉「连击横幅在最后一层为 clear 时永久残留」的真缺陷；新增 `tests/hud.test.js`（8 例）与 `_build/shot-hud-21.mjs`（16 项 PASS） | 2.3、5.5、15、附录 B、11、`config.js`、`hud.js`、`render.js`、`app.js`、`tests/hud.test.js`、`ROADMAP.md`、`prompts.md` |
+| v1.30 | 2026-09-25 | Agent（用户口径：保留 19.3） | **Step 19.5 藤蔓地图改「向上蔓延」**（玩法零改动）：`LEVEL_MAP_POS` 由页内坐标改为**世界归一化坐标**（y 随关号严格单调、第 1 关在世界最底），`worldHeightRatio` = 6.5；视口 `overflow: hidden` + 世界自身 `translateY` 平移（页面一像素都不滚），进图自动居中当前关 +「回到当前关」按钮 + `▲`/`▼` 各 0.9 视口高；单条贯穿世界的贝塞尔 + 两层视差（`parallaxFar` 0.25 / `parallaxNear` 1.45）；19.3 的「第 6 页云层」平移为**世界顶部云层带**（`tianbianBand` 0.155，仍卡在最内侧隐藏关与第 50 关之间）；附录 B 删 3 键、增 11 键 | 2.3、附录 B、11、`config.js`、`level.js`、`vine-map.js`、`vine-map.css`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/vine-map.test.js` |
 | v1.29 | 2026-09-25 | Agent（用户口径：从下往上 + 画风增强） | **Step 19.4 藤蔓地图朝向与画风**（玩法零改动）：新增 `VINE_MAP_CONFIG.climbDirection`（默认 `'up'`）—— 页内**自下而上**（最下方是第 1 个节点），节点 y 改为 `1 − (nodeMarginY + row × spanY) ± nodeStaggerY`；路径锚点翻转为「入口在页内底部 y≈0.95、出口探出页顶 y≈−0.05」，跨屏衔接条件改为 `入口 y − 1 ≈ 出口 y`（巡检与 `tests/vine-map.test.js` 同步，新增页内朝向断言）；画风增强（零素材）：分层背景（天空渐变 + 两层远山 + 地面）、双层藤蔓（垫层 13px + 亮芯 8px 同一 `d`）、节点内嵌高光、锁定节点锁形图标、**当前关指针**（`arrowSize` / `arrowOffsetY`）、云层漂移（`cloudDriftMs`）、进度条渐变；附录 B 新增 4 键；新增浏览器套件 `_build/verify-step19-4.mjs`；修正 reduced-motion 媒体查询的**选择器特异性**（原先压不住 `pulse` / `sway` 动画） | 2.3、附录 B、11、`config.js`、`vine-map.js`、`vine-map.css`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/vine-map.test.js` |
 | v1.28 | 2026-09-25 | Agent（用户拍板三条口径） | **Step 19.3 解锁门槛 / 天边云层 / 隐藏关**（规则变更）：3.6 新增「只按累计星数解锁」——门槛 = `round((n−1) × UNLOCK_CONFIG.starsPerLevel)`（1.20，第 50 关 59 星）、第 1 关恒 0、**反锁保护**（已通关的关卡永远可玩）；**天边云层**（累计 120 星）散去后露出隐藏关 51–53（Step 14 的三个演示关，**不计入** `⭐ n/150`）；解锁状态是**派生量、不进存档**（存档仍是 v2，`storage.js` 未动）；新增纯函数 `level.unlockStarsFor` / `isLevelUnlocked` / `isTianbianOpen` 与 `HIDDEN_LEVEL_IDS`；`LEVEL_MAP_POS` 由 50 项扩到 53 项（6 页，前 5 页各 10 关 + 第 6 页天边）；`vine-map.js` 的节点状态机由两态扩为**三态**（新增 `locked`）并新增天边云层，`renderMap` 新增 `unlocked` / `required` / `revealed` / `tianbian` / `starTotal` 入参；`app.js` 的 `pickLevel` 拒绝锁定关卡并在画布外弹提示；`LEVELS.md` 新增 §10；附录 B 新增 `UNLOCK_CONFIG` 3 键 | 3.6、2.2、2.3、附录 B、11、`config.js`、`level.js`、`vine-map.js`、`vine-map.css`、`app.js`、`LEVELS.md`、`ROADMAP.md`、`prompts.md`、`tests/` |
 | v1.27 | 2026-09-25 | Agent（用户拍板外观 A） | **Step 17 粒子动画与视觉打磨**：新增模块 `particles.js`（固定容量环形池 + 生命周期 + 确定性生成计划 + 只读快照，2.2/2.3 登记）；粒子一律**确定性**（`mulberry32` + 事件键 `关卡id:级联层:cell.id:种类`，不用 `Math.random`/不读时间）；坐标以棋盘格为单位、渲染时乘 `cellPx`；15 节新增粒子每帧贴图上限（`maxPerFrame` = 96）、池上限（`capacity` = 192）与「reduced-motion 不生成」三条；三类强度由**颗数递增**表达（普通 3 → 条纹 8 → 包装 10 → 魔力鸟 12 → 组合 14），方向按事件区分（扇形 / 双向直线 / 环形 / 全色相）；附录 B 新增 `PARTICLE_CONFIG` 20 键、附录 B-2 新增 `PARTICLE_KIND`；新增 `tests/particles.test.js`（7 例） | 2.2、2.3、15、附录 B、附录 B-2、11、`config.js`、`particles.js`、`candy.js`、`render.js`、`app.js`、`ROADMAP.md` |

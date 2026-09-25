@@ -148,6 +148,7 @@ function init() {
   applyLayout();
   bindBoosters(); // Step 15：道具条（画布外的 DOM 元素）
   bindPrefs(); // Step 16：音效/震动开关
+  bindSettingsToggle(); // Step 21.2（D048）：设置齿轮的浮层开合
   bindMap(); // Step 19.2：藤蔓地图的事件委托（点节点进关 / 点分页翻页）
   if (mapRequested()) showMap(); // `?map=1` 直达地图（与 `?demo=` 同一模式，供真机与取证使用）
 
@@ -976,6 +977,23 @@ function showMapToast(text) {
 // 规则侧只定义「什么事件该有反馈」，声音怎么合成在 `audio.js`（唯一创建 AudioContext 的模块），
 // 开关与偏好落在 `storage.js`。这里只做三件事：绑开关、在事件点调 `feedback()`、首次手势解锁音频。
 // ---------------------------------------------------------------------------
+
+/**
+ * Step 21.2（v1.32 / D048）：设置齿轮 —— 把音效/震动开关收进一枚浮层按钮。
+ * 只切换 `#settings` 的 `hidden` 与齿轮的 `aria-expanded`：**开关本身的行为、绑定与落盘都没变**
+ * （`#settings .pref` 的 click 仍由 bindPrefs 绑着），浮层是绝对定位的，因此 `--booster-bar-h` 不受影响。
+ */
+function bindSettingsToggle() {
+  const toggle = document.getElementById('settings-toggle');
+  const panel = document.getElementById('settings');
+  if (!toggle || !panel) return; // 没有齿轮也能玩（开关默认都开）
+  toggle.addEventListener('click', () => {
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    if (opening) log('info', '设置：音效/震动开关已展开');
+  });
+}
 
 function bindPrefs() {
   const bar = document.getElementById('settings');

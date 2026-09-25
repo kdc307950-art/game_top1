@@ -53,9 +53,14 @@ body {
   -webkit-user-drag: none;
 }
 
-/* Step 15/16（v1.20 / v1.22）画布外控件区：两行（道具条 + 音效/震动开关）。
-   按钮用 DOM 而不是画布绘制 —— 命中测试、可访问性与「不改变 boardRect」三者都因此更简单。 */
+/* Step 15/16（v1.20 / v1.22）画布外控件区；Step 21.2（v1.32 / D048）改版：
+   道具键 = 糖果质感（圆角 + 顶部高光 + 厚底边 + 投影 + 按下下沉），计数 = 右上角红色圆形徽章，
+   音效/震动收进**设置齿轮的浮层**。
+   ⚠️ 契约：`#controls` 的高度仍是 `--booster-bar-h`（100px），齿轮与设置浮层都是**绝对定位的浮层**、
+   不占布局 —— render.js 从可用高度里扣掉的就是这一个值（它决定 computeBoardSize / boardRect）。
+   这些材质都是 **CSS 静态样式**：不在 canvas 的每帧绘制路径上（15 节红线只针对那 6 个 JS 绘制模块）。 */
 #controls {
+  position: relative; /* 齿轮绝对定位到这一行的右端，不占布局宽度 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -66,56 +71,154 @@ body {
   touch-action: manipulation;
 }
 
-#boosters,
-#settings {
+#boosters {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
+  /* 左右各留出齿轮的宽度：道具行在**留白之后的**区间里居中，齿轮因此永远压不到第三个键
+     （探针 shot-booster-21 会实测 gear.left − row.right 必须为正）。 */
+  padding: 0 52px;
+  box-sizing: border-box;
 }
 
 .booster {
   position: relative;
-  min-width: 76px;
-  padding: 8px 14px 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 84px;
+  padding: 9px 10px 11px;
   border: 0;
-  border-radius: 10px;
-  background: #ff4fd8;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ff8ce6 0%, #ff4fd8 52%, #e0249f 100%);
   color: #2a0b23;
   font: 700 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   cursor: pointer;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(122, 9, 84, 0.35),
+    0 4px 0 #a8126f, 0 7px 12px rgba(0, 0, 0, 0.35);
+  transition: transform 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+/* 按下时「压下去」：位移 + 阴影收短（弹性手感的零素材做法） */
+.booster:active:not([disabled]) {
+  transform: translateY(3px);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.45), 0 1px 0 #a8126f, 0 3px 6px rgba(0, 0, 0, 0.35);
+}
+
+.booster-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+
+.booster-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: #2a0b23;
+  stroke: #2a0b23;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.booster-label {
+  line-height: 1;
+}
+
+/* 计数：右上角红色圆形徽章（悬出按钮边缘一点，像糖果盒上的贴纸）。
+   `box-sizing: border-box` 是关键：项目里没有全局重置，缺了它 `min-width` 会和左右内边距相加，
+   一位数徽章会被撑成 34×26 的椭圆 —— 加上后 1 位数正好 26×26 正圆，两位数才自然变胶囊。 */
+.booster-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  box-sizing: border-box;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 30%, #ff8a7a 0%, #e5342b 62%, #b81f18 100%);
+  border: 2px solid #fff2f0;
+  color: #ffffff;
+  font: 800 12px/22px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .booster[aria-pressed='true'] {
   outline: 2px solid #ffd93b; /* 小木锤「已选好、等格子」的状态 */
-  background: #ff77e4;
+  background: linear-gradient(180deg, #ffa6ee 0%, #ff77e4 52%, #f034b0 100%);
 }
 
 .booster[disabled] {
-  background: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.45);
+  background: linear-gradient(180deg, #cfcbd8 0%, #a9a4b8 100%);
+  color: rgba(35, 30, 50, 0.6);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #7d7890;
   cursor: default;
 }
 
-.booster-count {
-  display: inline-block;
-  min-width: 18px;
-  margin-left: 6px;
-  padding: 0 4px;
-  border-radius: 9px;
-  background: rgba(42, 11, 35, 0.85);
+.booster[disabled] .booster-icon svg {
+  fill: rgba(35, 30, 50, 0.55);
+  stroke: rgba(35, 30, 50, 0.55);
+}
+
+.booster[disabled] .booster-count {
+  background: #7d7890;
+  border-color: #cfcbd8;
+}
+
+/* 设置齿轮：贴在道具行右端的浮层按钮（绝对定位 → 不改变道具行的居中与条高） */
+#settings-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#settings-toggle[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 233, 168, 0.5);
+}
+
+/* 设置浮层：贴在**道具条自己这一带**（不往上飘），因此永远不会盖住棋盘；
+   右端留出齿轮的宽度（齿轮 38px + 右 10px + 间隙）→ 展开时齿轮仍可点、能再按一下收起。 */
+#settings {
+  position: absolute;
+  left: 12px;
+  right: 56px;
+  bottom: calc(var(--safe-bottom) + 6px);
+  z-index: 5;
+  display: flex;
+  justify-content: space-evenly;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(24, 20, 38, 0.94);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+#settings[hidden] {
+  display: none; /* 必须显式写：上面的 display:flex 会盖掉 hidden 属性自带的 display:none */
 }
 
 /* Step 16（5.6）音效/震动开关：`aria-pressed` 就是开关状态（true = 开）。 */
 .pref {
   min-width: 68px;
-  padding: 5px 10px;
+  padding: 7px 12px;
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 9px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
   font: 500 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;

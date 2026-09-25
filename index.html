@@ -19,18 +19,40 @@
     <!-- 只放结构：AGENTS.md 2.3。棋盘绘制全部在 app.js -->
     <canvas id="board" width="0" height="0"></canvas>
 
-    <!-- Step 15/16（v1.20 / v1.22）画布外的控件区：上面是道具条（3.9），下面是音效/震动开关（5.6）。
-         它们都不占用 HUD 四格、也不改变 boardRect；render.js 会从可用高度里扣除 --booster-bar-h。 -->
+    <!-- Step 15/16（v1.20 / v1.22）画布外的控件区；Step 21.2（v1.32 / D048）改版为
+         「糖果质感道具键 + 右上角红色计数徽章」，并把音效/震动收进**设置齿轮的浮层**。
+         关键约束：**#controls 的高度仍是 --booster-bar-h（100px）**，齿轮与设置浮层都是绝对定位的
+         浮层、不占布局 —— render.js 从可用高度里扣掉的就是这一个值（它决定 computeBoardSize/boardRect）。
+         图标一律是**内联 SVG**（零素材 D009：不引入任何图片文件）。 -->
     <div id="controls">
       <div id="boosters" role="group" aria-label="道具">
-        <button class="booster" type="button" data-kind="refresh">刷新<span class="booster-count">0</span></button>
-        <button class="booster" type="button" data-kind="addSteps">加五步<span class="booster-count">0</span></button>
-        <button class="booster" type="button" data-kind="hammer">小木锤<span class="booster-count">0</span></button>
+        <button class="booster" type="button" data-kind="refresh" aria-label="刷新">
+          <span class="booster-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8" fill="none"/><path d="M20 4.5V9h-4.5" fill="none"/></svg>
+          </span>
+          <span class="booster-label">刷新</span>
+          <span class="booster-count">0</span>
+        </button>
+        <button class="booster" type="button" data-kind="addSteps" aria-label="加五步">
+          <span class="booster-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 4h4v5.5c2.9.4 5 2.6 5 5.5v4H7z"/></svg>
+          </span>
+          <span class="booster-label">加五步</span>
+          <span class="booster-count">0</span>
+        </button>
+        <button class="booster" type="button" data-kind="hammer" aria-label="小木锤">
+          <span class="booster-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M13.5 3.5 20 10l-2.2 2.2-6.5-6.5z"/><path d="m11.2 9.2 3.6 3.6-6.4 6.4-3.6-3.6z"/></svg>
+          </span>
+          <span class="booster-label">小木锤</span>
+          <span class="booster-count">0</span>
+        </button>
       </div>
-      <div id="settings" role="group" aria-label="音效与震动">
-        <button class="pref" type="button" data-pref="sound" aria-pressed="true">音效</button>
-        <button class="pref" type="button" data-pref="haptic" aria-pressed="true">震动</button>
-      </div>
+      <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings" aria-label="设置">⚙</button>
+    </div>
+    <div id="settings" role="group" aria-label="音效与震动" hidden>
+      <button class="pref" type="button" data-pref="sound" aria-pressed="true">音效</button>
+      <button class="pref" type="button" data-pref="haptic" aria-pressed="true">震动</button>
     </div>
 
     <!-- Step 19.2（v1.23）藤蔓关卡地图：结构容器在此，SVG 由 vine-map.js 画进这里、事件由 app.js 委托。
