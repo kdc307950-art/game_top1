@@ -133,33 +133,25 @@
   }
 }
 
-/* 藤蔓本体：由若干「渐粗分段」拼成**一条**贯穿世界的有机曲线（22.2）。
-   每段自带 `--vine-taper`（1 = 世界顶部最粗、底部最细），宽度 = 基准 × 倍率；
-   段间共享端点 + round linecap，接缝不可见。这里只定义「相对基准」，基准粗细仍是单一来源。 */
+/* 藤蔓本体：**一条平滑的粗曲线**（两层）。第三轮视觉评审（用户 P0）后：
+   · 22.2 的「渐粗分段」退役 —— 分段 + round linecap 会在每个接缝留下圆形隆起（像打了结的绳子）；
+   · 基于 `stroke-dasharray` 的「生长」动画同步退役（用户点名要去掉短划线相关的设定）。
+   现在只有 `fill/stroke/宽度` 三件事，基准粗细仍是单一来源。 */
 .vine-chunk {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 9000;
-  stroke-dashoffset: 9000;
-  transition: stroke-dashoffset 1200ms ease-out;
 }
 
 .vine-chunk--core {
   stroke: var(--vine-path);
-  stroke-width: calc(8px * var(--vine-taper, 1));
+  stroke-width: 8px;
 }
 
-/* 19.4：藤蔓的**深色垫层**（更粗、无生长动画），与上层亮色芯叠出「有厚度的藤」 */
+/* 19.4：藤蔓的**深色垫层**（更粗），与上层亮色芯叠出「有厚度的藤」 */
 .vine-chunk--under {
   stroke: #12281f;
-  stroke-width: calc(13px * var(--vine-taper, 1));
-  transition: none;
-}
-
-/* 「生长」观感：类挂在分组 `<g class="vine-path">` 上，由它统一下发给每一段 */
-.vine-path.grown .vine-chunk {
-  stroke-dashoffset: 0;
+  stroke-width: 13px;
 }
 
 /* 只用来量长度的隐形路径（叶子沿它采样），不参与绘制 */
@@ -252,9 +244,24 @@
   stroke-opacity: 1;
 }
 
-/* 19.3：星数不够 → 节点变暗、不可点（光标与焦点也一起改），并显示「需要 N 星」 */
+/* 19.3：星数不够 → 节点变暗、不可点（光标与焦点也一起改），并显示「需要 N 星」。
+   第三轮视觉评审（用户 P0）：**数字不再跟着整颗节点一起降到 0.45 透明度**（那样「4/5/6」会糊进深紫里）——
+   只压暗星星与整个节点的其它装饰，数字改用略冷的亮色，保证一眼读得出关号。 */
 .vine-node[data-state='locked'] {
   cursor: not-allowed;
+}
+
+.vine-node[data-state='locked'] .vine-node-star {
+  opacity: 0.45;
+}
+
+.vine-node[data-state='locked'] .vine-node-label {
+  fill: #ded9f2;
+  opacity: 1;
+}
+
+.vine-node[data-state='locked'] .vine-node-body {
+  fill: #4a3f74; /* 比普通节点更亮的浅紫底盘（用户建议「把数字的底色换成更亮的浅色圆环」） */
 }
 
 .vine-node[data-state='locked'] .vine-node-ring {
@@ -264,9 +271,8 @@
 }
 
 .vine-node[data-state='locked'] .vine-node-body,
-.vine-node[data-state='locked'] .vine-node-label,
 .vine-node[data-state='locked'] .vine-node-star {
-  opacity: 0.45;
+  opacity: 0.9; /* 只压暗星星；数字与底盘保持可读（用户 P0：4/5/6 必须一眼看清） */
 }
 
 .vine-node[data-state='locked'] .vine-node-required {
@@ -370,8 +376,13 @@
 }
 
 .vine-node-label {
+  /* 第三轮视觉评审（用户 P0「4/5/6 看不清」）：白字加深色描边（`paint-order: stroke` 让描边落在字下面），
+     这样无论是深紫底盘还是亮色光圈，数字都有稳定的对比；字号 14 → 15。 */
   fill: #ffffff;
-  font: 700 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  stroke: rgba(14, 11, 24, 0.92);
+  stroke-width: 2.6;
+  paint-order: stroke;
+  font: 700 15px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   pointer-events: none;
 }
 
@@ -468,18 +479,26 @@
   font: 600 13px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
-/* 「回到当前关」：悬浮在地图右上角，**不随世界滚动** */
+/* 「回到当前关」：悬浮在地图**右上角**、**不随世界滚动**。
+   第三轮视觉评审（用户 P0「被屏幕边缘裁切」）：它原先挂在 `.vine-viewport` 里 —— 那个视口只有
+   `min(100%, 360px)` 宽且 `overflow: hidden`，按钮因此贴着窄列边缘、在更窄的屏上会被切成半个。
+   现在改挂在**满屏的 `#map` 层**上，并留出 14px 屏边距 + 安全区，做成带果冻内嵌高光的胶囊。 */
 .vine-recenter {
   position: absolute;
-  top: calc(var(--safe-top) + 8px);
-  right: calc(var(--safe-right) + 8px);
+  top: calc(var(--safe-top) + 14px);
+  right: calc(var(--safe-right) + 14px);
   z-index: 3;
-  padding: 8px 12px;
-  border: 1px solid rgba(255, 233, 168, 0.55);
+  padding: 9px 14px;
+  max-width: 46vw;
+  border: 1px solid rgba(255, 233, 168, 0.6);
   border-radius: 999px;
-  background: rgba(27, 24, 48, 0.82);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)), #241f3a;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.35), 0 2px 6px rgba(6, 4, 14, 0.5);
   color: #ffe9a8;
-  font: 600 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font: 600 12.5px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  white-space: nowrap; /* 胶囊永不折行；配合 max-width 也只是被裁字，不会溢出屏幕 */
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 

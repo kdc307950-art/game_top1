@@ -349,8 +349,8 @@ export const CONFIG = {
     starSize: 11,      // 星星基准尺寸（px；= 19.2 第一版 `★` 字形的 11px）
     starScale: 1.4,    // 星星放大倍率（用户方案：比原来大 40%）
     starGap: 4,        // 星星间距（px）
-    leafSpacing: 70,   // 叶子沿路径的采样间距（px，用户方案 60–80）
-    leafSize: 7,       // 叶片长度（px）
+    leafSpacing: 150,  // 叶子沿路径的采样间距（px）—— 第三轮视觉评审：70 → 150，叶子少了才像叶子而不像「毛虫的脚」
+    leafSize: 9,       // 叶片长度（px）—— 7 → 9，配合更疏的间距，单看是一片叶子
     pulseMs: 2000,     // 呼吸光效周期（ms，用户方案 2s 循环）
     leafSwayMs: 3600,  // 叶片摇曳周期（ms；prefers-reduced-motion 时关闭）
     // ---- 19.5 交互（视口内纵向平移；页面本身不滚动，5.1 依旧成立）----

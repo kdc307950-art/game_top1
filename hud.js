@@ -33,8 +33,11 @@ const OVERLAY_DIM = 'rgba(10, 8, 20, 0.78)';
 const OVERLAY_PANEL = '#241f3a';
 const OVERLAY_TITLE_COLOR = '#ffffff';
 const OVERLAY_RECORD_COLOR = '#ffd93b';
-const BUTTON_BG = '#ff4fd8'; // 调色板之外的洋红：不与任何糖果撞色，便于识别与程序化验证
-const BUTTON_TEXT = '#2a0b23';
+// 第三轮视觉评审（用户 P0）：结算按钮的**游戏内语言** —— 亮金主按钮（果冻）+ 深灰次按钮，
+// 各自带「顶部内嵌高光 + 厚底边」。旧的荧光洋红 `#ff4fd8` 退役（它与深色糖果 UI 体系割裂，
+// 当初选它只是为了「不与糖果撞色、便于程序化验证」——那属于测试便利，不该决定产品外观）。
+const BUTTON_PRIMARY = { base: '#ffc93b', edge: '#b8801a', gloss: 'rgba(255, 255, 255, 0.42)', text: '#3a2605' };
+const BUTTON_SECONDARY = { base: '#3a3352', edge: '#1d1830', gloss: 'rgba(255, 255, 255, 0.16)', text: '#e8e6f0' };
 const GOAL_DONE_COLOR = '#4ecb71'; // 已完成的目标分项（与糖果绿色同为调色板内的绿）
 const BANNER_BG = 'rgba(20, 16, 34, 0.92)';
 const BANNER_TEXT_COLOR = '#ffe9a8';
@@ -418,17 +421,30 @@ export function drawGameOver(ctx, field, overlay) {
   const primaryLabel = overlay.hasNext ? '下一关' : overlay.reason === 'won' ? '选择关卡' : '重试';
   const primaryW = panelW * 0.42;
   const primaryX = cx - primaryW - gap / 2;
-  const drawButton = (x, y, w, h, label) => {
-    roundRectPath(ctx, x, y, w, h, h * 0.32);
-    ctx.fillStyle = BUTTON_BG;
+  const drawButton = (x, y, w, h, label, kind = 'primary') => {
+    // 第三轮视觉评审（用户 P0「粉红按钮与游戏内 UI 体系割裂」）：结算按钮改成**游戏内道具栏的语言** ——
+    // 深色面板 + 亮色果冻键 + 内嵌顶部高光 + 厚底边。全部是**纯色几何填充**（4 次填充/按钮）：
+    // 结束面板是每帧重绘的，因此**不能**用渐变（D043/D044），「果冻感」靠「高光条 + 厚底边」表达。
+    const skin = kind === 'primary' ? BUTTON_PRIMARY : BUTTON_SECONDARY;
+    const radius = h * 0.32;
+    const bodyY = y + h * 0.06; // 主体略上移，留出下面的厚底边
+    const bodyH = h * 0.94;
+    roundRectPath(ctx, x, bodyY + h * 0.1, w, bodyH, radius);
+    ctx.fillStyle = skin.edge;
+    ctx.fill();
+    roundRectPath(ctx, x, bodyY, w, bodyH, radius);
+    ctx.fillStyle = skin.base;
+    ctx.fill();
+    roundRectPath(ctx, x + w * 0.09, bodyY + bodyH * 0.12, w * 0.82, bodyH * 0.24, bodyH * 0.12);
+    ctx.fillStyle = skin.gloss;
     ctx.fill();
     ctx.font = `700 ${Math.round(field.side * 0.045)}px ${FONT_STACK}`;
-    ctx.fillStyle = BUTTON_TEXT;
-    ctx.fillText(label, x + w / 2, y + h / 2);
+    ctx.fillStyle = skin.text;
+    ctx.fillText(label, x + w / 2, bodyY + bodyH * 0.58);
     return { x, y, w, h };
   };
-  const primary = drawButton(primaryX, btnY, primaryW, btnH, primaryLabel);
-  const select = drawButton(cx + gap / 2, btnY, primaryW, btnH, '选关');
+  const primary = drawButton(primaryX, btnY, primaryW, btnH, primaryLabel, 'primary');
+  const select = drawButton(cx + gap / 2, btnY, primaryW, btnH, '选关', 'secondary');
   return { restartRect: primary, nextRect: overlay.hasNext ? primary : null, selectRect: select };
 }
 

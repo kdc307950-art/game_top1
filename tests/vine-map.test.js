@@ -20,7 +20,6 @@ import {
   buildVineAnchors,
   buildVinePath,
   buildVineSegments,
-  buildVineTaperSegments,
   centerMapOn,
   clampMapOffset,
   clampStars,
@@ -221,15 +220,16 @@ test('buildVinePath：**一条**贯穿世界的 d、设计期派生、曲线而�
   assertTrue(Math.max(...deviations) > 0.5, '曲线确实弯曲（控制点偏离弦）');
 });
 
-test('buildVineTaperSegments：分段渐粗（世界底部细 → 顶部粗），段间共享端点、确定性', () => {
-  const chunks = buildVineTaperSegments();
-  assertTrue(chunks.length >= 5, `切成多段才能渐粗（实得 ${chunks.length} 段）`);
-  assertDeepEqual(chunks, buildVineTaperSegments(), '两次结果完全相同（纯函数、无随机）');
-  const factors = chunks.map((c) => c.factor);
-  assertTrue(factors.every((f) => f >= 0.5 && f <= 1.001), `倍率都在 [0.5, 1]：${round3(Math.min(...factors))}–${round3(Math.max(...factors))}`);
-  assertTrue(factors[0] < factors[factors.length - 1], `世界底部更细、顶部更粗（${factors[0]} → ${factors[factors.length - 1]}）`);
-  assertTrue(chunks.every((c) => c.d.startsWith('M ')), '每段都是自己的完整 d（M 开头）');
-  assertTrue(chunks.every((c) => c.d.includes(' C ')), '每段至少一段三次贝塞尔');
+// 第三轮视觉评审（用户 P0）：**「分段渐粗」退役** —— 分段 + round linecap 会在每个接缝留下圆形隆起
+// （用户看到的「打了结的绳子」）。因此 `buildVineTaperSegments` 的用例按新口径改写为
+// 「整条藤蔓是**一条**平滑曲线」：单一 `d`、以 M 开头、含三次贝塞尔、两次调用完全相同。
+test('buildVinePath：整条藤蔓是**一条**平滑曲线（不再分段渐粗），且确定性', () => {
+  const d = buildVinePath();
+  assertEqual(d, buildVinePath(), '两次结果完全相同（纯函数、无随机）');
+  assertTrue(d.startsWith('M '), '是一条完整路径（M 开头）');
+  assertTrue((d.match(/ C /g) ?? []).length >= 50, `沿途至少有 50 段三次贝塞尔（实得 ${(d.match(/ C /g) ?? []).length}）`);
+  // 53 个节点 + 入口/出口延伸点 ⇒ 至少 54 个锚点；曲线必须一阶连续（每段都有 C）
+  assertTrue(d.split('M ').length === 2, '只有一个子路径（没有分段拼接）');
 });
 
 test('nodeState：19.3 起是三态 —— visited / attainable / locked（locked 只由「未解锁」决定）', () => {
