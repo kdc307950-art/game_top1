@@ -463,6 +463,43 @@
 
 ---
 
+## Step 22：藤蔓地图「共生」重构（节点长在藤蔓上）
+
+```text
+任务：实现 ROADMAP.md §4.4 的 Step 22「藤蔓地图共生重构」（用户 2026-09-26 提交的改进总方案，见 DECISIONS D049）
+开始前：
+1. 阅读 AGENTS.md（2.3 的 DOM/Canvas 分工、5.1 禁滚动、15 节的绘制预算与「零 shadowBlur / 零每帧渐变」、
+   附录 B）、ROADMAP.md §4.4、DECISIONS.md D049、LEVELS.md §9、PROGRESS.md 的 19.5 / 21.2 记录。
+2. 四条已确认口径（用户逐条确认，不要自行更改）：
+   ① **不反转数据流** —— 节点坐标（LEVELS.md §9 ↔ LEVEL_MAP_POS ↔ check-vine-map.mjs 三件套）是唯一真相源，
+      曲线**反向拟合**穿过它们（Catmull-Rom → 三次贝塞尔），不得由曲线定义节点；
+   ② **禁用一切视觉滤镜** —— 不上 feGaussianBlur / box-shadow，光影用「内嵌高光偏移 + 下缘预烘焙暗边」的几何 + 静态渐变；
+   ③ **保持「向上」，但 y 原点翻到世界底部** —— y 随关号递增，屏幕换算 = (1 − y) × 世界总高；
+   ④ 平移保持「节点居中夹取」（首/末关都要能真正居中），世界总高保持固定比例（不按视口反算「正好 5 屏」）。
+范围：
+- 22.1：_build/gen-vine-map.mjs 生成器改为 y 自底向上递增（同时翻 anchors 的 y 语义）→ 重跑生成器重写
+  level.js 的 LEVEL_MAP_POS 与 LEVELS.md §9；vine-map.js 的 mapGeometry / yOf / visibleLevelIds /
+  focusedLevelId / 云带 / 天空与地面分层全部改用 (1 − y) 换算；check-vine-map.mjs 的单调性断言改为「递增」；
+  tests/vine-map.test.js 与 _build/verify-step19-2/19-3/19-4.mjs 的 y 断言同步。**视觉零变化**。
+- 22.2：vine-map.js 用「穿过每个节点」的平滑曲线画藤蔓（节点仍是真相源）+ 藤蔓分段渐粗（底部细 → 顶部粗）
+  + 沿路径的叶子/卷须（固定种子决定朝向，不使用运行时随机）。
+- 22.3：vine-map.css / vine-map.js 做视觉降噪与焦点 —— 当前关金色呼吸光环 + 放大 15% +「当前」标签（去掉小黄箭头）；
+  未解锁改磨砂质感（半透明低饱和暗绿 + 白细描边 + 精致小锁）；星星 +30%、未点亮改浅灰描边；
+  视口底部深色渐变遮罩（暗示「下面还有路」）；首次进入的上滑提示（一次性、reduced-motion 不播）；
+  「回到当前关」移到右下角并图标化。
+验收：node tests/run-all.js 与 python _build/consistency_check.py 全绿；node _build/check-vine-map.mjs PASS；
+      **「每个节点到藤蔓曲线的距离 ≤ 0.5px」为硬断言**（22.2 的核心）；光影是几何 + 静态渐变，代码里不出现
+      任何 SVG 滤镜或 shadowBlur、不出现每帧新建渐变；页面仍不可滚动（5.1）；当前关仍能真正居中；
+      **每个子步先出截图交用户确认再继续**（截图请附 _build/png-stats.mjs 的像素统计，本机没有视觉模型）。
+禁止：改玩法数值或规则（解锁门槛 / 天边云层 / 隐藏关 / 50 关表一律不动）；引入素材或依赖（D009）；
+      SVG 滤镜 / feGaussianBlur / canvas shadowBlur / 每帧渐变；由曲线定义节点坐标；破坏「进入地图当前关居中」。
+前置依赖：Step 19.5 收口（tag step19.5-done）、Step 21.2（tag step21.2-done）、用户确认的四条口径与 22.x 原型截图。
+参考：用户「🚀 改进总方案（针对性优化）」五节 + 落地实施路线；_build/proto-vine-22.html（一次性原型）；
+      King 的 Candy Crush 地图专利 WO2014041202A1；DECISIONS.md D049。
+```
+
+---
+
 ## 待补充的提示词模式（随实战积累）
 
 - 报错排查类：`先把完整的报错栈贴出来` + 复现步骤 + 预期行为 三段式。

@@ -34,6 +34,7 @@ import {
   parallaxCompensation,
   parallaxNetShift,
   renderMap,
+  screenYOf,
   setMapOffset,
   starPath,
   visibleLevelIds,
@@ -53,15 +54,16 @@ test('世界坐标：53 个节点、y 随关号严格单调（第 1 关在世界
   assertTrue(LEVEL_MAP_POS.every((pos) => MAP.nodeColumns.includes(pos.x)), `x 都落在 nodeColumns（${MAP.nodeColumns.join(' / ')}）之一`);
   assertTrue(new Set(LEVEL_MAP_POS.map((pos) => pos.x)).size >= 3, 'X 轴至少 3 个不同水平位置（打破两列对齐）');
   // 19.5：不再有「页」，取而代之的是「世界」—— y 相对世界总高，且关号越大越靠上
+  // 22.1（D049）：y **自世界底部起算**（0 = 最底、1 = 最顶）⇒ 'up' 时 y 随关号**递增**
   const climbUp = MAP.climbDirection !== 'down';
   const ordered = [...LEVEL_MAP_POS].sort((a, b) => a.id - b.id);
   for (let i = 1; i < ordered.length; i += 1) {
-    const ok = climbUp ? ordered[i - 1].y > ordered[i].y : ordered[i - 1].y < ordered[i].y;
+    const ok = climbUp ? ordered[i - 1].y < ordered[i].y : ordered[i - 1].y > ordered[i].y;
     assertTrue(ok, `第 ${ordered[i].id} 关与第 ${ordered[i - 1].id} 关的上下关系正确（climbDirection = ${MAP.climbDirection}）`);
   }
   if (climbUp) {
-    assertEqual(worldY(1), Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)), '第 1 关在世界最底（y 最大）');
-    assertEqual(worldY(HIDDEN_LEVEL_IDS[HIDDEN_LEVEL_IDS.length - 1]), Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)), '最后一个隐藏关在世界最顶（y 最小）');
+    assertEqual(worldY(1), Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)), '第 1 关在世界最底（y 最小）');
+    assertEqual(worldY(HIDDEN_LEVEL_IDS[HIDDEN_LEVEL_IDS.length - 1]), Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)), '最后一个隐藏关在世界最顶（y 最大）');
   }
   assertEqual(worldX(3), MAP.nodeColumns[2], '第 3 个节点的 x 取第 3 列（轮换打破对齐）');
   assertEqual(worldY(999), null, '未知关号 → null（不猜）');
@@ -82,8 +84,9 @@ test('mapGeometry：scale = 视口宽 / width（统一缩放）、worldHeight = 
   const narrow = mapGeometry(320, 700);
   assertEqual(round3(narrow.scale), round3(320 / MAP.width), '窄屏按宽等比缩小');
   assertEqual(round1(narrow.worldHeight), round1(MAP_WORLD_HEIGHT * narrow.scale), '窄屏世界高度同步缩小');
-  assertEqual(round1(g.top), round1(Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)) * MAP_WORLD_HEIGHT), 'top = 最顶的关');
-  assertEqual(round1(g.bottom), round1(Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)) * MAP_WORLD_HEIGHT), 'bottom = 最底的关');
+  // 22.1（D049）：top/bottom 是**屏幕/SVG 的 y**（自顶向下）= (1 − 归一化 y) × 世界高
+  assertEqual(round1(g.top), round1(screenYOf(Math.max(...LEVEL_MAP_POS.map((pos) => pos.y)), MAP_WORLD_HEIGHT)), 'top = 最顶的关（归一化 y 最大）');
+  assertEqual(round1(g.bottom), round1(screenYOf(Math.min(...LEVEL_MAP_POS.map((pos) => pos.y)), MAP_WORLD_HEIGHT)), 'bottom = 最底的关（归一化 y 最小）');
   assertTrue(g.minOffset < g.maxOffset, '平移区间非空（能爬）');
   assertEqual(mapGeometry(0, 0).scale, 1, '量不到尺寸时回落到 width/height 兜底值');
 });
@@ -96,7 +99,7 @@ test('平移：centeredOffsetFor 把节点放到视口正中，且首/末关刚�
   assertEqual(centeredOffsetFor(topId, g), g.maxOffset, '最顶的那一关居中 = 平移上限');
   for (const id of [1, 7, 26, 50, 53]) {
     const offset = centeredOffsetFor(id, g);
-    const screenY = worldY(id) * g.worldHeight + offset;
+    const screenY = screenYOf(worldY(id), g.worldHeight) + offset;
     assertTrue(Math.abs(screenY - VIEW.h / 2) <= 0.001, `第 ${id} 关落在视口正中（y = ${round3(screenY)}）`);
   }
   assertEqual(clampMapOffset(-999999, g), g.minOffset, '往回滑到底 → 夹到下限');
@@ -115,7 +118,7 @@ test('visibleLevelIds / focusedLevelId：视口内的关号按升序、正中那
   assertDeepEqual(visible, [...visible].sort((a, b) => a - b), '按关号升序');
   assertTrue(visible.includes(26), '居中的那一关一定在视口里');
   for (const id of visible) {
-    const screenY = worldY(id) * g.worldHeight + offset;
+    const screenY = screenYOf(worldY(id), g.worldHeight) + offset;
     assertTrue(screenY >= -40 && screenY <= VIEW.h + 40, `第 ${id} 关在视口范围内（y = ${round3(screenY)}）`);
   }
   // 爬到世界两端时，视口里仍然有节点（不会滑到空白区）
@@ -158,24 +161,24 @@ test('mulberry32：同种子同序列、不同种子不同序列（确定性 PRN
   assertTrue(seqA1.every((v) => v >= 0 && v < 1), '取值落在 [0,1)');
 });
 
-test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × 世界总高），跨越整个世界', () => {
+test('buildVineAnchors：只来自 VINE_MAP_CONFIG.anchors（归一化 × 世界总高，y 走 screenYOf），跨越整个世界', () => {
   const anchors = buildVineAnchors();
   assertDeepEqual(
     anchors,
-    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP_WORLD_HEIGHT) })),
-    '锚点 = config 的归一化锚点 × (width, 世界总高)'
+    MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(screenYOf(anchor.y, MAP_WORLD_HEIGHT)) })),
+    '锚点 = config 的归一化锚点 × (width, 世界总高)；y 一律走 screenYOf 换算'
   );
   assertTrue(anchors.length >= 4, '锚点至少 4 个');
   const climbUp = MAP.climbDirection !== 'down';
   if (climbUp) {
-    assertTrue(anchors[0].y > MAP_WORLD_HEIGHT, '入口在**世界下方之外**（y > 世界总高）');
-    assertTrue(anchors[anchors.length - 1].y < 0, '出口在**世界上方之外**（y < 0）');
+    assertTrue(anchors[0].y > MAP_WORLD_HEIGHT, '入口在**世界下方之外**（屏幕 y > 世界总高）');
+    assertTrue(anchors[anchors.length - 1].y < 0, '出口在**世界上方之外**（屏幕 y < 0）');
   } else {
     assertTrue(anchors[0].y < MAP_WORLD_HEIGHT && anchors[anchors.length - 1].y > MAP_WORLD_HEIGHT, '自上而下时入口在世界内、出口在世界下方之外');
   }
   const span = Math.max(...anchors.map((a) => a.y)) - Math.min(...anchors.map((a) => a.y));
   assertTrue(span > MAP_WORLD_HEIGHT, `锚点跨越整个世界（跨度 ${round1(span)} > ${MAP_WORLD_HEIGHT}）`);
-  const nodePoints = LEVEL_MAP_POS.map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(pos.y * MAP_WORLD_HEIGHT) }));
+  const nodePoints = LEVEL_MAP_POS.map((pos) => ({ x: round1(pos.x * MAP.width), y: round1(screenYOf(pos.y, MAP_WORLD_HEIGHT)) }));
   assertTrue(
     anchors.every((anchor) => !nodePoints.some((point) => point.x === anchor.x && point.y === anchor.y)),
     '锚点与节点坐标不重合（路径不经过节点）'
@@ -189,7 +192,7 @@ test('buildVinePath：**一条**贯穿世界的 d、设计期派生、是曲线�
   assertEqual(first.split('C').length - 1, buildVineAnchors().length - 1, '每两个锚点之间一段三次贝塞尔');
   // 节点坐标是显式的、**不参与路径计算**（D040 的取舍在 19.5 仍然成立）：路径里不应出现任何节点坐标
   LEVEL_MAP_POS.slice(0, 12).forEach((node) => {
-    const point = `${round1(node.x * MAP.width)} ${round1(node.y * MAP_WORLD_HEIGHT)}`;
+    const point = `${round1(node.x * MAP.width)} ${round1(screenYOf(node.y, MAP_WORLD_HEIGHT))}`;
     assertFalse(first.includes(` ${point}`), `第 ${node.id} 关的坐标不出现在路径 d 里`);
   });
   const segments = buildVineSegments();

@@ -5,6 +5,48 @@
 
 ---
 
+## 2026-09-26（Step 22.1：藤蔓地图坐标口径翻转 —— 完成，**视觉零变化已用像素证明**）
+
+用户口径：先把坐标记法对齐（**y 自世界底部起算、随关号递增**，屏幕换算 `screenY = (1 − y) × 世界总高`），这是 Step 22「节点长在藤蔓上」的地基。**玩法零改动**（解锁门槛 / 天边云层 / 隐藏关 / 50 关表 / 存档 / 逻辑模块全不动）；口径记入 `DECISIONS.md` **D049**，宪法升 **v1.33**。
+
+**做了什么（一次「不漏一处」的同步，共 8 个文件）**：
+
+- `_build/gen-vine-map.mjs`：生成器由 `y = 1 − climb` 改为 `y = climb`（y 自底向上）、翻转锚点方向语义、重写它写进 `LEVELS.md §9` 的说明块（「y 自世界底部起算、严格递增」）。**`LEVELS.md §9` 与 `level.js` 的 `LEVEL_MAP_POS` 都由它重写**（第 1 关 0.10 → 第 50 关 0.84）。
+- `vine-map.js`：新增**唯一**换算入口 `screenYOf(y, worldHeight) = (1 − y) × worldHeight`，并把 6 处换算全部改走它（`mapGeometry` 的 top/bottom、`yOf`、`visibleLevelIds`、`focusedLevelId`、`buildVineAnchors`、`buildNode` 的圆心）。文件头补上「两个 y」的区分说明（归一化世界 y 自底向上 vs SVG/屏幕 y 自顶向下），并点明天空/地面/远山/云带这些**直接用 SVG 坐标**画的图层**不受影响**。
+- `config.js`：`anchors` 的 y 全部翻号（入口 `1.06 → −0.06`、出口 `−0.06 → 1.06`），`climbDirection` / `nodeMarginY` / `tianbianBand` 的注释改为新语义（`tianbianBand` = 「自世界顶部往下量的厚度」，云带覆盖 `y ∈ [1 − 0.155, 1]`）。
+- `_build/check-vine-map.mjs`：单调性断言「递减 → 递增」、锚点两端「y > 1 / y < 0 → y < 0 / y > 1」、云带改 `bandStart = 1 − tianbianBand` 且比较方向翻转。
+- `tests/vine-map.test.js`：`worldY(1)` 改断言 `min(y)`、最后一个隐藏关改 `max(y)`、`top/bottom` 改用 `screenYOf` 复算、锚点与节点路径断言同步。
+- **`app.js` 一行未改**（侦察确认它只读 `position.id`，不碰 y）。
+
+**本步最值得记下的产出：用像素证明「视觉零变化」**。纯记法翻转最怕「改漏一处、画面悄悄变了」，而本机**没有视觉模型**，我看不到截图。于是新增 `_build/shot-map-flip.mjs`：同一份播种存档（固定星级 + 固定道具）+ CDP 强制 `prefers-reduced-motion: reduce`（脉冲/摇曳/星光全部停摆 ⇒ 帧可比）+ 同一次「点两次 ▲」的确定操作，在**改动前后各截两张图**（`git stash` 切换代码）：
+
+| 帧 | 翻转前 sha256 | 翻转后 sha256 | 平移量 | 导航 |
+|---|---|---|---|---|
+| 进图（当前关居中） | `63dada287820cf91` | `63dada287820cf91` | `-3364` | 第 1 关 / 共 50 关 |
+| 点两次 ▲ 后 | `4057a39cb8e4ec5e` | `4057a39cb8e4ec5e` | `-1996` | 第 23 关 / 共 50 关 |
+
+**逐字节相同** —— 「视觉零变化」从口头承诺变成了可复核的测量结果。
+
+**新增工具（都在 gitignore 的 `_build/` 内）**：`_build/png-stats.mjs`（自写 PNG 解码，只用内置 `zlib`：`decodePng` / `pngStats`，给出不同颜色数、主色占比、**藤蔓绿占比 / 品牌金占比**）——补上了本项目长期缺的一环：以前「截图是不是空白」只能靠元素计数间接推断，现在能直接读像素；`_build/diag-center.mjs`（用产品模块量「当前关是否真的居中」）、`_build/diag-render.mjs`（页面渲染体检）、`_build/shot-map-flip.mjs`。
+
+**证据**：
+
+| 等级 | 命令 / 夹具 | 结果 |
+|---|---|---|
+| L1 | `node tests/run-all.js` | **13 文件 / 271 用例 / 3402 断言 / 0 失败** |
+| L0 | `node _build/check-vine-map.mjs` | **20 项 PASS**（y 严格递增；云带 `y ≥ 0.845` 恰好盖住 y=0.85 的隐藏关、又不盖 y=0.84 的第 50 关；锚点入口 −0.06 / 出口 1.06 跨越整个世界） |
+| L0 | `python _build/consistency_check.py` | 全部通过（v1.33；覆盖断言扩到 **Step 0-22**） |
+| L0 | `node _build/lint-levels.mjs` | PASS |
+| L2/L3 | `verify-step19-2` / `verify-step19-3` / `verify-step19-4` | **全绿（0 失败）** |
+| L2/L3 | 新增 `shot-map-flip.mjs` | 改动前后 **PNG sha256 逐字节相同**（见上表） |
+| L2/L3 | `diag-center.mjs` | 三种视口 × 六关，**居中偏差全部 +0px**；`minOffset/maxOffset` 未夹住任何一关 |
+
+**如实说明（两点）**：① `verify-step12b` 本轮 **2 跑 1 绿** —— 红的两条是「本局已结束（结束面板出现）」(`swaps=4/17 touches=25/35 elapsed≈153s` 撞上 `MAX_MS=150000` 的时间上限)。它**不碰地图坐标**（失败点是棋盘/结束面板），且**同一份代码一跑绿一跑红**，属**已登记的 P3-L 类时序抖动**，与本步无关；② 用户报的「页面消失」与「第 2 关沉在底部」**未能复现**：8000 端口 200、页面渲染正常（canvas 716×716、0 异常、徽章 2/1/0、齿轮在位），且三种视口下第 1/2/3/26/50/53 关**居中偏差全为 +0px**。判定为缓存旧 ES Module（`python -m http.server` 不发 `Cache-Control`），**待用户强刷后复核**。
+
+**下一步**：**22.2 曲线穿过节点**（节点仍是真相源，Catmull-Rom → 三次贝塞尔反向拟合；原型已验证节点到曲线 ≤0.3px）+ **22.3 视觉降噪**（金色光环 / 磨砂锁定节点 / 星星 +30% / 底部遮罩 / 上滑提示 / 「回家」按钮右下角）→ 两者都已出原型截图（`_build/step22-proto-*.png`）。
+
+---
+
 ## 2026-09-26（Step 21.2：道具栏与设置齿轮 —— 完成，**等用户看截图确认观感**）
 
 用户口径同 21.1：Step 21 三步全做、每个子步先出截图交用户确认。本步**玩法零改动**（道具的数量/消耗/判定全部沿用 3.9，音效与震动的行为与存档键一行未改），只改**画布外的 DOM/CSS**；口径仍记在 `DECISIONS.md` **D048**。

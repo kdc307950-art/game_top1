@@ -9,7 +9,11 @@
 //   · **没有「页」**：整张地图是一块**连续的世界**（世界总高 = `height × worldHeightRatio` 个 viewBox 单位）。
 //   · 视口固定、`overflow: hidden`；平移的是世界自己的 `transform: translateY` ——
 //     **页面本身仍然不可滚动/缩放**（5.1 不需要开例外），触摸手势也与 input.js 的 canvas 手势天然隔离。
-//   · 坐标一律归一化：x 相对 `width`、y 相对**世界总高**（0 = 世界顶部、1 = 世界底部，`up` 时第 1 关在世界最底）。
+//   · 坐标一律归一化：x 相对 `width`、y 相对**世界总高**。
+//     **22.1（v1.33 / D049）原点翻转**：y **自世界底部起算**（0 = 世界最底、1 = 世界最顶），
+//     `up` 时**第 1 关 y 最小（在世界最底）**、关号越大 y 越大；换算只走 `screenYOf()`：`(1 − y) × 世界高`。
+//     ⚠️ 注意区分两个 y：**归一化世界 y**（数据层，自底向上）与 **SVG/屏幕 y**（自顶向下，viewBox 内即是）。
+//     天空/地面/远山/云带这些**直接用 SVG 坐标**画的图层不受影响（它们本来就在 SVG 的自顶向下空间里）。
 //   · 渲染按视口宽**统一缩放**（`scale = 视口宽 / width`），因此节点不会被非等比拉伸成椭圆。
 //
 // 确定性（设计期派生）：路径只由 `VINE_MAP_CONFIG.anchors` + `mulberry32(seed)` 决定 ——
@@ -63,6 +67,18 @@ export function worldX(levelId) {
 }
 
 /**
+ * **22.1（v1.33 / D049）唯一的 y 换算口径**：世界归一化 y → 世界内的像素 y。
+ *
+ * `LEVEL_MAP_POS.y` 自**世界底部**起算（0 = 世界最底、1 = 世界最顶），而 SVG 与屏幕的 y 轴都是
+ * **自上而下**的，因此： `screenY = (1 − y) × 世界高`。
+ * 所有需要「世界 y」的地方（几何、可见性、焦点、锚点、节点圆心）**必须**走这一个函数 ——
+ * 口径只在一处，`_build/check-vine-map.mjs` 与 `tests/vine-map.test.js` 都按它复算。
+ */
+export function screenYOf(y, worldHeight) {
+  return (1 - y) * worldHeight;
+}
+
+/**
  * 由视口尺寸算出这一帧的世界几何：
  *   `scale` = 视口宽 / width（**统一缩放**，宽对齐）；`worldHeight` = 世界总高 × scale（CSS 像素）；
  *   `minOffset` = 最底的那一关居中时的平移量；`maxOffset` = 最顶的那一关居中时的平移量。
@@ -76,7 +92,7 @@ export function mapGeometry(viewportWidth, viewportHeight) {
   let top = Infinity;
   let bottom = -Infinity;
   for (const pos of LEVEL_MAP_POS) {
-    const y = pos.y * worldHeight;
+    const y = screenYOf(pos.y, worldHeight);
     if (y < top) top = y;
     if (y > bottom) bottom = y;
   }
@@ -92,7 +108,7 @@ export function mapGeometry(viewportWidth, viewportHeight) {
     maxOffset: mid - top, // 最顶的关居中
     yOf: (levelId) => {
       const y = worldY(levelId);
-      return y === null ? null : y * worldHeight;
+      return y === null ? null : screenYOf(y, worldHeight);
     }
   };
 }
@@ -116,7 +132,7 @@ export function visibleLevelIds(offset, geometry) {
   const margin = (MAP.nodeRadius + 4) * geometry.scale;
   const ids = [];
   for (const pos of LEVEL_MAP_POS) {
-    const screenY = pos.y * geometry.worldHeight + offset;
+    const screenY = screenYOf(pos.y, geometry.worldHeight) + offset;
     if (screenY >= -margin && screenY <= geometry.viewportHeight + margin) ids.push(pos.id);
   }
   return ids;
@@ -128,7 +144,7 @@ export function focusedLevelId(offset, geometry) {
   let best = null;
   let bestDistance = Infinity;
   for (const pos of LEVEL_MAP_POS) {
-    const distance = Math.abs(pos.y * geometry.worldHeight + offset - mid);
+    const distance = Math.abs(screenYOf(pos.y, geometry.worldHeight) + offset - mid);
     if (distance < bestDistance) {
       bestDistance = distance;
       best = pos.id;
@@ -184,7 +200,7 @@ export function mulberry32(seed) {
  * 归一化 y 允许略超 1（世界下方）与小于 0（世界上方）—— 两端的漫出量正好被平移极限吃掉。
  */
 export function buildVineAnchors() {
-  return MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(anchor.y * MAP_WORLD_HEIGHT) }));
+  return MAP.anchors.map((anchor) => ({ x: round3(anchor.x * MAP.width), y: round3(screenYOf(anchor.y, MAP_WORLD_HEIGHT)) }));
 }
 
 /**
@@ -254,7 +270,7 @@ function buildNode(position, stars, current, unlocked, required) {
   const state = nodeState(earned, !locked);
   const need = Math.max(0, Math.trunc(Number(required?.[position.id] ?? required?.[String(position.id)] ?? 0)));
   const cx = round1(position.x * MAP.width);
-  const cy = round1(position.y * MAP_WORLD_HEIGHT);
+  const cy = round1(screenYOf(position.y, MAP_WORLD_HEIGHT));
   const classes = ['vine-node', `vine-node--${state}`];
   if (state === 'visited') classes.push('vine-node--cleared');
   if (position.id === current) classes.push('vine-node--current');
